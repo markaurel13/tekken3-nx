@@ -116,7 +116,11 @@ uint16_t SwitchInput::TranslatePadState(const PadState& pad, int playerIdx,
 void SwitchInput::Update() {
     if (!m_initialized) return;
 
+    u64 start_tick = armGetSystemTick();
     static bool s_p2ConnectedLast = false;
+    static uint64_t s_update_count = 0;
+    static uint64_t s_total_update_ns = 0;
+    static uint64_t s_max_update_ns = 0;
 
     for (int i = 0; i < MaxPlayers; i++) {
         padUpdate(&m_pads[i]);
@@ -154,6 +158,21 @@ void SwitchInput::Update() {
     u64 p1Down = padGetButtonsDown(&m_pads[0]);
     if ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Minus)) {
         ShowControllerApplet();
+    }
+
+    u64 end_tick = armGetSystemTick();
+    uint64_t update_ns = armTicksToNs(end_tick - start_tick);
+    s_update_count++;
+    s_total_update_ns += update_ns;
+    if (update_ns > s_max_update_ns) s_max_update_ns = update_ns;
+    if (s_update_count <= 5 || (s_update_count % 120) == 0) {
+        double avg_ns = s_update_count ? (double)s_total_update_ns / (double)s_update_count : 0.0;
+        printf("[InputPerf] samples=%llu avg_ns=%.0f max_ns=%llu p2=%d exit=%d\n",
+               (unsigned long long)s_update_count,
+               avg_ns,
+               (unsigned long long)s_max_update_ns,
+               s_p2ConnectedLast ? 1 : 0,
+               m_exitRequested ? 1 : 0);
     }
 }
 

@@ -404,6 +404,8 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
 }
 
 int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh) {
+    static uint64_t s_present_cnt = 0;
+    u64 render_tick_start = armGetSystemTick();
     if (out != nullptr) {
         return sw_render_display(out, pitch, dx, dy, dw, dh);
     }
@@ -423,6 +425,13 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     if (h > VramHeight) h = VramHeight;
 
     uint32_t nonZeroPixels = 0;
+
+    if ((s_present_cnt <= 5) || ((s_present_cnt % 120) == 0)) {
+        printf("[Deko3DPerf] frame=%llu begin size=%ux%u dirty=%d\n",
+               (unsigned long long)s_present_cnt,
+               w, h,
+               m_vramDirty ? 1 : 0);
+    }
 
     if (!di.disabled && m_vram && m_vramStagingCpu) {
         if (di.depth24) {
@@ -480,7 +489,6 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         FlushBatch();
     }
 
-    static uint64_t s_present_cnt = 0;
     s_present_cnt++;
     if (s_present_cnt <= 5 || (s_present_cnt % 300) == 0) {
         uint64_t gp0_nop = 0, gp0_fill = 0, gp0_draw = 0, gp0_env = 0, gp0_copy = 0;
@@ -505,6 +513,15 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 
     // Iniciar inmediatamente el siguiente frame para los comandos de dibujo
     BeginFrame();
+
+    if (s_present_cnt <= 5 || (s_present_cnt % 120) == 0) {
+        u64 render_tick_end = armGetSystemTick();
+        printf("[Deko3DPerf] frame=%llu present_ns=%llu qErr=%d dirty=%d\n",
+               (unsigned long long)s_present_cnt,
+               (unsigned long long)armTicksToNs(render_tick_end - render_tick_start),
+               (int)m_queue.isInErrorState(),
+               m_vramDirty ? 1 : 0);
+    }
 
     return (int)(w * h);
 }

@@ -16,6 +16,9 @@
 
 // Referencias a los componentes de psxrecomp
 extern "C" {
+extern uint32_t g_game_entry_hits[];
+extern uint32_t psx_game_entry_addr(uint32_t);
+extern uint32_t psx_game_entry_count(void);
 #include "cpu_state.h"
 #include "psx_scheduler.h"
 #include "psx_bios_backend.h"
@@ -162,6 +165,16 @@ static uint16_t s_vram[1024 * 512];
 // Sistema de logging unificado (MicroSD + nxlink over Wi-Fi)
 static FILE* s_sd_log = NULL;
 static int s_nxlink_sock = -1;
+static uint64_t s_last_main_loop_tick = 0;
+static uint64_t s_last_main_loop_frame = 0;
+static uint64_t s_total_loop_ns = 0;
+static uint64_t s_total_audio_ns = 0;
+static uint64_t s_total_input_ns = 0;
+static uint64_t s_total_render_ns = 0;
+static uint64_t s_main_loop_samples = 0;
+static uint64_t s_last_hot_pc_frame = 0;
+static uint32_t s_last_hot_pc = 0;
+
 int main(int argc, char* argv[]);
 
 extern "C" {
@@ -250,8 +263,57 @@ static u64 s_last_vblank_tick = 0;
 static uint64_t s_last_vblank_frame = 0;
 static uint64_t s_last_dirty_insns = 0;
 static uint64_t s_last_static_hits = 0;
+static uint64_t s_last_dirty_dispatch_calls = 0;
+static uint64_t s_last_dirty_dispatch_handled = 0;
+static uint64_t s_last_dirty_dispatch_rejected = 0;
+static uint64_t s_last_dirty_dispatch_time_ns = 0;
+static uint64_t s_last_dirty_native_game_hits = 0;
+static uint64_t s_last_dirty_native_game_misses = 0;
+static uint64_t s_last_dirty_native_overlay_hits = 0;
+static uint64_t s_last_dirty_clean_rejects = 0;
+static uint64_t s_last_dirty_native_handoffs = 0;
+static uint64_t s_last_dirty_aborts = 0;
+static uint64_t s_last_dirty_guard_yields = 0;
+static uint32_t s_last_mismatch_info[5] = {0};
+static uint64_t s_last_mismatch_count = 0;
+
+extern "C" {
+    extern DirtyRamPcEntry g_dirty_ram_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE];
+    extern DirtyRamPcEntry g_dirty_native_game_miss_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE];
+    extern DirtyRamPcEntry g_dirty_native_game_miss_range_window_table[DIRTY_RAM_PC_TABLE_SIZE];
+}
+
+static bool is_bios_vector_noise(uint32_t pc) {
+    return pc == 0x000000A0u || pc == 0x000000B0u || pc == 0x000000C0u;
+}
+
+extern "C" void psx_kernel_bless_stats(uint64_t out[6]);
+
+static void collect_top_window_entries(const DirtyRamPcEntry* table,
+                                       bool use_insns,
+                                       uint32_t top_pc[3],
+                                       uint64_t top_val[3]) {
+    for (uint32_t i = 0; i < DIRTY_RAM_PC_TABLE_SIZE; i++) {
+        uint32_t pc = table[i].pc;
+        uint64_t val = use_insns ? table[i].insns : table[i].hits;
+        if (!pc || !val) continue;
+        if (is_bios_vector_noise(pc)) continue;
+        for (int slot = 0; slot < 3; ++slot) {
+            if (val > top_val[slot]) {
+                for (int move = 2; move > slot; --move) {
+                    top_val[move] = top_val[move - 1];
+                    top_pc[move] = top_pc[move - 1];
+                }
+                top_val[slot] = val;
+                top_pc[slot] = pc;
+                break;
+            }
+        }
+    }
+}
 
 static void switch_vblank_callback(void) {
+    u64 frame_start_tick = armGetSystemTick();
     s_frame_count++;
     u64 now_tick = armGetSystemTick();
     if (s_last_vblank_tick == 0) {
@@ -260,54 +322,137 @@ static void switch_vblank_callback(void) {
     }
 
     if (s_frame_count <= 5 || s_frame_count == 60 || (s_frame_count % 120) == 0) {
+        extern uint64_t g_dirty_dispatch_calls;
+        extern uint64_t g_dirty_dispatch_handled;
+        extern uint64_t g_dirty_dispatch_rejected;
+        extern uint64_t g_dirty_dispatch_time_ns;
+        extern uint64_t g_dirty_native_game_hits;
+        extern uint64_t g_dirty_native_game_misses;
+        extern uint64_t g_dirty_native_overlay_hits;
+        extern uint64_t g_dirty_clean_rejects;
+        extern uint64_t g_dirty_ram_aborts;
+        extern uint64_t g_dirty_ram_guard_yields;
+        extern uint64_t g_dirty_ram_native_handoffs;
         u64 elapsed_ns = armTicksToNs(now_tick - s_last_vblank_tick);
         uint64_t frames_delta = s_frame_count - s_last_vblank_frame;
         double avg_ms = (frames_delta > 0) ? ((double)elapsed_ns / 1e6 / (double)frames_delta) : 0.0;
         double fps = (avg_ms > 0.0) ? (1000.0 / avg_ms) : 0.0;
         uint64_t d_insns = g_dirty_ram_insns_run - s_last_dirty_insns;
         uint64_t d_static = g_dispatch_static_hits - s_last_static_hits;
+        uint64_t d_dirty_calls = g_dirty_dispatch_calls - s_last_dirty_dispatch_calls;
+        uint64_t d_dirty_handled = g_dirty_dispatch_handled - s_last_dirty_dispatch_handled;
+        uint64_t d_dirty_rejected = g_dirty_dispatch_rejected - s_last_dirty_dispatch_rejected;
+        uint64_t d_dirty_time_ns = g_dirty_dispatch_time_ns - s_last_dirty_dispatch_time_ns;
+        uint64_t d_native_game_hits = g_dirty_native_game_hits - s_last_dirty_native_game_hits;
+        uint64_t d_native_game_misses = g_dirty_native_game_misses - s_last_dirty_native_game_misses;
+        uint64_t d_native_overlay_hits = g_dirty_native_overlay_hits - s_last_dirty_native_overlay_hits;
+        uint64_t d_dirty_clean_rejects = g_dirty_clean_rejects - s_last_dirty_clean_rejects;
+        uint64_t d_dirty_native_handoffs = g_dirty_ram_native_handoffs - s_last_dirty_native_handoffs;
+        uint64_t d_dirty_aborts = g_dirty_ram_aborts - s_last_dirty_aborts;
+        uint64_t d_dirty_guard_yields = g_dirty_ram_guard_yields - s_last_dirty_guard_yields;
         uint64_t mism_cnt = 0;
         uint32_t mism_info[5] = {0};
         dirty_ram_text_exact_mismatch_stats(&mism_cnt, mism_info);
 
-        printf("[VBlank] frame=%llu fps=%.1f (%.2f ms/f) static_d=%llu dirty_insns_d=%llu (tot=%llu) idle_skips=%llu mism=%llu\n",
+        printf("[VBlank] frame=%llu fps=%.1f (%.2f ms/f) static_d=%llu dirty_insns_d=%llu (tot=%llu) dirty_calls=%llu handled=%llu rejected=%llu dirty_ms=%.3f native(game h/m=%llu/%llu ovl=%llu handoff=%llu) abort=%llu yield=%llu clean_reject=%llu idle_skips=%llu mism=%llu\n",
                (unsigned long long)s_frame_count,
                fps, avg_ms,
                (unsigned long long)d_static,
                (unsigned long long)d_insns,
                (unsigned long long)g_dirty_ram_insns_run,
+               (unsigned long long)d_dirty_calls,
+               (unsigned long long)d_dirty_handled,
+               (unsigned long long)d_dirty_rejected,
+               (double)d_dirty_time_ns / 1e6,
+               (unsigned long long)d_native_game_hits,
+               (unsigned long long)d_native_game_misses,
+               (unsigned long long)d_native_overlay_hits,
+               (unsigned long long)d_dirty_native_handoffs,
+               (unsigned long long)d_dirty_aborts,
+               (unsigned long long)d_dirty_guard_yields,
+               (unsigned long long)d_dirty_clean_rejects,
                (unsigned long long)g_idle_skip_count,
                (unsigned long long)mism_cnt);
-        if (mism_cnt > 0) {
+        if (mism_cnt > 0 && (mism_cnt != s_last_mismatch_count || memcmp(mism_info, s_last_mismatch_info, sizeof(mism_info)) != 0)) {
             printf("  [Mismatch] range=0x%08X+%u at=0x%08X live=0x%02X ref=0x%02X\n",
                    mism_info[0], mism_info[1], mism_info[2], mism_info[3], mism_info[4]);
+            memcpy(s_last_mismatch_info, mism_info, sizeof(mism_info));
         }
-        if (d_insns > 100000) {
-            // Mostrar top 3 PCs interpretados en dirty_ram_pc_table
-            uint32_t top_pc[3] = {0};
-            uint64_t top_in[3] = {0};
-            for (uint32_t i = 0; i < DIRTY_RAM_PC_TABLE_SIZE; i++) {
-                uint64_t ins = g_dirty_ram_pc_table[i].insns;
-                uint32_t pc = g_dirty_ram_pc_table[i].pc;
-                if (!pc || !ins) continue;
-                for (int k = 0; k < 3; k++) {
-                    if (ins > top_in[k]) {
-                        for (int m = 2; m > k; m--) { top_in[m] = top_in[m - 1]; top_pc[m] = top_pc[m - 1]; }
-                        top_in[k] = ins; top_pc[k] = pc;
-                        break;
-                    }
+        if ((s_frame_count % 120) == 0) {
+            uint32_t n = psx_game_entry_count(), t[5] = {0,0,0,0,0}, c[5] = {0,0,0,0,0};
+            for (uint32_t i = 0; i < n; i++) {
+                uint32_t h = g_game_entry_hits[i];
+                if (!h) continue;
+                for (int k = 0; k < 5; k++) if (h > c[k]) {
+                    for (int m = 4; m > k; m--) { c[m] = c[m-1]; t[m] = t[m-1]; }
+                    c[k] = h; t[k] = psx_game_entry_addr(i); break;
                 }
             }
-            printf("  [DirtyTop] #1 pc=0x%08X (%llu insns) | #2 pc=0x%08X (%llu) | #3 pc=0x%08X (%llu)\n",
+            printf("  [HotFn] %08X:%u %08X:%u %08X:%u %08X:%u %08X:%u\n", t[0],c[0],t[1],c[1],t[2],c[2],t[3],c[3],t[4],c[4]);
+            memset(g_game_entry_hits, 0, n * sizeof(uint32_t));
+        }
+        if (d_native_game_misses > 0 && (s_frame_count % 120) == 0) {
+            uint32_t miss_pc[3] = {0, 0, 0};
+            uint64_t miss_hits[3] = {0, 0, 0};
+            uint32_t miss_range[3] = {0, 0, 0};
+            uint64_t miss_range_hits[3] = {0, 0, 0};
+            collect_top_window_entries(g_dirty_native_game_miss_pc_window_table, false, miss_pc, miss_hits);
+            collect_top_window_entries(g_dirty_native_game_miss_range_window_table, false, miss_range, miss_range_hits);
+            printf("  [NativeMissTop] pc1=0x%08X h1=%llu pc2=0x%08X h2=%llu pc3=0x%08X h3=%llu "
+                   "range1=0x%08X h1=%llu range2=0x%08X h2=%llu range3=0x%08X h3=%llu",
+                   miss_pc[0], (unsigned long long)miss_hits[0],
+                   miss_pc[1], (unsigned long long)miss_hits[1],
+                   miss_pc[2], (unsigned long long)miss_hits[2],
+                   miss_range[0], (unsigned long long)miss_range_hits[0],
+                   miss_range[1], (unsigned long long)miss_range_hits[1],
+                   miss_range[2], (unsigned long long)miss_range_hits[2]);
+            if (mism_cnt > 0) {
+                printf(" mism_range=0x%08X+%u at=0x%08X", mism_info[0], mism_info[1], mism_info[2]);
+            }
+            printf("\n");
+            memset(g_dirty_native_game_miss_pc_window_table, 0, sizeof(g_dirty_native_game_miss_pc_window_table));
+            memset(g_dirty_native_game_miss_range_window_table, 0, sizeof(g_dirty_native_game_miss_range_window_table));
+        }
+        if (d_insns > 10000 && (s_frame_count % 120) == 0 && s_frame_count != s_last_hot_pc_frame) {
+            uint32_t top_pc[3] = {0, 0, 0};
+            uint64_t top_in[3] = {0, 0, 0};
+            collect_top_window_entries(g_dirty_ram_pc_window_table, true, top_pc, top_in);
+            printf("  [DirtyTop] win pc1=0x%08X insns1=%llu pc2=0x%08X insns2=%llu pc3=0x%08X insns3=%llu\n",
                    top_pc[0], (unsigned long long)top_in[0],
                    top_pc[1], (unsigned long long)top_in[1],
                    top_pc[2], (unsigned long long)top_in[2]);
+            if (top_pc[0] != 0 && top_pc[0] != s_last_hot_pc) {
+                printf("[HotPC] current=0x%08X insns=%llu frame=%llu\n",
+                       top_pc[0], (unsigned long long)top_in[0], (unsigned long long)s_frame_count);
+                s_last_hot_pc = top_pc[0];
+            }
+            memset(g_dirty_ram_pc_window_table, 0, sizeof(g_dirty_ram_pc_window_table));
+            s_last_hot_pc_frame = s_frame_count;
+        }
+        if ((s_frame_count % 120) == 0) {
+            uint64_t kb[6] = {0};
+            psx_kernel_bless_stats(kb);
+            printf("  [KBless] total=%llu clean=%llu mism=%llu hits=%llu verif=%llu invals=%llu\n",
+                   (unsigned long long)kb[0], (unsigned long long)kb[1], (unsigned long long)kb[2],
+                   (unsigned long long)kb[3], (unsigned long long)kb[4], (unsigned long long)kb[5]);
         }
 
         s_last_vblank_tick = now_tick;
         s_last_vblank_frame = s_frame_count;
         s_last_dirty_insns = g_dirty_ram_insns_run;
         s_last_static_hits = g_dispatch_static_hits;
+        s_last_dirty_dispatch_calls = g_dirty_dispatch_calls;
+        s_last_dirty_dispatch_handled = g_dirty_dispatch_handled;
+        s_last_dirty_dispatch_rejected = g_dirty_dispatch_rejected;
+        s_last_dirty_dispatch_time_ns = g_dirty_dispatch_time_ns;
+        s_last_dirty_native_game_hits = g_dirty_native_game_hits;
+        s_last_dirty_native_game_misses = g_dirty_native_game_misses;
+        s_last_dirty_native_overlay_hits = g_dirty_native_overlay_hits;
+        s_last_dirty_clean_rejects = g_dirty_clean_rejects;
+        s_last_dirty_native_handoffs = g_dirty_ram_native_handoffs;
+        s_last_dirty_aborts = g_dirty_ram_aborts;
+        s_last_dirty_guard_yields = g_dirty_ram_guard_yields;
+        s_last_mismatch_count = mism_cnt;
     }
 
     // 1. Manejo de bucle principal y salida rápida con botones (Plus + Minus)
@@ -318,13 +463,37 @@ static void switch_vblank_callback(void) {
     }
 
     // 2. Actualizar mandos y estados de botones para la PS1
+    u64 input_start = armGetSystemTick();
     switch_input_update();
+    u64 input_end = armGetSystemTick();
+    s_total_input_ns += armTicksToNs(input_end - input_start);
 
     // 3. Bombeo de audio hacia el subsistema nativo audren
+    u64 audio_start = armGetSystemTick();
     switch_audio_update();
+    u64 audio_end = armGetSystemTick();
+    s_total_audio_ns += armTicksToNs(audio_end - audio_start);
 
     // 4. Renderizar y presentar frame con Deko3D
+    u64 render_start = armGetSystemTick();
     Deko3DRenderer::Instance().RenderDisplay(nullptr, 1280, 0, 0, 1280, 720);
+    u64 render_end = armGetSystemTick();
+    s_total_render_ns += armTicksToNs(render_end - render_start);
+
+    u64 frame_end_tick = armGetSystemTick();
+    s_total_loop_ns += armTicksToNs(frame_end_tick - frame_start_tick);
+    s_main_loop_samples++;
+
+    if (s_frame_count <= 5 || (s_frame_count % 120) == 0) {
+        double denom = s_main_loop_samples ? (double)s_main_loop_samples : 1.0;
+        printf("[PerfAvg] frame=%llu loop=%.3fms input=%.3fms audio=%.3fms render=%.3fms samples=%llu\n",
+               (unsigned long long)s_frame_count,
+               (double)s_total_loop_ns / denom / 1e6,
+               (double)s_total_input_ns / denom / 1e6,
+               (double)s_total_audio_ns / denom / 1e6,
+               (double)s_total_render_ns / denom / 1e6,
+               (unsigned long long)s_main_loop_samples);
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -455,6 +624,12 @@ int main(int argc, char* argv[]) {
     psx_bios_hle_configure(plan.call_hle, plan.boot_skip);
     printf("[Main] Plan BIOS configurado: call_hle=%d, boot_skip=%d (entry=0x%08X)\n",
            plan.call_hle, plan.boot_skip, tekken3_entry_pc);
+    printf("[Main] BootPlan detail: shell_entry=0x%08X deliver_event_ret=0x%08X keep_intro=%d fast_boot=%d game_started=%d\n",
+           (unsigned)psx_bios_image.shell_entry_phys,
+           (unsigned)psx_bios_image.deliver_event_ret,
+           hle_req.keep_intro,
+           hle_req.fast_boot,
+           fntrace_is_game_started());
 
     // 7. Montar la imagen de disco de Tekken 3 desde la microSD
     const char* candidate_paths[] = {
@@ -566,7 +741,12 @@ int main(int argc, char* argv[]) {
     printf("[Main] ================================================\n");
 
     // 9. Arrancar el planificador y la recompilación
+    u64 sched_start = armGetSystemTick();
     psx_scheduler_run(&cpu);
+    u64 sched_end = armGetSystemTick();
+    printf("[PerfGuest] psx_scheduler_run_ns=%llu\n",
+           (unsigned long long)armTicksToNs(sched_end - sched_start));
+    fflush(stdout);
 
     printf("\n[Main] === DIAGNOSTICO POST-SALIDA DE PSX_SCHEDULER_RUN ===\n");
     printf("[Main] escape=%d pc0_reason=%u pc=0x%08X ra=0x%08X sp=0x%08X gp=0x%08X fp=0x%08X\n",

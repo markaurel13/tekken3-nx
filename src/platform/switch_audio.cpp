@@ -106,6 +106,11 @@ bool SwitchAudio::Init(int sampleRate) {
 
 void SwitchAudio::Update() {
     if (!m_initialized) return;
+    static uint64_t s_update_count = 0;
+    static uint64_t s_total_update_ns = 0;
+    static uint64_t s_max_update_ns = 0;
+    static uint64_t s_total_queued = 0;
+    u64 start_tick = armGetSystemTick();
 
     // Actualizar estado del driver para liberar buffers completados
     audrvUpdate(&m_drv);
@@ -155,11 +160,36 @@ void SwitchAudio::Update() {
         }
         audrvUpdate(&m_drv);
     }
+
+    u64 end_tick = armGetSystemTick();
+    uint64_t update_ns = armTicksToNs(end_tick - start_tick);
+    s_update_count++;
+    s_total_update_ns += update_ns;
+    s_total_queued += queuedAny ? 1u : 0u;
+    if (update_ns > s_max_update_ns) s_max_update_ns = update_ns;
+    if (s_update_count <= 5 || (s_update_count % 120) == 0) {
+        double avg_ns = s_update_count ? (double)s_total_update_ns / (double)s_update_count : 0.0;
+        printf("[AudioPerf] samples=%llu avg_ns=%.0f max_ns=%llu active=%d queued_total=%llu cur=%d\n",
+               (unsigned long long)s_update_count,
+               avg_ns,
+               (unsigned long long)s_max_update_ns,
+               activeBuffers,
+               (unsigned long long)s_total_queued,
+               m_currentBuffer);
+    }
 }
 
 void SwitchAudio::QueueFrames(const int16_t* pcmStereo, size_t frames) {
     if (!m_initialized || !pcmStereo || frames == 0) return;
 
+    u64 start_tick = armGetSystemTick();
+    u64 spu_start_tick = 0;
+    u64 spu_end_tick = 0;
+    static uint64_t s_queue_count = 0;
+    static uint64_t s_total_queue_ns = 0;
+    static uint64_t s_max_queue_ns = 0;
+    static uint64_t s_total_spu_ns = 0;
+    static uint64_t s_max_spu_ns = 0;
     audrvUpdate(&m_drv);
 
     AudioDriverWaveBuf* curWb = &m_waveBufs[m_currentBuffer];
@@ -167,6 +197,9 @@ void SwitchAudio::QueueFrames(const int16_t* pcmStereo, size_t frames) {
         size_t copyFrames = (frames < (size_t)FramesPerStep) ? frames : (size_t)FramesPerStep;
         size_t copyBytes = copyFrames * Channels * sizeof(int16_t);
 
+        spu_start_tick = armGetSystemTick();
+        spu_render(m_audioBuffers[m_currentBuffer], (int)copyFrames);
+        spu_end_tick = armGetSystemTick();
         memcpy(m_audioBuffers[m_currentBuffer], pcmStereo, copyBytes);
         armDCacheFlush(m_memPoolPtr, m_memPoolSize);
 
@@ -181,6 +214,28 @@ void SwitchAudio::QueueFrames(const int16_t* pcmStereo, size_t frames) {
             audrvVoiceStart(&m_drv, 0);
         }
         audrvUpdate(&m_drv);
+
+        u64 end_tick = armGetSystemTick();
+        uint64_t queue_ns = armTicksToNs(end_tick - start_tick);
+        uint64_t spu_ns = armTicksToNs(spu_end_tick - spu_start_tick);
+        s_queue_count++;
+        s_total_queue_ns += queue_ns;
+        s_total_spu_ns += spu_ns;
+        if (queue_ns > s_max_queue_ns) s_max_queue_ns = queue_ns;
+        if (spu_ns > s_max_spu_ns) s_max_spu_ns = spu_ns;
+        if (s_queue_count <= 3 || (s_queue_count % 120) == 0) {
+            double avg_queue_ns = s_queue_count ? (double)s_total_queue_ns / (double)s_queue_count : 0.0;
+            double avg_spu_ns = s_queue_count ? (double)s_total_spu_ns / (double)s_queue_count : 0.0;
+            printf("[AudioPerf] queue samples=%llu avg_ns=%.0f max_ns=%llu avg_spu_ns=%.0f max_spu_ns=%llu frames=%zu copy=%zu buf=%d\n",
+                   (unsigned long long)s_queue_count,
+                   avg_queue_ns,
+                   (unsigned long long)s_max_queue_ns,
+                   avg_spu_ns,
+                   (unsigned long long)s_max_spu_ns,
+                   frames,
+                   copyFrames,
+                   m_currentBuffer);
+        }
     }
 }
 

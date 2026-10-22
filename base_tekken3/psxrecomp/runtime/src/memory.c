@@ -262,6 +262,22 @@ int psx_kernel_bless_dispatchable(uint32_t phys) {
         kbless_native_hits++;
         return 1;
     }
+    static int s_diff_logged = 0;
+    if (s_diff_logged < 10) {
+        s_diff_logged++;
+        uint32_t len = b->body_hi - b->body_lo;
+        uint32_t diff_off = 0;
+        for (uint32_t d = 0; d < len; d++) {
+            if (ram[b->body_lo + d] != bios_rom[s_kb_rom_off + (b->body_lo - s_kb_lo) + d]) {
+                diff_off = d;
+                break;
+            }
+        }
+        printf("[KBlessMismatch] phys=0x%08X body=[0x%08X..0x%08X) diff=+0x%X ram=0x%02X rom=0x%02X\n",
+               phys, b->body_lo, b->body_hi, diff_off,
+               ram[b->body_lo + diff_off],
+               bios_rom[s_kb_rom_off + (b->body_lo - s_kb_lo) + diff_off]);
+    }
     kbless_state[i] = KBLESS_MISMATCH;
     kbless_mismatches++;
     return 0;
@@ -400,6 +416,24 @@ void dirty_ram_clear_image_baseline(void) {
             text_modified_bitmap[page >> 5] &= ~bit;
             text_diverged_bitmap[page >> 5] &= ~bit;
         }
+    }
+
+    /* Log what differed between RAM and ROM in kernel window */
+    if (psx_bios_image.kbless_ram_hi > psx_bios_image.kbless_ram_lo &&
+        psx_bios_image.kbless_rom_off > 0) {
+        uint32_t lo = psx_bios_image.kbless_ram_lo;
+        uint32_t hi = psx_bios_image.kbless_ram_hi;
+        uint32_t off = psx_bios_image.kbless_rom_off;
+        uint32_t sz = hi - lo;
+        uint32_t diff = 0;
+        for (uint32_t z = 0; z < sz; z++) {
+            if (ram[lo + z] != bios_rom[off + z]) { diff++; }
+        }
+        printf("[KBlessSync] Kernel window [0x%X..0x%X): %u bytes differ from ROM\n", lo, hi, diff);
+        printf("[KBlessHook] at 0x2810: %08X %08X %08X %08X %08X\n",
+               *(uint32_t*)(ram + 0x2810), *(uint32_t*)(ram + 0x2814),
+               *(uint32_t*)(ram + 0x2818), *(uint32_t*)(ram + 0x281C),
+               *(uint32_t*)(ram + 0x2820));
     }
 }
 
@@ -541,7 +575,7 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
             for (uint32_t p = p0; p <= p1; p++) {
                 uint32_t bit = 1u << (p & 31u);
-                if ((text_modified_bitmap[p >> 5] | dirty_ram_bitmap[p >> 5]) & bit) {
+                if ((text_modified_bitmap[p >> 5] | text_diverged_bitmap[p >> 5]) & bit) {
                     any_page_flagged = 1;
                     break;
                 }

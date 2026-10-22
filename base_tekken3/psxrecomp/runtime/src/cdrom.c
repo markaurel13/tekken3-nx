@@ -1318,8 +1318,8 @@ static int read_sector_at(int min, int sec, int sect) {
         }
         static uint32_t s_cd_log_count = 0;
         s_cd_log_count++;
-        if (s_cd_log_count <= 10 || (s_cd_log_count <= 700 && (s_cd_log_count % 50) == 0) || lba == 603) {
-            printf("[CDROM] Sector read #%u: LBA=%d have_raw=%d hdr=%02X%02X%02X%02X\n",
+        if (s_cd_log_count <= 8 || (s_cd_log_count % 120) == 0 || lba == 603) {
+            printf("[CDROM] read#%u lba=%d have_raw=%d hdr=%02X%02X%02X%02X\n",
                    s_cd_log_count, lba, have_raw,
                    user_data[0], user_data[1], user_data[2], user_data[3]);
         }

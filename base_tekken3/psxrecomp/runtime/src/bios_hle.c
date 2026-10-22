@@ -291,8 +291,8 @@ static int hle_boot_shell_skip(CPUState* cpu)
     if (!s_boot_skip_on || s_shell_skipped || fntrace_is_game_started())
         return 0;
     s_shell_skipped = 1;
-    printf("[BiosHLE] Shell skip activado (shell_entry=0x%08X, resume_ra=0x%08X) -> cargando SYSTEM.CNF / SLUS_004.02...\n",
-           psx_bios_image.shell_entry_phys, cpu->gpr[31]);
+    printf("[BiosHLE] Shell skip activado (phase=boot, shell_entry=0x%08X, resume_ra=0x%08X, game_started=%d) -> cargando SYSTEM.CNF / SLUS_004.02...\n",
+           psx_bios_image.shell_entry_phys, cpu->gpr[31], fntrace_is_game_started());
     fflush(stdout);
     /* Return straight to LoadRunShell's call site: BIOS Main() proceeds to
      * step 8 (SYSTEM.CNF + game EXE load) exactly as if the shell had exited
@@ -314,7 +314,9 @@ static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
 {
     if (phys == 0xB0u) {
         uint32_t fn = cpu->gpr[9]; /* $t1 — the PSY-Q thunk's function number */
-        int handled = s_call_hle_on ? hle_service_b0(cpu, fn) : 0;
+        int handled = 0;
+        if (__builtin_expect(s_call_hle_on != 0, 0))
+            handled = hle_service_b0(cpu, fn);
         hle_record(0xB0u, fn, cpu, handled ? cpu->gpr[2] : 0u,
                    handled ? PSX_HLE_ROUTE_HLE : PSX_HLE_ROUTE_LLE);
         return handled;
@@ -324,7 +326,7 @@ static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
         hle_record(phys, cpu->gpr[9], cpu, 0u, PSX_HLE_ROUTE_LLE);
         return 0;
     }
-    if (psx_bios_image.shell_entry_phys != 0 &&
+    if (__builtin_expect(s_boot_skip_on != 0, 1) &&
         phys == psx_bios_image.shell_entry_phys)
         return hle_boot_shell_skip(cpu);
     return 0;

@@ -42,9 +42,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 uint64_t g_dirty_ram_blocks_run = 0;
 uint64_t g_dirty_ram_insns_run  = 0;
+uint64_t g_dirty_dispatch_calls = 0;
+uint64_t g_dirty_dispatch_handled = 0;
+uint64_t g_dirty_dispatch_rejected = 0;
+uint64_t g_dirty_dispatch_time_ns = 0;
+uint64_t g_dirty_native_game_hits = 0;
+uint64_t g_dirty_native_game_misses = 0;
+uint64_t g_dirty_native_overlay_hits = 0;
+uint64_t g_dirty_clean_rejects = 0;
 uint64_t g_dirty_window_dispatches = 0;  /* capture-window interp dispatches */
 uint64_t g_dirty_ram_aborts     = 0;
 uint64_t g_dirty_ram_guard_yields = 0;
@@ -223,6 +232,9 @@ uint32_t g_dirty_ram_last_unsupported_insn = 0;
 const char *g_dirty_ram_last_unsupported_reason = NULL;
 
 DirtyRamPcEntry g_dirty_ram_pc_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
+DirtyRamPcEntry g_dirty_ram_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
+DirtyRamPcEntry g_dirty_native_game_miss_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
+DirtyRamPcEntry g_dirty_native_game_miss_range_window_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
 uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
@@ -257,6 +269,18 @@ static DirtyRamPcEntry *pc_table_get_or_insert_in(DirtyRamPcEntry *table, uint32
 
 static DirtyRamPcEntry *pc_table_get_or_insert(uint32_t pc) {
     return pc_table_get_or_insert_in(g_dirty_ram_pc_table, pc);
+}
+
+static DirtyRamPcEntry *pc_window_table_get_or_insert(uint32_t pc) {
+    return pc_table_get_or_insert_in(g_dirty_ram_pc_window_table, pc);
+}
+
+static DirtyRamPcEntry *native_game_miss_pc_window_get_or_insert(uint32_t pc) {
+    return pc_table_get_or_insert_in(g_dirty_native_game_miss_pc_window_table, pc);
+}
+
+static DirtyRamPcEntry *native_game_miss_range_window_get_or_insert(uint32_t pc) {
+    return pc_table_get_or_insert_in(g_dirty_native_game_miss_range_window_table, pc);
 }
 
 /* Record every PC the interpreter executes (not just block entries) so
@@ -523,6 +547,34 @@ static inline uint32_t fetch_word(uint32_t phys) {
 extern uint32_t g_dirty_ram_code_gen;
 #define WS_SITE_CACHE_SLOTS 8192u             /* 32 KB of code coverage per cache */
 
+/* Negative cache for game-text PCs that repeatedly fail psx_dispatch_game_compiled()
+ * even though the dirty path keeps revisiting them. This does NOT change routing
+ * correctness: it only suppresses redundant dispatcher lookups while the same
+ * instruction word remains resident in the same dirty/codegen epoch. A code/data
+ * rewrite or overlay reload invalidates the entry automatically. This directly
+ * cuts host CPU burn in hot uncovered/mismatched clusters like 0x0010xxxx that
+ * would otherwise pay the failed compiled lookup on every dirty re-entry. */
+static struct { uint32_t pc; uint32_t gen; uint32_t word; uint8_t miss; }
+    g_game_compiled_miss_cache[WS_SITE_CACHE_SLOTS];
+
+static int game_compiled_miss_cached(uint32_t pc) {
+    uint32_t slot = (pc >> 2) & (WS_SITE_CACHE_SLOTS - 1u);
+    uint32_t phys = pc & 0x1FFFFFFFu;
+    return g_game_compiled_miss_cache[slot].miss &&
+           g_game_compiled_miss_cache[slot].pc == pc &&
+           g_game_compiled_miss_cache[slot].gen == g_dirty_ram_code_gen &&
+           g_game_compiled_miss_cache[slot].word == fetch_word(phys);
+}
+
+static void game_compiled_miss_cache_store(uint32_t pc, int miss) {
+    uint32_t slot = (pc >> 2) & (WS_SITE_CACHE_SLOTS - 1u);
+    uint32_t phys = pc & 0x1FFFFFFFu;
+    g_game_compiled_miss_cache[slot].pc = pc;
+    g_game_compiled_miss_cache[slot].gen = g_dirty_ram_code_gen;
+    g_game_compiled_miss_cache[slot].word = fetch_word(phys);
+    g_game_compiled_miss_cache[slot].miss = miss ? 1u : 0u;
+}
+
 static int ws_cull_site(uint32_t pc) {
     enum { WIN = 128 };                       /* +/- 128 words = +/- 512 bytes */
     static struct { uint32_t pc; uint32_t gen; uint32_t word; int8_t flag; } cache[WS_SITE_CACHE_SLOTS];
@@ -788,12 +840,12 @@ static int abort_unsupported(uint32_t pc, uint32_t insn, const char *reason) {
  * non-local-call contract (the Whoopee-Camp splash wild-jr). dirty_ram_is_dirty()
  * keeps clean boot text on the fast compiled path; only overwritten pages divert. */
 static inline int phys_is_overlay_flow_region(uint32_t phys) {
-    return phys >= DIRTY_RAM_KERNEL_WINDOW_END;
+    return phys >= DIRTY_RAM_KERNEL_WINDOW_END || (phys >= 0x500 && phys < 0x4BA0);
 }
 
 static int is_local_dirty_target(uint32_t target) {
     uint32_t phys = target & 0x1FFFFFFFu;
-    return phys_is_overlay_flow_region(phys) && dirty_ram_is_dirty(phys);
+    return phys_is_overlay_flow_region(phys) && (dirty_ram_is_dirty(phys) || (phys >= 0x500 && phys < 0x4BA0));
 }
 
 /* Target the last interp run handed back to the dispatch loop (chained
@@ -2260,7 +2312,17 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     g_dirty_interp_active = 1;
     int prev_phase = g_exec_phase;
     g_exec_phase = 1;
+    struct timespec t0, t1;
+    int have_timing = (clock_gettime(CLOCK_MONOTONIC, &t0) == 0);
+    g_dirty_dispatch_calls++;
     int r = dirty_ram_dispatch_inner(cpu, addr, stop_addr);
+    if (have_timing && clock_gettime(CLOCK_MONOTONIC, &t1) == 0) {
+        uint64_t dt_ns = (uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000000ull;
+        dt_ns += (uint64_t)(t1.tv_nsec - t0.tv_nsec);
+        g_dirty_dispatch_time_ns += dt_ns;
+    }
+    if (r == 1) g_dirty_dispatch_handled++;
+    else        g_dirty_dispatch_rejected++;
 
     /* pc=0 producer tripwire: the dirty path reported "handled" yet published a
      * null PC — the abnormal-exit source we're hunting (MMX6 boot wedge). Latch
@@ -2626,16 +2688,36 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
      * Note: psx_dispatch_game_compiled() already validates native_ok internally,
      * so calling it directly avoids a duplicate lookup + range check. */
     if (psx_game_address_in_text(addr)) {
-        g_mixed_depth++;
+        if (!game_compiled_miss_cached(addr)) {
+            g_mixed_depth++;
+            {
+                ls_func_enter(addr, cpu);
+                int prev_phase = g_exec_phase;
+                g_exec_phase = 3;
+                int _gc = psx_dispatch_game_compiled(cpu, addr);
+                g_exec_phase = prev_phase;
+                ls_func_exit(addr, cpu, _gc);
+                g_mixed_depth--;
+                if (_gc) {
+                    game_compiled_miss_cache_store(addr, 0);
+                    g_dirty_native_game_hits++;
+                    return 1;
+                }
+                game_compiled_miss_cache_store(addr, 1);
+            }
+        }
+        g_dirty_native_game_misses++;
         {
-            ls_func_enter(addr, cpu);
-            int prev_phase = g_exec_phase;
-            g_exec_phase = 3;
-            int _gc = psx_dispatch_game_compiled(cpu, addr);
-            g_exec_phase = prev_phase;
-            ls_func_exit(addr, cpu, _gc);
-            g_mixed_depth--;
-            if (_gc) return 1;
+            DirtyRamPcEntry *miss_pc = native_game_miss_pc_window_get_or_insert(phys);
+            DirtyRamPcEntry *miss_range = native_game_miss_range_window_get_or_insert(phys & 0xFFFF0000u);
+            if (miss_pc) {
+                miss_pc->hits++;
+                miss_pc->entry_hits++;
+            }
+            if (miss_range) {
+                miss_range->hits++;
+                miss_range->entry_hits++;
+            }
         }
         clean_game_text_miss = 1;
     }
@@ -2677,6 +2759,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     {
         extern int overlay_loader_dispatch(CPUState *cpu, uint32_t addr);
         if (overlay_loader_dispatch(cpu, addr)) {
+            g_dirty_native_overlay_hits++;
             if (_ovfp) overlay_fp_log(addr, _in_regs, cpu, 1);
             return 1;
         }
@@ -2697,6 +2780,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             dirty_ram_word_looks_decodable(fetch_word(phys))) {
             dirty_ram_mark_executable_range(phys, 4u);
         } else {
+            g_dirty_clean_rejects++;
             return 0;
         }
     }
@@ -2716,7 +2800,9 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 
     /* Per-PC entry counter (visible via dirty_ram_stats). */
     DirtyRamPcEntry *pc_entry = pc_table_get_or_insert(phys);
+    DirtyRamPcEntry *pc_window_entry = pc_window_table_get_or_insert(phys);
     if (pc_entry) pc_entry->hits++;
+    if (pc_window_entry) pc_window_entry->hits++;
     {
         uint32_t word = phys >> 2;
         g_dirty_ram_dispatch_pc_bitmap[word >> 5] |= 1u << (word & 31u);
@@ -2729,6 +2815,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
      * a fresh dispatch) and is real interior-entry evidence for alias
      * seeding. */
     if (pc_entry && addr != g_dirty_interp_chain_target) pc_entry->entry_hits++;
+    if (pc_window_entry && addr != g_dirty_interp_chain_target) pc_window_entry->entry_hits++;
     g_dirty_interp_chain_target = 0;
 
     /* Block-entry ring buffer — answers "who tried to JALR into this RAM
@@ -2951,6 +3038,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                  * loop's bail handling. */
                 g_dirty_ram_blocks_run++;
                 if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
                 OV_FPLOG_RET1();
             }
             /* Trampoline contract parity (full_function_emitter emits this
@@ -2969,6 +3057,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (target != 0u && dirty_ram_pump_boundary(cpu, target, 1)) {
                 g_dirty_ram_blocks_run++;
                 if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
                 g_dirty_interp_chain_target = cpu->pc;
                 OV_FPLOG_RET1();
             }
@@ -3005,7 +3094,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (allow_local_dirty_flow && target != 0 &&
                 target != stop_addr &&
                 phys_is_overlay_flow_region(target_phys) &&
-                dirty_ram_is_dirty(target_phys)) {
+                (dirty_ram_is_dirty(target_phys) || (target_phys >= 0x500 && target_phys < 0x4BA0))) {
                 /* A runtime overlay may start executing while its final code
                  * bytes are still being installed. Entry-time native validation
                  * must reject that partial image, but local dirty flow used to
@@ -3023,6 +3112,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                         g_dirty_ram_native_handoffs++;
                         g_dirty_ram_blocks_run++;
                         if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                        if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
                         OV_FPLOG_RET1();
                     }
                 }
@@ -3034,6 +3124,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                     g_dirty_ram_native_handoffs++;
                     g_dirty_ram_blocks_run++;
                     if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                    if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
                     g_dirty_interp_chain_target = cpu->pc;
                     OV_FPLOG_RET1();
                 }
@@ -3067,6 +3158,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             }
             g_dirty_ram_blocks_run++;
             if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+            if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
             g_dirty_interp_chain_target = cpu->pc;
             OV_FPLOG_RET1();
         }
@@ -3079,6 +3171,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             g_dirty_ram_native_handoffs++;
             g_dirty_ram_blocks_run++;
             if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+            if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
             g_dirty_interp_chain_target = cpu->pc;
             OV_FPLOG_RET1();
         }
@@ -3091,11 +3184,13 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (dirty_ram_pump_boundary(cpu, pc, 2)) {
                 g_dirty_ram_blocks_run++;
                 if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
                 g_dirty_interp_chain_target = cpu->pc;
                 OV_FPLOG_RET1();
             }
             g_dirty_ram_blocks_run++;
             if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+            if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
             g_dirty_interp_chain_target = pc;
             OV_FPLOG_RET1();
         }
@@ -3109,11 +3204,13 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (dirty_ram_pump_boundary(cpu, pc, 3)) {
                 g_dirty_ram_blocks_run++;
                 if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
                 g_dirty_interp_chain_target = cpu->pc;
                 OV_FPLOG_RET1();
             }
             g_dirty_ram_blocks_run++;
             if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+            if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
             g_dirty_interp_chain_target = pc;
             OV_FPLOG_RET1();
         }
@@ -3127,6 +3224,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     g_dirty_ram_blocks_run++;
     cpu->pc = pc;
     if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+    if (pc_window_entry) pc_window_entry->insns += (uint64_t)insns_executed;
     g_dirty_interp_chain_target = pc;
     {
         uint64_t gap = g_dirty_ram_insns_run - s_last_dirty_irq_pump_insns;

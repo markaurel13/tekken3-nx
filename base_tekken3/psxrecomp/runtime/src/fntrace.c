@@ -9,6 +9,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifndef PSX_NO_DEBUG_TOOLS
+extern uint32_t g_debug_current_func_addr;
+#endif
+
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t parity_rw_cb(void* ctx, uint32_t addr) {
     return ((CPUState*)ctx)->read_word(addr);
@@ -35,6 +39,8 @@ static uint32_t s_arm_record_all = 0;  /* opt-in via fntrace_arm(0xFFFFFFFF) */
  * overlapping the game text range but never at entry_pc. */
 static uint32_t s_game_entry_phys = 0;
 static int      s_game_started = 0;
+static uint32_t s_post_handoff_last_target = 0;
+static uint32_t s_post_handoff_seen = 0;
 extern void cdrom_notify_game_started(void);
 extern void boot_state_trigger_capture(const CPUState* cpu);
 
@@ -54,8 +60,12 @@ int fntrace_is_game_started(void) { return s_game_started; }
 void fntrace_mark_game_started(CPUState* cpu) {
     if (s_game_started) return;
     s_game_started = 1;
+    s_post_handoff_last_target = 0;
+    s_post_handoff_seen = 0;
     printf("[Fntrace] ¡Punto de entrada de Tekken 3 alcanzado (0x%08X)! Iniciando codigo del juego...\n",
            s_game_entry_phys | 0x80000000u);
+    printf("[Fntrace] boot_handoff complete (phase=game, entry=0x%08X, ra=0x%08X, sp=0x%08X)\n",
+           s_game_entry_phys | 0x80000000u, cpu->gpr[31], cpu->gpr[29]);
     fflush(stdout);
     extern void dirty_ram_clear_image_baseline(void);
     extern void memory_clear_low_boot_scratch(void);
@@ -130,6 +140,12 @@ void fntrace_record(CPUState* cpu, uint32_t target) {
         t->sp     = cpu->gpr[29];
         t->cycle  = psx_cycle_count;
         g_disp_tail_seq++;
+        if (s_post_handoff_seen < 6u && target != s_post_handoff_last_target) {
+            printf("[FntraceHot] phase=game target=0x%08X ra=0x%08X sp=0x%08X frame=%u seq=%u\n",
+                   target, cpu->gpr[31], cpu->gpr[29], (unsigned)s_frame_count, (unsigned)s_post_handoff_seen);
+            s_post_handoff_last_target = target;
+            s_post_handoff_seen++;
+        }
         return;
     }
 #endif
@@ -237,10 +253,26 @@ void fntrace_record(CPUState* cpu, uint32_t target) {
     }
     if (s_game_started) {
         static uint32_t s_post_start_logs = 0;
-        if (s_post_start_logs < 40) {
+        if (__builtin_expect(s_post_start_logs < 4u, 0)) {
             s_post_start_logs++;
-            printf("[Fntrace] Post-start #%u: target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
+            printf("[Fntrace] Post-start #%u (Switch runtime): target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
                    s_post_start_logs, target, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], cpu->gpr[29]);
+        }
+    }
+    if (__builtin_expect((target & 0x1FFFFFFFu) == 0x000000B0u, 0)) {
+        static uint64_t s_hot_b0_logs = 0;
+        if (__builtin_expect(s_hot_b0_logs < 4u, 0)) {
+            s_hot_b0_logs++;
+            printf("[FntraceHot] phase=%s target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X sp=0x%08X frame=%llu",
+                   fntrace_is_game_started() ? "game" : "boot",
+                   target,
+                   cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7], cpu->gpr[29],
+                   (unsigned long long)s_frame_count);
+#ifndef PSX_NO_DEBUG_TOOLS
+            printf(" cur=0x%08X", g_debug_current_func_addr);
+#endif
+            printf("\n");
+            fflush(stdout);
         }
     }
     /* Honor the one-shot capture freeze (insn_freeze): once latched, the ring
