@@ -1,0 +1,8 @@
+#pragma once
+#include <stdint.h>
+
+#define CD_TRACK_PADDING 4
+#define CD_MAX_TRACKS 100
+#define CD_MAX_SECTOR_DATA 2352
+#define CD_MAX_SUBCODE_DATA 96
+#define CD_FRAME_SIZE (CD_MAX_SECTOR_DATA + CD_MAX_SUBCODE_DATA)

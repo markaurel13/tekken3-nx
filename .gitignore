@@ -1,0 +1,24 @@
+# Build & object files
+build-switch/
+build/
+dist_sd/
+*.o
+*.a
+*.elf
+*.nro
+*.nacp
+*.pfs0
+
+# Disc images / ROMs (too large & copyrighted)
+Tekken 3 (USA)/
+base_tekken3/disc/
+*.bin
+*.cue
+*.iso
+*.chd
+!romfs/bios/openbios.bin
+
+# Large PC mods & local config
+base_tekken3/mods/
+.switch_ip
+*.log
