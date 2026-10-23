@@ -1348,3 +1348,10 @@
 0x80103014
 0x80103CBC
 0x8010FF4C
+
+# Runtime hot indirect/no_entry seeds from Tekken 3 Switch lag profiling
+0x800DBCF8
+0x800DA858
+0x8010FBE8
+0x8010F838
+0x8010EB70

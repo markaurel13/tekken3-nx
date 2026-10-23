@@ -2846,6 +2846,13 @@ int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
 }
 
+int cdrom_is_reading(void) {
+    return reading != 0 ||
+           (stat_reg & (CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK)) != 0 ||
+           pending.pending != 0 ||
+           irq_flag != 0;
+}
+
 /* Savestate post-load: authentic CD second-response delays (ReadTOC ~30M
  * cycles, Init ~1.1M, far seeks, etc.) leave the restored frame on screen
  * for up to ~1s+ of wall time. Clamp those timers so the next cdrom_advance

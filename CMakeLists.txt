@@ -96,6 +96,7 @@ add_executable(tekken3_nx
     src/platform/switch_audio.cpp
     src/platform/switch_input.cpp
     base_tekken3/generated/SLUS_004.02_dispatch.c
+    base_tekken3/generated/overlays_static.c
     ${TEKKEN3_SHARDS}
     ${PSX_RUNTIME_SOURCES}
 )

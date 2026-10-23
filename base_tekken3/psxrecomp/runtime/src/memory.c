@@ -262,22 +262,6 @@ int psx_kernel_bless_dispatchable(uint32_t phys) {
         kbless_native_hits++;
         return 1;
     }
-    static int s_diff_logged = 0;
-    if (s_diff_logged < 10) {
-        s_diff_logged++;
-        uint32_t len = b->body_hi - b->body_lo;
-        uint32_t diff_off = 0;
-        for (uint32_t d = 0; d < len; d++) {
-            if (ram[b->body_lo + d] != bios_rom[s_kb_rom_off + (b->body_lo - s_kb_lo) + d]) {
-                diff_off = d;
-                break;
-            }
-        }
-        printf("[KBlessMismatch] phys=0x%08X body=[0x%08X..0x%08X) diff=+0x%X ram=0x%02X rom=0x%02X\n",
-               phys, b->body_lo, b->body_hi, diff_off,
-               ram[b->body_lo + diff_off],
-               bios_rom[s_kb_rom_off + (b->body_lo - s_kb_lo) + diff_off]);
-    }
     kbless_state[i] = KBLESS_MISMATCH;
     kbless_mismatches++;
     return 0;

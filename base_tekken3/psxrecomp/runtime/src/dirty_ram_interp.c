@@ -235,6 +235,8 @@ DirtyRamPcEntry g_dirty_ram_pc_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
 DirtyRamPcEntry g_dirty_ram_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
 DirtyRamPcEntry g_dirty_native_game_miss_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
 DirtyRamPcEntry g_dirty_native_game_miss_range_window_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
+uint64_t g_dirty_native_game_miss_reason_window[DIRTY_NATIVE_MISS_COUNT] = {0};
+DirtyRamPcEntry g_dirty_native_game_miss_reason_pc_window_table[DIRTY_NATIVE_MISS_COUNT][DIRTY_RAM_PC_TABLE_SIZE] = {{{0}}};
 uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
@@ -281,6 +283,25 @@ static DirtyRamPcEntry *native_game_miss_pc_window_get_or_insert(uint32_t pc) {
 
 static DirtyRamPcEntry *native_game_miss_range_window_get_or_insert(uint32_t pc) {
     return pc_table_get_or_insert_in(g_dirty_native_game_miss_range_window_table, pc);
+}
+
+void dirty_native_game_miss_reason_record(uint32_t phys, uint32_t reason) {
+    if (reason >= DIRTY_NATIVE_MISS_COUNT) return;
+    g_dirty_native_game_miss_reason_window[reason]++;
+    DirtyRamPcEntry *e = pc_table_get_or_insert_in(g_dirty_native_game_miss_reason_pc_window_table[reason], phys);
+    if (e) {
+        e->hits++;
+        e->entry_hits++;
+    }
+}
+
+const char *dirty_native_game_miss_reason_name(uint32_t reason) {
+    switch (reason) {
+    case DIRTY_NATIVE_MISS_NO_ENTRY: return "no_entry";
+    case DIRTY_NATIVE_MISS_NO_RANGES: return "no_ranges";
+    case DIRTY_NATIVE_MISS_RANGE_DIRTY: return "range_dirty";
+    default: return "unknown";
+    }
 }
 
 /* Record every PC the interpreter executes (not just block entries) so

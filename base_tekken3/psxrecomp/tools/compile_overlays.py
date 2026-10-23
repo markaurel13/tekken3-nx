@@ -2970,6 +2970,33 @@ def append_interior_fail_memo(cache_dir: str, key: str, reason: str) -> None:
         pass   # best-effort; a memo write failure must never break the compile
 
 
+def _prefer_static_entry_source(current, candidate, entry: int):
+    """Choose the best capture bytes to synthesize one static entry.
+
+    Multiple captures can advertise the same dispatch entry. For exact static
+    fragment synthesis we want the capture that gives the recompiler the most
+    complete body around that entry, especially when the entry sits near the end
+    of a DMA block and a later merged/superset capture extends beyond it.
+    """
+    if current is None:
+        return candidate
+    cur_data, cur_load_addr, cur_size, cur_phys_addr = current
+    cand_data, cand_load_addr, cand_size, cand_phys_addr = candidate
+    entry_phys = entry & 0x1FFFFFFF
+
+    def score(source):
+        data, load_addr, size, phys_addr = source
+        start = phys_addr
+        end = phys_addr + size
+        if not (start <= entry_phys < end):
+            return (-1, -1, -1, -1)
+        tail = end - entry_phys
+        head = entry_phys - start
+        return (tail, size, head, -start)
+
+    return candidate if score(candidate) > score(current) else current
+
+
 def generate_interior_fragment_static(interior: int, data: bytes,
                                       load_addr: int, size: int,
                                       phys_addr: int, args):
@@ -5441,8 +5468,10 @@ def main():
                     cap.get('dispatch_entry_pcs', [])):
                 entry = ((captured_entry & 0x1FFFFFFF) | 0x80000000)
                 static_requested_entries.add(entry)
-                static_entry_sources[entry] = (
-                    data, load_addr, size, phys_addr)
+                static_entry_sources[entry] = _prefer_static_entry_source(
+                    static_entry_sources.get(entry),
+                    (data, load_addr, size, phys_addr),
+                    entry)
             # --force-interior is an explicit operator assertion that a live
             # dispatch entry was observed even if the retained capture lost its
             # classifier provenance. Static mode must honor it just like DLL
@@ -5454,8 +5483,10 @@ def main():
                 if phys_addr <= forced_phys < region_hi:
                     entry = forced_phys | 0x80000000
                     static_requested_entries.add(entry)
-                    static_entry_sources[entry] = (
-                        data, load_addr, size, phys_addr)
+                    static_entry_sources[entry] = _prefer_static_entry_source(
+                        static_entry_sources.get(entry),
+                        (data, load_addr, size, phys_addr),
+                        entry)
 
         # Reclassify prior F entry addresses from an identical image. Callable
         # entries may become current roots; other entries re-enter as dispatch

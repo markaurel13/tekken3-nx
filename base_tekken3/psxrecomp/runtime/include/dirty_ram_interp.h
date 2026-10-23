@@ -198,6 +198,18 @@ typedef struct {
                           * is the evidence stream for interior-alias seeds. */
 } DirtyRamPcEntry;
 extern DirtyRamPcEntry g_dirty_ram_pc_table[DIRTY_RAM_PC_TABLE_SIZE];
+
+typedef enum DirtyNativeMissReason {
+    DIRTY_NATIVE_MISS_NO_ENTRY = 0,
+    DIRTY_NATIVE_MISS_NO_RANGES = 1,
+    DIRTY_NATIVE_MISS_RANGE_DIRTY = 2,
+    DIRTY_NATIVE_MISS_COUNT = 3
+} DirtyNativeMissReason;
+
+extern uint64_t g_dirty_native_game_miss_reason_window[DIRTY_NATIVE_MISS_COUNT];
+extern DirtyRamPcEntry g_dirty_native_game_miss_reason_pc_window_table[DIRTY_NATIVE_MISS_COUNT][DIRTY_RAM_PC_TABLE_SIZE];
+void dirty_native_game_miss_reason_record(uint32_t phys, uint32_t reason);
+const char *dirty_native_game_miss_reason_name(uint32_t reason);
 /* Every aligned main-RAM word is a possible instruction PC.  Execution
  * coverage only needs presence, not a hit count, so record it in a direct
  * bitmap instead of probing a large hash table for every retired instruction.

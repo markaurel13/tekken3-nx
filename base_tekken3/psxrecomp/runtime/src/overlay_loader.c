@@ -240,6 +240,7 @@ static uint32_t s_native_inprogress = 0;   /* addr of fn currently in native, 0 
 uint32_t overlay_loader_native_inprogress(void) { return s_native_inprogress; }
 static uint64_t s_native_calls_total = 0;
 extern uint64_t s_frame_count;
+int overlay_loader_dump_candidates_at(uint32_t addr, char *out, int cap);
 
 /* Runtime A/B: when 0, candidates are still hashed/validated and recorded, but
  * NEVER executed native — execution falls to the interpreter. Lets us prove
@@ -549,6 +550,76 @@ static uint32_t cand_crc(const Candidate *c) {
     return crc ^ 0xFFFFFFFFu;
 }
 
+static int overlay_diag_watch_addr(uint32_t phys) {
+    phys &= 0x1FFFFFFFu;
+    return phys == 0x000B1CA8u || phys == 0x000B37F0u;
+}
+
+static uint32_t s_overlay_diag_mismatch_seq = 0;
+
+static void overlay_diag_report_static_mismatch(uint32_t phys,
+                                                const uint32_t *lo_len_pairs,
+                                                uint32_t count,
+                                                uint32_t expected_crc,
+                                                uint32_t live_crc,
+                                                uint32_t gen_sum) {
+    const uint8_t *ram = memory_get_ram_ptr();
+    if (!ram || !overlay_diag_watch_addr(phys)) return;
+    uint32_t seq = ++s_overlay_diag_mismatch_seq;
+    if (seq > 64u && (seq & 63u) != 0u) return;
+    printf("[OverlayDiag] static_mismatch seq=%u pc=0x%08X expected_crc=0x%08X live_crc=0x%08X gen=%u ranges=%u\n",
+           seq, phys, expected_crc, live_crc, gen_sum, count);
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
+        uint32_t len = lo_len_pairs[i * 2u + 1u];
+        uint32_t off = (phys >= lo && phys < lo + len) ? (phys - lo) : 0u;
+        const uint8_t *live = ram + lo;
+        const uint8_t *ref = (const uint8_t *)lo_len_pairs + count * sizeof(uint32_t) * 2u;
+        (void)ref;
+        printf("[OverlayDiag] static_range[%u] lo=0x%08X len=%u target_off=%u first_live=%02X\n",
+               i, lo, len, off, live[off < len ? off : 0u]);
+        if (len > 0u) {
+            uint32_t base = off < 8u ? 0u : off - 8u;
+            uint32_t span = len - base;
+            if (span > 16u) span = 16u;
+            printf("[OverlayDiag] static_window[%u] base=+%u bytes=", i, base);
+            for (uint32_t b = 0; b < span; b++) printf("%s%02X", b ? " " : "", live[base + b]);
+            printf("\n");
+        }
+    }
+}
+
+static void overlay_diag_report_candidate_mismatch(const Candidate *c,
+                                                   uint32_t phys,
+                                                   uint32_t live_crc,
+                                                   uint32_t gen_sum) {
+    const uint8_t *ram = memory_get_ram_ptr();
+    if (!ram || !c || !overlay_diag_watch_addr(phys)) return;
+    uint32_t seq = ++s_overlay_diag_mismatch_seq;
+    if (seq > 64u && (seq & 63u) != 0u) return;
+    printf("[OverlayDiag] cand_mismatch seq=%u pc=0x%08X cand=0x%08X expected_crc=0x%08X live_crc=0x%08X gen=%u nranges=%d state=%d tier=%u dll=%d diff=%u\n",
+           seq, phys, c->addr, c->crc_code, live_crc, gen_sum, c->nranges,
+           c->state, (unsigned)c->tier, c->dll, c->diff_passes);
+    for (int r = 0; r < c->nranges; r++) {
+        uint32_t lo = c->range_lo[r];
+        uint32_t len = c->range_len[r];
+        uint32_t off = (phys >= lo && phys < lo + len) ? (phys - lo) : 0u;
+        printf("[OverlayDiag] cand_range[%d] lo=0x%08X len=%u target_off=%u first_live=%02X\n",
+               r, lo, len, off, ram[lo + (off < len ? off : 0u)]);
+        if (len > 0u) {
+            uint32_t base = off < 8u ? 0u : off - 8u;
+            uint32_t span = len - base;
+            if (span > 16u) span = 16u;
+            printf("[OverlayDiag] cand_window[%d] base=+%u bytes=", r, base);
+            for (uint32_t b = 0; b < span; b++) printf("%s%02X", b ? " " : "", ram[lo + base + b]);
+            printf("\n");
+        }
+    }
+    char dump[1024];
+    int n = overlay_loader_dump_candidates_at(phys, dump, (int)sizeof(dump));
+    if (n > 0) printf("[OverlayDiag] candidates_at= %s\n", dump);
+}
+
 static uint32_t cand_gensum(const Candidate *c) {
     uint32_t s = 0;
     for (int i = 0; i < c->nranges; i++)
@@ -627,7 +698,22 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
     crc ^= 0xFFFFFFFFu;
     int matches = (crc == expected_crc) ? 1 : 0;
     s_static_match_rehashes++;
-    if (!matches) s_static_match_crc_misses++;
+    if (!matches) {
+        s_static_match_crc_misses++;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
+            uint32_t len = lo_len_pairs[i * 2u + 1u];
+            if (overlay_diag_watch_addr(lo) ||
+                (overlay_diag_watch_addr(0x000B1CA8u) && 0x000B1CA8u >= lo && 0x000B1CA8u < lo + len) ||
+                (overlay_diag_watch_addr(0x000B37F0u) && 0x000B37F0u >= lo && 0x000B37F0u < lo + len)) {
+                uint32_t phys = overlay_diag_watch_addr(lo) ? lo
+                    : ((0x000B1CA8u >= lo && 0x000B1CA8u < lo + len) ? 0x000B1CA8u : 0x000B37F0u);
+                overlay_diag_report_static_mismatch(phys, lo_len_pairs, count,
+                                                    expected_crc, crc, gen_sum);
+                break;
+            }
+        }
+    }
 
     if (entry) {
         entry->ranges = lo_len_pairs;
@@ -3528,6 +3614,7 @@ static int range_candidate_matches(int i, uint32_t phys) {
     } else {
         c->state = ENTRY_INVALID;
     }
+    overlay_diag_report_candidate_mismatch(c, phys, live, gen);
     s_stale_blocked++;
     return 0;
 }
@@ -3901,6 +3988,7 @@ retry_candidates:
             } else {
                 c->state = ENTRY_INVALID;
             }
+            overlay_diag_report_candidate_mismatch(c, phys, live, gen);
             s_stale_blocked++;
         }
     }

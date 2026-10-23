@@ -84,6 +84,7 @@ uint32_t cdrom_get_burst_total(void);
  * data sector delivered within the burst-gap window). XA streaming is never
  * a load. Drives turbo-through-loads (step 4). */
 int cdrom_load_in_progress(void);
+int cdrom_is_reading(void);
 /* Physical non-XA data-read command state, without the logical load gap
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);

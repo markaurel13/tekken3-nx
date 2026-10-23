@@ -2,6 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdint.h>
+#include <vector>
+#include <algorithm>
+#include <utility>
 #include <sys/stat.h>
 #include <sys/iosupport.h>
 #include <sys/socket.h>
@@ -37,6 +41,7 @@ extern uint32_t psx_game_entry_count(void);
 #include "mdec.h"
 #include "cdrom.h"
 #include "psx_interpreter.h"
+#include "crc32.h"
 
 // Funciones de memoria e IRQ de PS1
 void memory_init(const char* bios_path);
@@ -50,6 +55,7 @@ uint8_t psx_read_byte(uint32_t addr);
 void psx_write_byte(uint32_t addr, uint8_t val);
 void psx_icache_reset(void);
 void psx_hle_scheduler_set_default(int on);
+uint8_t* memory_get_ram_ptr(void);
 
 // Forward declaration de la función de despacho generada para Tekken 3
 void psx_dispatch_init(void);
@@ -66,6 +72,26 @@ extern uint32_t g_dirty_ram_last_unsupported_pc;
 extern uint32_t g_dirty_ram_last_unsupported_insn;
 extern const char* g_dirty_ram_last_unsupported_reason;
 void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
+
+int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
+                                    uint32_t count,
+                                    uint32_t expected_crc) {
+    const uint8_t *ram = memory_get_ram_ptr();
+    if (!ram || !lo_len_pairs || count == 0 || count > 4096) {
+        return 0;
+    }
+
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFu;
+        const uint32_t len = lo_len_pairs[i * 2u + 1u];
+        if (len == 0 || lo >= 0x200000u || len > 0x200000u - lo) {
+            return 0;
+        }
+        crc = crc32_update(crc, ram + lo, len);
+    }
+    return (crc ^ 0xFFFFFFFFu) == expected_crc;
+}
 
 // Variables globales requeridas por el runtime generado
 int g_psx_cps_mode = 0;
@@ -130,8 +156,8 @@ void overlay_fp_log(uint32_t a, uint32_t b) { (void)a; (void)b; }
 int overlay_fp_enabled(void) { return 0; }
 void overlay_loader_active_write_check(uint32_t a, uint32_t b) { (void)a; (void)b; }
 void overlay_loader_note_code_write(uint32_t a, uint32_t b) { (void)a; (void)b; }
-void overlay_capture_before_dma(uint32_t a, uint32_t b, int c) { (void)a; (void)b; (void)c; }
-void overlay_capture_on_dma(uint32_t a, uint32_t b, int c) { (void)a; (void)b; (void)c; }
+void overlay_capture_before_dma(uint32_t a, uint32_t b);
+void overlay_capture_on_dma(uint32_t a, uint32_t b, const uint8_t* c);
 void card_data_writes_check(uint32_t a, uint32_t b) { (void)a; (void)b; }
 void debug_server_trace_dispatch(uint32_t a) { (void)a; }
 void debug_server_trace_mmio_write(uint32_t a, uint32_t b, uint8_t c) { (void)a; (void)b; (void)c; }
@@ -159,6 +185,101 @@ uint64_t crash_trace_dispatch_seq_get(void) { return 0; }
 const void* crash_trace_dispatch_ring_get(void) { return 0; }
 }
 
+struct SwitchOverlayCaptureEntry {
+    uint32_t load_addr;
+    uint32_t size;
+    uint32_t seq;
+    std::vector<uint8_t> bytes;
+};
+
+static std::vector<SwitchOverlayCaptureEntry> s_switch_overlay_captures;
+static uint32_t s_switch_overlay_capture_seq = 0;
+static uint64_t s_switch_overlay_capture_bytes = 0;
+static void switch_overlay_capture_mkdirs(void);
+static void switch_overlay_capture_write_bin(const SwitchOverlayCaptureEntry& e);
+
+static constexpr uint32_t kSwitchOverlayHotPcs[] = {
+    0x0007B5A4u,
+    0x000B19B0u,
+    0x000B1AE0u,
+    0x000B1CA8u,
+    0x000B37F0u,
+    0x000DBCF8u,
+    0x000E0F20u,
+    0x000E11DCu,
+    0x000E1D4Cu,
+    0x0010EB70u,
+    0x0010ED3Cu,
+    0x0010F838u,
+    0x0010FBE8u,
+    0x0010FD00u,
+};
+
+static bool switch_overlay_capture_contains_pc(const SwitchOverlayCaptureEntry& e, uint32_t pc) {
+    return pc >= e.load_addr && pc < e.load_addr + e.size;
+}
+
+static bool switch_overlay_span_contains_pc(uint32_t load_addr, uint32_t size, uint32_t pc) {
+    return pc >= load_addr && pc < load_addr + size;
+}
+
+extern "C" void overlay_capture_before_dma(uint32_t load_addr, uint32_t size) {
+    /* Lightweight Switch capture: no outgoing-variant preservation yet.  This
+     * hook exists so dma.c can call the standard overlay API without linking the
+     * desktop SDL/threaded capture backend. */
+    (void)load_addr;
+    (void)size;
+}
+
+extern "C" void overlay_capture_on_dma(uint32_t load_addr, uint32_t size, const uint8_t* bytes) {
+    if (!bytes || size == 0 || !fntrace_is_game_started()) return;
+    load_addr &= 0x1FFFFFu;
+    if (load_addr >= 0x1C0000u) return;
+    if (size > 0x200000u - load_addr) size = 0x200000u - load_addr;
+    if (size == 0) return;
+
+    /* Keep this bounded for Switch RAM/log size.  The hot overlays in the log
+     * are under 0x131000 and arrive via CD DMA; retaining unique current DMA
+     * payloads is enough to identify/precompile the live code producers. */
+    constexpr size_t kMaxEntries = 4096;
+    constexpr uint64_t kMaxBytes = 32ull * 1024ull * 1024ull;
+    if (s_switch_overlay_captures.size() >= kMaxEntries ||
+        s_switch_overlay_capture_bytes + size > kMaxBytes) {
+        return;
+    }
+
+    for (const SwitchOverlayCaptureEntry& e : s_switch_overlay_captures) {
+        if (e.load_addr == load_addr && e.size == size &&
+            e.bytes.size() == size && memcmp(e.bytes.data(), bytes, size) == 0) {
+            return;
+        }
+    }
+
+    SwitchOverlayCaptureEntry e;
+    e.load_addr = load_addr;
+    e.size = size;
+    e.seq = ++s_switch_overlay_capture_seq;
+    e.bytes.assign(bytes, bytes + size);
+    s_switch_overlay_capture_bytes += size;
+    switch_overlay_capture_write_bin(e);
+    bool covers_hot_pc = false;
+    for (uint32_t pc : kSwitchOverlayHotPcs) {
+        if (switch_overlay_span_contains_pc(e.load_addr, e.size, pc)) {
+            covers_hot_pc = true;
+            printf("[OverlayCaptureHot] seq=%u addr=0x%06X size=%u covers=0x%06X file=entry_%04u_%06X_%u.bin\n",
+                   e.seq, e.load_addr, e.size, pc, e.seq, e.load_addr, e.size);
+        }
+    }
+    s_switch_overlay_captures.push_back(std::move(e));
+
+    if (covers_hot_pc || s_switch_overlay_captures.size() <= 16 || (s_switch_overlay_captures.size() % 64) == 0) {
+        printf("[OverlayCapture] dma seq=%u addr=0x%06X size=%u entries=%zu bytes=%llu\n",
+               s_switch_overlay_capture_seq, load_addr, size,
+               s_switch_overlay_captures.size(),
+               (unsigned long long)s_switch_overlay_capture_bytes);
+    }
+}
+
 // Búfer simulado de VRAM de 1024x512 de 16-bit
 static uint16_t s_vram[1024 * 512];
 
@@ -174,6 +295,56 @@ static uint64_t s_total_render_ns = 0;
 static uint64_t s_main_loop_samples = 0;
 static uint64_t s_last_hot_pc_frame = 0;
 static uint32_t s_last_hot_pc = 0;
+
+
+static void switch_overlay_capture_mkdirs(void) {
+    mkdir("sdmc:/switch/tekken3/overlay_captures_switch", 0777);
+}
+
+static void switch_overlay_capture_write_bin(const SwitchOverlayCaptureEntry& e) {
+    switch_overlay_capture_mkdirs();
+    char path[256];
+    snprintf(path, sizeof(path),
+             "sdmc:/switch/tekken3/overlay_captures_switch/entry_%04u_%06X_%u.bin",
+             e.seq, e.load_addr, e.size);
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    if (!e.bytes.empty()) fwrite(e.bytes.data(), 1, e.bytes.size(), f);
+    fclose(f);
+}
+
+static void switch_overlay_capture_write_json(void) {
+    switch_overlay_capture_mkdirs();
+    const char* path = "sdmc:/switch/tekken3/overlay_captures_switch/overlay_captures.json";
+    FILE* f = fopen(path, "w");
+    if (!f) {
+        printf("[OverlayCapture] No se pudo escribir %s\n", path);
+        return;
+    }
+    fprintf(f, "{\n");
+    fprintf(f, "  \"schema\": \"tekken3-nx-switch-overlay-captures-v1\",\n");
+    fprintf(f, "  \"note\": \"DMA captures after game handoff; file points to live RAM bytes loaded over the static SLUS image.\",\n");
+    fprintf(f, "  \"count\": %zu,\n", s_switch_overlay_captures.size());
+    fprintf(f, "  \"total_bytes\": %llu,\n", (unsigned long long)s_switch_overlay_capture_bytes);
+    fprintf(f, "  \"entries\": [\n");
+    for (size_t i = 0; i < s_switch_overlay_captures.size(); i++) {
+        const SwitchOverlayCaptureEntry& e = s_switch_overlay_captures[i];
+        fprintf(f, "    {\"seq\":%u,\"load_addr\":\"0x%06X\",\"size\":%u,\"file\":\"entry_%04u_%06X_%u.bin\",\"covered_hot_pcs\":[",
+                e.seq, e.load_addr, e.size, e.seq, e.load_addr, e.size);
+        bool first_pc = true;
+        for (uint32_t pc : kSwitchOverlayHotPcs) {
+            if (!switch_overlay_capture_contains_pc(e, pc)) continue;
+            fprintf(f, "%s\"0x%06X\"", first_pc ? "" : ",", pc);
+            first_pc = false;
+        }
+        fprintf(f, "]}%s\n", (i + 1 < s_switch_overlay_captures.size()) ? "," : "");
+    }
+    fprintf(f, "  ]\n}\n");
+    fclose(f);
+    printf("[OverlayCapture] Escrito %s entries=%zu bytes=%llu\n",
+           path, s_switch_overlay_captures.size(),
+           (unsigned long long)s_switch_overlay_capture_bytes);
+}
 
 int main(int argc, char* argv[]);
 
@@ -281,6 +452,9 @@ extern "C" {
     extern DirtyRamPcEntry g_dirty_ram_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE];
     extern DirtyRamPcEntry g_dirty_native_game_miss_pc_window_table[DIRTY_RAM_PC_TABLE_SIZE];
     extern DirtyRamPcEntry g_dirty_native_game_miss_range_window_table[DIRTY_RAM_PC_TABLE_SIZE];
+    extern uint64_t g_dirty_native_game_miss_reason_window[DIRTY_NATIVE_MISS_COUNT];
+    extern DirtyRamPcEntry g_dirty_native_game_miss_reason_pc_window_table[DIRTY_NATIVE_MISS_COUNT][DIRTY_RAM_PC_TABLE_SIZE];
+    const char *dirty_native_game_miss_reason_name(uint32_t reason);
 }
 
 static bool is_bios_vector_noise(uint32_t pc) {
@@ -410,8 +584,23 @@ static void switch_vblank_callback(void) {
                 printf(" mism_range=0x%08X+%u at=0x%08X", mism_info[0], mism_info[1], mism_info[2]);
             }
             printf("\n");
+            printf("  [NativeMissReasonTop]");
+            for (uint32_t r = 0; r < DIRTY_NATIVE_MISS_COUNT; ++r) {
+                uint32_t reason_pc[3] = {0, 0, 0};
+                uint64_t reason_hits[3] = {0, 0, 0};
+                collect_top_window_entries(g_dirty_native_game_miss_reason_pc_window_table[r], false, reason_pc, reason_hits);
+                printf(" %s=%llu pc1=0x%08X h1=%llu pc2=0x%08X h2=%llu pc3=0x%08X h3=%llu",
+                       dirty_native_game_miss_reason_name(r),
+                       (unsigned long long)g_dirty_native_game_miss_reason_window[r],
+                       reason_pc[0], (unsigned long long)reason_hits[0],
+                       reason_pc[1], (unsigned long long)reason_hits[1],
+                       reason_pc[2], (unsigned long long)reason_hits[2]);
+            }
+            printf("\n");
             memset(g_dirty_native_game_miss_pc_window_table, 0, sizeof(g_dirty_native_game_miss_pc_window_table));
             memset(g_dirty_native_game_miss_range_window_table, 0, sizeof(g_dirty_native_game_miss_range_window_table));
+            memset(g_dirty_native_game_miss_reason_window, 0, sizeof(uint64_t) * DIRTY_NATIVE_MISS_COUNT);
+            memset(g_dirty_native_game_miss_reason_pc_window_table, 0, sizeof(DirtyRamPcEntry) * DIRTY_NATIVE_MISS_COUNT * DIRTY_RAM_PC_TABLE_SIZE);
         }
         if (d_insns > 10000 && (s_frame_count % 120) == 0 && s_frame_count != s_last_hot_pc_frame) {
             uint32_t top_pc[3] = {0, 0, 0};
@@ -781,6 +970,7 @@ int main(int argc, char* argv[]) {
 
     // 10. Limpieza ordenada si el juego termina
     printf("[Main] Finalizando subsistemas...\n");
+    switch_overlay_capture_write_json();
     if (s_sd_log) {
         fclose(s_sd_log);
         s_sd_log = NULL;
