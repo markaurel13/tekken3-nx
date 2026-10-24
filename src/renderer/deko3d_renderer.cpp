@@ -106,13 +106,13 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
         .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code)
         .create();
 
-    // Bloque para Datos de Vértices, Comandos, Descriptores y UBOs (2 MB)
-    m_memData = dk::MemBlockMaker{m_device, 2 * 1024 * 1024}
+    // Bloque para Datos de Vértices, Comandos, Descriptores y UBOs (8 MB)
+    m_memData = dk::MemBlockMaker{m_device, 8 * 1024 * 1024}
         .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
         .create();
 
-    // Bloque dedicado con caché de CPU activa para el Staging Buffer RGBA8 1024x512 (2 MB)
-    m_memStaging = dk::MemBlockMaker{m_device, 2 * 1024 * 1024}
+    // Bloque dedicado con caché de CPU activa para el Staging Buffer RGBA8 1024x512 triple-buffered (6 MB)
+    m_memStaging = dk::MemBlockMaker{m_device, NumFramebuffers * VramWidth * VramHeight * sizeof(uint32_t)}
         .setFlags(DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached)
         .create();
 
@@ -164,29 +164,28 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
     m_vramTexture.initialize(vramLayout, m_memImages, curImgOffset);
 
     // 8. Mapear regiones en m_memData (8 MB):
-    // 0x000000: Command Buffer (256 KB)
-    // 0x040000: Vertex Ring Buffer (1 MB)
-    // 0x140000: Image Descriptor Set (256 B)
-    // 0x140100: Sampler Descriptor Set (256 B)
-    // 0x140200: ViewportBlock UBO (256 B, alineado a DK_UNIFORM_BUF_ALIGNMENT)
-    // 0x140300: DrawModeBlock UBO (256 B, alineado a DK_UNIFORM_BUF_ALIGNMENT)
-    // 0x200000: Staging Buffer RGBA8 1024x512 (2 MB)
+    // 0x000000..0x0C0000: Command Buffers por slot (3 * 256 KB = 768 KB)
+    // 0x100000..0x400000: Vertex Ring Buffers por slot (3 * 1 MB = 3 MB)
+    // 0x400000: Image Descriptor Set (256 B)
+    // 0x400100: Sampler Descriptor Set (256 B)
+    // 0x400200: ViewportBlock UBO (256 B, alineado a DK_UNIFORM_BUF_ALIGNMENT)
+    // 0x400300: DrawModeBlock UBO (256 B, alineado a DK_UNIFORM_BUF_ALIGNMENT)
     uint8_t* dataCpu = (uint8_t*)m_memData.getCpuAddr();
     DkGpuAddr dataGpu = m_memData.getGpuAddr();
 
-    m_vtxRingCpu = (PS1Vertex*)(dataCpu + CmdBufferSize);
-    m_vtxRingGpu = dataGpu + CmdBufferSize;
+    m_vtxRingCpu = (PS1Vertex*)(dataCpu + 0x100000);
+    m_vtxRingGpu = dataGpu + 0x100000;
     m_vtxCount = 0;
 
-    m_imgDescCpu = dataCpu + 0x140000;
-    m_imgDescGpu = dataGpu + 0x140000;
-    m_smpDescCpu = dataCpu + 0x140100;
-    m_smpDescGpu = dataGpu + 0x140100;
+    m_imgDescCpu = dataCpu + 0x400000;
+    m_imgDescGpu = dataGpu + 0x400000;
+    m_smpDescCpu = dataCpu + 0x400100;
+    m_smpDescGpu = dataGpu + 0x400100;
 
-    m_viewportUboCpu = (ViewportUniforms*)(dataCpu + 0x140200);
-    m_viewportUboGpu = dataGpu + 0x140200;
-    m_drawModeUboCpu = (DrawModeUniforms*)(dataCpu + 0x140300);
-    m_drawModeUboGpu = dataGpu + 0x140300;
+    m_viewportUboCpu = (ViewportUniforms*)(dataCpu + 0x400200);
+    m_viewportUboGpu = dataGpu + 0x400200;
+    m_drawModeUboCpu = (DrawModeUniforms*)(dataCpu + 0x400300);
+    m_drawModeUboGpu = dataGpu + 0x400300;
 
     m_vramStagingCpu = (uint32_t*)m_memStaging.getCpuAddr();
     m_vramStagingGpu = m_memStaging.getGpuAddr();
@@ -213,11 +212,11 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
 }
 
 void Deko3DRenderer::BeginFrame() {
-    m_queue.waitIdle();
-    m_cmdBuf.clear();
-    m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
-
     m_curSlot = m_queue.acquireImage(m_swapchain);
+    m_fences[m_curSlot].wait();
+
+    m_cmdBuf.clear();
+    m_cmdBuf.addMemory(m_memData, m_curSlot * CmdBufferSize, CmdBufferSize);
 
     dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
     m_cmdBuf.bindRenderTargets(&colorTarget);
@@ -276,9 +275,10 @@ void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, cons
         FlushBatch();
     }
 
-    m_vtxRingCpu[m_vtxCount + 0] = v0;
-    m_vtxRingCpu[m_vtxCount + 1] = v1;
-    m_vtxRingCpu[m_vtxCount + 2] = v2;
+    PS1Vertex* curVtxCpu = m_vtxRingCpu + m_curSlot * MaxVerticesPerFrame;
+    curVtxCpu[m_vtxCount + 0] = v0;
+    curVtxCpu[m_vtxCount + 1] = v1;
+    curVtxCpu[m_vtxCount + 2] = v2;
     m_vtxCount += 3;
 }
 
@@ -353,7 +353,8 @@ void Deko3DRenderer::FlushBatch() {
     DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
     m_cmdBuf.bindVtxAttribState(vtxAttribState);
     m_cmdBuf.bindVtxBufferState({ vtxBufferState });
-    m_cmdBuf.bindVtxBuffers(0, { { m_vtxRingGpu, (uint32_t)(m_vtxCount * sizeof(PS1Vertex)) } });
+    DkGpuAddr curVtxGpu = m_vtxRingGpu + m_curSlot * (MaxVerticesPerFrame * sizeof(PS1Vertex));
+    m_cmdBuf.bindVtxBuffers(0, { { curVtxGpu, (uint32_t)(m_vtxCount * sizeof(PS1Vertex)) } });
 
     // Emitir draw call
     m_cmdBuf.draw(DkPrimitive_Triangles, m_vtxCount, 1, 0, 0);
@@ -434,9 +435,12 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     }
 
     if (!di.disabled && m_vram && m_vramStagingCpu) {
+        uint32_t* slotStagingCpu = m_vramStagingCpu + (size_t)m_curSlot * (VramWidth * VramHeight);
+        DkGpuAddr slotStagingGpu = m_vramStagingGpu + (size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t));
+
         if (di.depth24) {
             for (uint32_t y = 0; y < h; y++) {
-                uint32_t* dstRow = m_vramStagingCpu + (size_t)y * w;
+                uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
                 gpu_depth24_present_row(&di, y, dstRow, w);
                 for (uint32_t x = 0; x < w; x++) {
                     uint32_t argb = dstRow[x];
@@ -451,7 +455,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             for (uint32_t y = 0; y < h; y++) {
                 uint32_t vy = (di.display_y + y) & (VramHeight - 1);
                 const uint16_t* srcRow = m_vram + (size_t)vy * VramWidth;
-                uint32_t* dstRow = m_vramStagingCpu + (size_t)y * w;
+                uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
                 for (uint32_t x = 0; x < w; x++) {
                     uint16_t c = srcRow[(di.display_x + x) & (VramWidth - 1)];
                     if (c & 0x7FFFu) nonZeroPixels++;
@@ -467,7 +471,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         }
 
         // Volcar caché L1/L2 de CPU del bloque de staging antes de que el motor DMA/2D de GPU lo lea
-        m_memStaging.flushCpuCache(0, (size_t)w * h * sizeof(uint32_t));
+        m_memStaging.flushCpuCache((size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t)), (size_t)w * h * sizeof(uint32_t));
 
         // Invalidar L2 de GPU antes de leer el buffer de staging escrito por CPU
         m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_L2Cache);
@@ -475,7 +479,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         // Subir región activa de VRAM a m_vramTexture en la GPU Tegra X1
         dk::ImageView vramView{ m_vramTexture };
         dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
-        m_cmdBuf.copyBufferToImage({ m_vramStagingGpu, 0, 0 }, vramView, { 0, 0, 0, w, h, 1 });
+        m_cmdBuf.copyBufferToImage({ slotStagingGpu, 0, 0 }, vramView, { 0, 0, 0, w, h, 1 });
         m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
 
         // Blit y escalado directo por hardware 2D Engine hacia el framebuffer actual (1280x720)
@@ -505,6 +509,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     }
 
     // Finalizar la lista de comandos y enviar a la cola gráfica
+    m_cmdBuf.signalFence(m_fences[m_curSlot]);
     DkCmdList finalCmdList = m_cmdBuf.finishList();
     m_queue.submitCommands(finalCmdList);
 

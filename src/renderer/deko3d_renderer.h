@@ -41,7 +41,7 @@ struct DrawModeUniforms {
 
 class Deko3DRenderer {
 public:
-    static constexpr unsigned NumFramebuffers = 2;
+    static constexpr unsigned NumFramebuffers = 3;
     static constexpr uint32_t TargetWidth = 1280;
     static constexpr uint32_t TargetHeight = 720;
     static constexpr uint32_t VramWidth = 1024;
@@ -120,6 +120,7 @@ private:
     dk::Shader m_fsh;
 
     int m_curSlot = 0;
+    dk::Fence m_fences[NumFramebuffers];
 
     // Buffers de vértices, descriptores, uniformes y staging en m_memData
     PS1Vertex* m_vtxRingCpu = nullptr;
