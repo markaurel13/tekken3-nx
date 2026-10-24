@@ -73,13 +73,66 @@ void psx_event_step_conservative_env_init(void) {
     if (e && e[0] == '1') g_event_step_conservative = 1;
 }
 
+#if defined(__aarch64__) || defined(__SWITCH__)
+static inline uint64_t prof_get_ticks(void) {
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return cnt;
+}
+static inline uint64_t prof_ticks_to_ns(uint64_t tick) {
+    return (tick * 625) / 12;
+}
+#else
+static inline uint64_t prof_get_ticks(void) { return 0; }
+static inline uint64_t prof_ticks_to_ns(uint64_t tick) { return tick; }
+#endif
+
+extern int g_exec_phase;
+uint64_t g_prof_dev_sio_ns = 0;
+uint64_t g_prof_dev_cdrom_ns = 0;
+uint64_t g_prof_dev_dma_ns = 0;
+uint64_t g_prof_dev_timers_ns = 0;
+uint64_t g_prof_dev_irq_ns = 0;
+uint64_t g_prof_dev_sched_ns = 0;
+uint64_t g_prof_dev_total_ns = 0;
+uint64_t g_prof_dev_adv_calls = 0;
+
 static void advance_devices(uint32_t c) {
     psx_cycle_count += (uint64_t)c;
+    g_prof_dev_adv_calls++;
+    int p = g_exec_phase;
+
+    g_exec_phase = 11; /* sio_adv */
+    uint64_t t0 = prof_get_ticks();
     sio_advance(c);
+    uint64_t t1 = prof_get_ticks();
+    g_prof_dev_sio_ns += prof_ticks_to_ns(t1 - t0);
+
+    g_exec_phase = 8; /* cdrom_adv */
+    t0 = prof_get_ticks();
     cdrom_advance(c);
+    t1 = prof_get_ticks();
+    g_prof_dev_cdrom_ns += prof_ticks_to_ns(t1 - t0);
+
+    g_exec_phase = 9; /* dma_adv */
+    t0 = prof_get_ticks();
     dma_advance(c);
+    t1 = prof_get_ticks();
+    g_prof_dev_dma_ns += prof_ticks_to_ns(t1 - t0);
+
+    g_exec_phase = 10; /* timers_adv */
+    t0 = prof_get_ticks();
     timers_advance(c);
+    t1 = prof_get_ticks();
+    g_prof_dev_timers_ns += prof_ticks_to_ns(t1 - t0);
+
+    g_exec_phase = 12; /* irq_adv */
+    t0 = prof_get_ticks();
     interrupts_advance_cycles(c);
+    t1 = prof_get_ticks();
+    g_prof_dev_irq_ns += prof_ticks_to_ns(t1 - t0);
+
+    g_exec_phase = p;
 }
 
 /* ===== Event-deadline device servicing (production fast path) =================
@@ -166,9 +219,15 @@ static void psx_devices_recompute_deadline(void) {
     psx_next_service_cycle = psx_cycle_count + (uint64_t)next;
 }
 
+extern int g_exec_phase;
+uint64_t g_prof_svc_calls = 0;
 void psx_devices_service_to_now(void) {
     if (s_in_device_service) return;                 /* device code charged cycles: absorb */
     if (g_plp_cycle_diag) g_plp_svc_calls++;
+    g_prof_svc_calls++;
+    uint64_t svc_t0 = prof_get_ticks();
+    int prof_prev_phase = g_exec_phase;
+    g_exec_phase = 5;                                /* PROF: dev_other (loop/prep) */
     g_psx_cycle_fast_limit = 0;
     s_in_device_service = 1;
     uint64_t target = psx_cycle_count;
@@ -177,7 +236,13 @@ void psx_devices_service_to_now(void) {
          * callbacks see the same incremental psx_cycle_count they always did
          * and no chunk ever skips OVER a device event boundary. */
         psx_cycle_count = s_devices_synced_cycle;
+        int p = g_exec_phase;
+        g_exec_phase = 12; /* irq_adv */
+        uint64_t ev_t0 = prof_get_ticks();
         interrupts_service_scheduled_events();
+        g_prof_dev_sched_ns += prof_ticks_to_ns(prof_get_ticks() - ev_t0);
+        g_exec_phase = p;
+
         while (psx_cycle_count < target) {
             uint32_t remaining = (uint32_t)(target - psx_cycle_count);
             uint32_t step = remaining;
@@ -197,12 +262,20 @@ void psx_devices_service_to_now(void) {
                 step = 1u;
             }
             advance_devices(step);
+
+            p = g_exec_phase;
+            g_exec_phase = 12; /* irq_adv */
+            ev_t0 = prof_get_ticks();
             interrupts_service_scheduled_events();
+            g_prof_dev_sched_ns += prof_ticks_to_ns(prof_get_ticks() - ev_t0);
+            g_exec_phase = p;
         }
         s_devices_synced_cycle = target;
     }
     psx_devices_recompute_deadline();
-    psx_in_device_service = 0;
+    s_in_device_service = 0;
+    g_prof_dev_total_ns += prof_ticks_to_ns(prof_get_ticks() - svc_t0);
+    g_exec_phase = prof_prev_phase;
 
     /* Sparse host maintenance (was on every psx_advance_cycles). HARD_CAP
      * guarantees we land here at least every 16K guest cycles. */

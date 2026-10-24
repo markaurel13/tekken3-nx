@@ -486,8 +486,185 @@ static void collect_top_window_entries(const DirtyRamPcEntry* table,
     }
 }
 
+/* ===== PROFILER: wall-time sampler (phase + guest PC histogram) ===== */
+extern "C" {
+extern int g_exec_phase;
+extern volatile uint32_t g_prof_pc;
+extern uint64_t g_prof_irq_calls;
+extern uint64_t g_prof_svc_calls;
+
+extern uint64_t g_prof_dev_sio_ns;
+extern uint64_t g_prof_dev_cdrom_ns;
+extern uint64_t g_prof_dev_dma_ns;
+extern uint64_t g_prof_dev_timers_ns;
+extern uint64_t g_prof_dev_irq_ns;
+extern uint64_t g_prof_dev_sched_ns;
+extern uint64_t g_prof_dev_total_ns;
+extern uint64_t g_prof_dev_adv_calls;
+
+extern uint64_t g_prof_iso_raw_calls;
+extern uint64_t g_prof_iso_raw_bytes;
+extern uint64_t g_prof_iso_raw_ns;
+extern uint64_t g_prof_iso_raw_max_ns;
+extern uint64_t g_prof_iso_cook_calls;
+extern uint64_t g_prof_iso_cook_bytes;
+extern uint64_t g_prof_iso_cook_ns;
+extern uint64_t g_prof_iso_cook_max_ns;
+}
+
+#define PROF_PHASES 14
+static volatile uint64_t s_prof_phase_cnt[PROF_PHASES];
+#define PROF_PC_SLOTS 8192
+static uint32_t s_prof_pc_key[PROF_PC_SLOTS];
+static uint32_t s_prof_pc_cnt[PROF_PC_SLOTS];
+static Thread s_prof_thread;
+static volatile bool s_prof_run = false;
+static u64 s_prof_last_cb_end = 0, s_prof_guest_ticks = 0, s_prof_cb_ticks = 0, s_prof_frames = 0;
+static uint64_t s_prof_last_irq = 0, s_prof_last_svc = 0;
+
+static uint64_t s_prof_last_dev_sio = 0;
+static uint64_t s_prof_last_dev_cdrom = 0;
+static uint64_t s_prof_last_dev_dma = 0;
+static uint64_t s_prof_last_dev_timers = 0;
+static uint64_t s_prof_last_dev_irq = 0;
+static uint64_t s_prof_last_dev_sched = 0;
+static uint64_t s_prof_last_dev_total = 0;
+static uint64_t s_prof_last_dev_adv = 0;
+
+static uint64_t s_prof_last_iso_raw_calls = 0;
+static uint64_t s_prof_last_iso_raw_bytes = 0;
+static uint64_t s_prof_last_iso_raw_ns = 0;
+static uint64_t s_prof_last_iso_cook_calls = 0;
+static uint64_t s_prof_last_iso_cook_bytes = 0;
+static uint64_t s_prof_last_iso_cook_ns = 0;
+
+static void prof_thread_fn(void*) {
+    while (s_prof_run) {
+        int ph = g_exec_phase;
+        if (ph < 0 || ph >= PROF_PHASES) ph = 0;
+        uint64_t c = s_prof_phase_cnt[ph];
+        s_prof_phase_cnt[ph] = c + 1;
+        if (ph != 7) {
+            uint32_t pc = g_prof_pc & ~0xFu;   /* 16-byte buckets */
+            uint32_t h = (pc >> 4) * 2654435761u;
+            for (int i = 0; i < 16; i++) {
+                uint32_t s = (h + i) & (PROF_PC_SLOTS - 1);
+                if (s_prof_pc_key[s] == pc || s_prof_pc_cnt[s] == 0) {
+                    s_prof_pc_key[s] = pc; s_prof_pc_cnt[s]++; break;
+                }
+            }
+        }
+        svcSleepThread(200000);   /* ~0.2 ms */
+    }
+}
+
+static void prof_start(void) {
+    s_prof_run = true;
+    if (R_SUCCEEDED(threadCreate(&s_prof_thread, prof_thread_fn, NULL, NULL, 0x4000, 0x3B, 2)))
+        threadStart(&s_prof_thread);
+    else
+        printf("[Prof] threadCreate failed\n");
+}
+
+static void prof_report(uint64_t frame) {
+    static const char* names[PROF_PHASES] = {
+        "guest0", "dirtyinterp", "?2", "guest3", "gpu",
+        "dev_other", "irqchk", "vblankcb",
+        "cdrom_adv", "dma_adv", "timers_adv", "sio_adv", "irq_adv", "iso_io"
+    };
+    uint64_t tot = 0; for (int i = 0; i < PROF_PHASES; i++) tot += s_prof_phase_cnt[i];
+    if (!tot) tot = 1;
+    char line[512]; int n = 0;
+    for (int i = 0; i < PROF_PHASES; i++)
+        n += snprintf(line + n, sizeof(line) - n, "%s=%.1f%% ", names[i], 100.0 * s_prof_phase_cnt[i] / tot);
+    double fr = s_prof_frames ? (double)s_prof_frames : 1.0;
+    printf("[PROF] frame=%llu samples=%llu %s\n", (unsigned long long)frame, (unsigned long long)tot, line);
+    printf("[PROF] per-frame: guest_between_vblanks=%.2fms vblank_cb=%.2fms irq_checks=%.0f dev_svc=%.0f\n",
+           armTicksToNs(s_prof_guest_ticks) / 1e6 / fr, armTicksToNs(s_prof_cb_ticks) / 1e6 / fr,
+           (double)(g_prof_irq_calls - s_prof_last_irq) / fr, (double)(g_prof_svc_calls - s_prof_last_svc) / fr);
+
+    // Exact devsvc breakdown
+    double d_tot = (double)(g_prof_dev_total_ns - s_prof_last_dev_total) / 1e6 / fr;
+    double d_cdrom = (double)(g_prof_dev_cdrom_ns - s_prof_last_dev_cdrom) / 1e6 / fr;
+    double d_dma = (double)(g_prof_dev_dma_ns - s_prof_last_dev_dma) / 1e6 / fr;
+    double d_timers = (double)(g_prof_dev_timers_ns - s_prof_last_dev_timers) / 1e6 / fr;
+    double d_sio = (double)(g_prof_dev_sio_ns - s_prof_last_dev_sio) / 1e6 / fr;
+    double d_irq = (double)(g_prof_dev_irq_ns - s_prof_last_dev_irq) / 1e6 / fr;
+    double d_sched = (double)(g_prof_dev_sched_ns - s_prof_last_dev_sched) / 1e6 / fr;
+    double d_sub = d_cdrom + d_dma + d_timers + d_sio + d_irq + d_sched;
+    double d_other = (d_tot > d_sub) ? (d_tot - d_sub) : 0.0;
+    double d_adv = (double)(g_prof_dev_adv_calls - s_prof_last_dev_adv) / fr;
+
+    printf("[PROF_DEVSVC] per-frame: total=%.2fms (cdrom=%.2fms dma=%.2fms timers=%.2fms sio=%.2fms irq_adv=%.2fms sched=%.2fms other=%.2fms) adv_calls=%.0f\n",
+           d_tot, d_cdrom, d_dma, d_timers, d_sio, d_irq, d_sched, d_other, d_adv);
+
+    // Exact CDROM ISO I/O breakdown
+    uint64_t delta_raw_calls = g_prof_iso_raw_calls - s_prof_last_iso_raw_calls;
+    uint64_t delta_raw_bytes = g_prof_iso_raw_bytes - s_prof_last_iso_raw_bytes;
+    uint64_t delta_raw_ns = g_prof_iso_raw_ns - s_prof_last_iso_raw_ns;
+
+    uint64_t delta_cook_calls = g_prof_iso_cook_calls - s_prof_last_iso_cook_calls;
+    uint64_t delta_cook_bytes = g_prof_iso_cook_bytes - s_prof_last_iso_cook_bytes;
+    uint64_t delta_cook_ns = g_prof_iso_cook_ns - s_prof_last_iso_cook_ns;
+
+    double d_iso_ms = (double)(delta_raw_ns + delta_cook_ns) / 1e6 / fr;
+    double d_raw_calls = (double)delta_raw_calls / fr;
+    double d_cook_calls = (double)delta_cook_calls / fr;
+    double d_kb = (double)(delta_raw_bytes + delta_cook_bytes) / 1024.0 / fr;
+    double avg_raw_ms = delta_raw_calls ? ((double)delta_raw_ns / 1e6 / (double)delta_raw_calls) : 0.0;
+    double max_raw_ms = (double)g_prof_iso_raw_max_ns / 1e6;
+
+    printf("[PROF_ISO_IO] per-frame: io_time=%.2fms sectors=%.1f (raw=%.1f, cook=%.1f) data=%.1fKB avg_raw_read=%.3fms max_raw_read=%.2fms\n",
+           d_iso_ms, d_raw_calls + d_cook_calls, d_raw_calls, d_cook_calls, d_kb, avg_raw_ms, max_raw_ms);
+
+    s_prof_last_dev_sio = g_prof_dev_sio_ns;
+    s_prof_last_dev_cdrom = g_prof_dev_cdrom_ns;
+    s_prof_last_dev_dma = g_prof_dev_dma_ns;
+    s_prof_last_dev_timers = g_prof_dev_timers_ns;
+    s_prof_last_dev_irq = g_prof_dev_irq_ns;
+    s_prof_last_dev_sched = g_prof_dev_sched_ns;
+    s_prof_last_dev_total = g_prof_dev_total_ns;
+    s_prof_last_dev_adv = g_prof_dev_adv_calls;
+
+    s_prof_last_iso_raw_calls = g_prof_iso_raw_calls;
+    s_prof_last_iso_raw_bytes = g_prof_iso_raw_bytes;
+    s_prof_last_iso_raw_ns = g_prof_iso_raw_ns;
+    s_prof_last_iso_cook_calls = g_prof_iso_cook_calls;
+    s_prof_last_iso_cook_bytes = g_prof_iso_cook_bytes;
+    s_prof_last_iso_cook_ns = g_prof_iso_cook_ns;
+    g_prof_iso_raw_max_ns = 0;
+    g_prof_iso_cook_max_ns = 0;
+
+    /* top 10 guest block PCs by samples */
+    uint32_t tk[10] = {0}, tc[10] = {0};
+    for (int i = 0; i < PROF_PC_SLOTS; i++) {
+        uint32_t c = s_prof_pc_cnt[i]; if (!c) continue;
+        for (int k = 0; k < 10; k++) if (c > tc[k]) {
+            for (int m = 9; m > k; m--) { tc[m] = tc[m-1]; tk[m] = tk[m-1]; }
+            tc[k] = c; tk[k] = s_prof_pc_key[i]; break;
+        }
+    }
+    n = 0;
+    for (int k = 0; k < 10 && tc[k]; k++)
+        n += snprintf(line + n, sizeof(line) - n, "%08X:%u ", tk[k], tc[k]);
+    printf("[PROF] topPC %s\n", line);
+    memset((void*)s_prof_phase_cnt, 0, sizeof(s_prof_phase_cnt));
+    memset(s_prof_pc_key, 0, sizeof(s_prof_pc_key));
+    memset(s_prof_pc_cnt, 0, sizeof(s_prof_pc_cnt));
+    s_prof_guest_ticks = s_prof_cb_ticks = s_prof_frames = 0;
+    s_prof_last_irq = g_prof_irq_calls; s_prof_last_svc = g_prof_svc_calls;
+}
+
 static void switch_vblank_callback(void) {
     u64 frame_start_tick = armGetSystemTick();
+    if (s_prof_last_cb_end) s_prof_guest_ticks += frame_start_tick - s_prof_last_cb_end;
+    int prof_prev_phase = g_exec_phase;
+    g_exec_phase = 7;
+    struct ProfGuard { u64 st; int prev; ~ProfGuard() {
+        g_exec_phase = prev;
+        u64 e = armGetSystemTick();
+        s_prof_cb_ticks += e - st; s_prof_last_cb_end = e; s_prof_frames++;
+    } } prof_guard{frame_start_tick, prof_prev_phase};
     s_frame_count++;
     u64 now_tick = armGetSystemTick();
     if (s_last_vblank_tick == 0) {
@@ -683,6 +860,7 @@ static void switch_vblank_callback(void) {
                (double)s_total_render_ns / denom / 1e6,
                (unsigned long long)s_main_loop_samples);
     }
+    if ((s_frame_count % 120) == 0) prof_report(s_frame_count);
 }
 
 int main(int argc, char* argv[]) {
@@ -707,7 +885,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (Game Dispatch Active)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v6 - Step 2 Inlined IRQ & Zero-Cost Hooks & Direct Jumps)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {
@@ -930,6 +1108,7 @@ int main(int argc, char* argv[]) {
     printf("[Main] ================================================\n");
 
     // 9. Arrancar el planificador y la recompilación
+    prof_start();
     u64 sched_start = armGetSystemTick();
     psx_scheduler_run(&cpu);
     u64 sched_end = armGetSystemTick();

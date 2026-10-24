@@ -12,7 +12,9 @@ set(CMAKE_C_STANDARD 11)
 
 # Opciones de compilación para ARM Cortex-A57 de Nintendo Switch
 add_compile_options(
-    -O2
+    -O3
+    -mcpu=cortex-a57
+    -mtune=cortex-a57
     -ffunction-sections
     -fdata-sections
     -Wall

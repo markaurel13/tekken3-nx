@@ -1,13 +1,13 @@
-﻿#ifndef PSXRECOMP_INTERRUPTS_H
+#ifndef PSXRECOMP_INTERRUPTS_H
 #define PSXRECOMP_INTERRUPTS_H
 
 #include <stdint.h>
+#include "cpu_state.h"
+#include "psx_cycles.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-struct CPUState;
 
 /* IRQ bit positions in I_STAT/I_MASK */
 #define IRQ_VBLANK  0
@@ -63,9 +63,37 @@ void psx_interrupt_delivery_diag(uint64_t *need_defer, uint64_t *need_irq,
 void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
                                    uint64_t *fast_none, uint64_t *mid,
                                    uint64_t *eval, uint64_t *irq_deliv);
-/* Interrupt check with the compiled guest PC to resume if a game-installed
- * handler later RFEs to the sentinel outside the synchronous host window. */
+extern uint32_t i_stat, i_mask;
+extern int in_exception;
+extern int s_defer_switch_pending;
+extern uint32_t s_last_interrupt_check_pc;
+extern uint32_t s_fast_maintenance;
+
+void psx_check_interrupts_at_slow(struct CPUState* cpu, uint32_t resume_pc);
+
+static inline void psx_check_interrupts_at_inline(struct CPUState* cpu, uint32_t resume_pc) {
+    s_last_interrupt_check_pc = resume_pc;
+
+#if defined(PSX_ENABLE_BLOCK_CYCLES)
+    if (__builtin_expect(g_psx_cyc_batch != 0, 0)) {
+        psx_cyc_batch_flush();
+    }
+#endif
+
+    if (__builtin_expect(
+        ((++s_fast_maintenance & 0x3FFFu) == 0) ||
+        ((i_stat & i_mask) != 0) ||
+        (s_defer_switch_pending != 0) ||
+        (in_exception != 0) ||
+        ((cpu->cop0[13] & cpu->cop0[12] & 0x0300u) != 0) ||
+        (psx_next_service_cycle == 0 || psx_cycle_count >= psx_next_service_cycle),
+        0)) {
+        psx_check_interrupts_at_slow(cpu, resume_pc);
+    }
+}
+
 void psx_check_interrupts_at(struct CPUState* cpu, uint32_t resume_pc);
+#define psx_check_interrupts_at(cpu, pc) psx_check_interrupts_at_inline((cpu), (pc))
 int psx_interrupts_checked_at_current_cycle(uint32_t resume_pc);
 /* Dispatch-entry check for re-enterable compiled PCs. De-dupes an immediately
  * preceding check at the same guest PC/cycle so generated transfers can keep

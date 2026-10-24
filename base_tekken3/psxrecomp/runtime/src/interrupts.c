@@ -186,7 +186,7 @@ extern uint64_t g_vblank_raise_count;
 extern int g_cosim_dirty_pump_site;
 
 /* Reentrancy guard: prevent interrupt handler from triggering interrupts. */
-static int in_exception;
+int in_exception = 0;
 /* Guest-cycle deadline: IRQ delivery is blocked while psx_get_cycle_count() is
  * below this. 0 = no cooldown active. Counted in guest cycles (not calls) so both
  * backends make the identical delivery decision — see the cooldown constants. */
@@ -534,11 +534,11 @@ extern int g_psx_dispatch_depth;
  * the synchronous host window, dirty_ram_dispatch can resume at this guest PC
  * instead of treating the sentinel as pc=0 termination. */
 static uint32_t s_compiled_interrupt_resume_pc = 0;
-static uint32_t s_last_interrupt_check_pc = 0;
+uint32_t s_last_interrupt_check_pc = 0;
 static uint64_t s_last_interrupt_check_cycle = UINT64_MAX;
 /* Poll-throttle counter for fast IRQ paths — host-only; must not survive
  * rewind or load#N can hit the 16K poll edge at a different guest point. */
-static uint32_t s_fast_maintenance = 0;
+uint32_t s_fast_maintenance = 0;
 
 uint32_t psx_last_irq_check_pc(void) { return s_last_interrupt_check_pc; }
 uint32_t psx_compiled_irq_resume_pc(void) { return s_compiled_interrupt_resume_pc; }
@@ -567,7 +567,7 @@ void psx_irq_clear_resume_latches(void)
  * detected nested, we record it here, let the outgoing thread resume
  * transparently, and honor it at the next outermost block-leader boundary (top
  * of psx_check_interrupts) where the thread can be re-saved cleanly. */
-static int      s_defer_switch_pending = 0;
+int           s_defer_switch_pending = 0;
 static uint32_t s_defer_switch_target  = 0;  /* TCB PCB[0] should name after the switch */
 static uint32_t s_defer_switch_from    = 0;  /* the interrupted thread to re-save cleanly */
 
@@ -2008,11 +2008,24 @@ irq_deliver_eval:
  * interrupts via psx_check_interrupts (cpu->pc / scratch sentinel). Forwarding
  * here gives the mmx6 baseline interrupt behavior — sufficient to build+run the
  * current generated code on the good baseline for instrumented comparison. */
-void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
+extern int g_exec_phase;
+volatile uint32_t g_prof_pc = 0;
+uint64_t g_prof_irq_calls = 0;
+void psx_check_interrupts_at_slow(CPUState* cpu, uint32_t resume_pc) {
     uint32_t prev = s_compiled_interrupt_resume_pc;
     s_compiled_interrupt_resume_pc = resume_pc;
+    g_prof_pc = resume_pc;                 /* PROF: sampled by wall-time thread */
+    g_prof_irq_calls++;
+    int prof_prev_phase = g_exec_phase;
+    if (prof_prev_phase != 5 && prof_prev_phase != 4) g_exec_phase = 6;
     psx_check_interrupts(cpu); /* flushes load-charge batch on entry */
+    g_exec_phase = prof_prev_phase;
     s_compiled_interrupt_resume_pc = prev;
+}
+
+#undef psx_check_interrupts_at
+void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
+    psx_check_interrupts_at_slow(cpu, resume_pc);
 }
 
 int psx_interrupts_checked_at_current_cycle(uint32_t resume_pc) {

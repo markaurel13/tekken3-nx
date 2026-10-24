@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * cpu_state.h  —  Phase 2 runtime version
  * ----------------------------------------------------------------------------
  * This is the RUNTIME version of the CPUState header. It has the same struct
@@ -172,7 +172,9 @@ extern void psx_dispatch_call(CPUState* cpu, uint32_t target_addr, uint32_t retu
 extern int g_psx_precise_slice;
 extern int psx_slice_block_impl(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects);
 void psx_precise_slice_init_from_env(void);
-#ifdef PSX_OVERLAY_DLL_BUILD
+#if defined(__SWITCH__)
+#define psx_slice_block(cpu, block_addr, bcyc, side_effects) (0)
+#elif defined(PSX_OVERLAY_DLL_BUILD)
 int psx_slice_block(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects);
 #else
 static inline int psx_slice_block(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
@@ -336,7 +338,11 @@ extern volatile uint32_t g_psx_last_fn_entry;
 void debug_server_log_call_entry(uint32_t func_addr);
 #else
 static inline void debug_server_log_call_entry(uint32_t func_addr) {
+#ifndef __SWITCH__
     g_psx_last_fn_entry = func_addr;
+#else
+    (void)func_addr;
+#endif
 }
 #endif
 #ifdef __cplusplus
