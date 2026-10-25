@@ -232,52 +232,9 @@ extern "C" void overlay_capture_before_dma(uint32_t load_addr, uint32_t size) {
 }
 
 extern "C" void overlay_capture_on_dma(uint32_t load_addr, uint32_t size, const uint8_t* bytes) {
-    if (!bytes || size == 0 || !fntrace_is_game_started()) return;
-    load_addr &= 0x1FFFFFu;
-    if (load_addr >= 0x1C0000u) return;
-    if (size > 0x200000u - load_addr) size = 0x200000u - load_addr;
-    if (size == 0) return;
-
-    /* Keep this bounded for Switch RAM/log size.  The hot overlays in the log
-     * are under 0x131000 and arrive via CD DMA; retaining unique current DMA
-     * payloads is enough to identify/precompile the live code producers. */
-    constexpr size_t kMaxEntries = 4096;
-    constexpr uint64_t kMaxBytes = 32ull * 1024ull * 1024ull;
-    if (s_switch_overlay_captures.size() >= kMaxEntries ||
-        s_switch_overlay_capture_bytes + size > kMaxBytes) {
-        return;
-    }
-
-    for (const SwitchOverlayCaptureEntry& e : s_switch_overlay_captures) {
-        if (e.load_addr == load_addr && e.size == size &&
-            e.bytes.size() == size && memcmp(e.bytes.data(), bytes, size) == 0) {
-            return;
-        }
-    }
-
-    SwitchOverlayCaptureEntry e;
-    e.load_addr = load_addr;
-    e.size = size;
-    e.seq = ++s_switch_overlay_capture_seq;
-    e.bytes.assign(bytes, bytes + size);
-    s_switch_overlay_capture_bytes += size;
-    switch_overlay_capture_write_bin(e);
-    bool covers_hot_pc = false;
-    for (uint32_t pc : kSwitchOverlayHotPcs) {
-        if (switch_overlay_span_contains_pc(e.load_addr, e.size, pc)) {
-            covers_hot_pc = true;
-            printf("[OverlayCaptureHot] seq=%u addr=0x%06X size=%u covers=0x%06X file=entry_%04u_%06X_%u.bin\n",
-                   e.seq, e.load_addr, e.size, pc, e.seq, e.load_addr, e.size);
-        }
-    }
-    s_switch_overlay_captures.push_back(std::move(e));
-
-    if (covers_hot_pc || s_switch_overlay_captures.size() <= 16 || (s_switch_overlay_captures.size() % 64) == 0) {
-        printf("[OverlayCapture] dma seq=%u addr=0x%06X size=%u entries=%zu bytes=%llu\n",
-               s_switch_overlay_capture_seq, load_addr, size,
-               s_switch_overlay_captures.size(),
-               (unsigned long long)s_switch_overlay_capture_bytes);
-    }
+    (void)load_addr;
+    (void)size;
+    (void)bytes;
 }
 
 // Búfer simulado de VRAM de 1024x512 de 16-bit
@@ -885,7 +842,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v6 - Step 2 Inlined IRQ & Zero-Cost Hooks & Direct Jumps)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v11 - Step 1A Full Deko3D GPU Hardware Pipeline & Zero-Lag DMA)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {

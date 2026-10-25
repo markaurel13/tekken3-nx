@@ -1,44 +1,88 @@
 #version 460
 
 // Inputs del Vertex Shader
-layout (location = 0) in vec2 inTexCoord;
+layout (location = 0) in vec2 inUV;
 layout (location = 1) in vec4 inColor;
+layout (location = 2) flat in uvec2 inTPageClut;
+layout (location = 3) flat in uint inFlags;
 
 // Salida de color al framebuffer
 layout (location = 0) out vec4 outColor;
 
-// Sampler de textura (VRAM de PS1 mapeada a textura RGBA)
-layout (binding = 0) uniform sampler2D s_PSXVram;
+// Sampler de textura de VRAM pura (1024x512 R16_Uint)
+layout (binding = 0) uniform usampler2D s_rawVram;
 
-// Uniform block: Opciones de renderizado de la primitiva actual
-layout (std140, binding = 1) uniform DrawModeBlock {
-    int u_Textured;        // 0 = Flat/Gouraud, 1 = Con textura
-    int u_RawTexture;      // 1 = Textura sin modulación de color, 0 = Modulado con inColor
-    int u_SemiTransparent; // 0 = Opaco, 1 = Semi-transparente
-    int u_BlendMode;       // Modos de PS1: 0 (0.5B+0.5F), 1 (B+F), 2 (B-F), 3 (B+0.25F)
+// Uniform block: Parámetros del Viewport y Texture Window
+layout (std140, binding = 0) uniform ViewportBlock {
+    vec2 u_ScreenSize;
+    vec2 u_Offset;
+    ivec4 u_TexWindow; // mask_x, mask_y, off_x, off_y
 };
+
+int vram_at(int x, int y) {
+    return int(texelFetch(s_rawVram, ivec2(x & 1023, y & 511), 0).r);
+}
+
+int fetch_texel(int u, int v, int depth, int base_x, int base_y, int clut_x, int clut_y) {
+    u &= 255;
+    v &= 255;
+    if ((u_TexWindow.x | u_TexWindow.y) != 0) {
+        u = (u & ~(u_TexWindow.x * 8)) | ((u_TexWindow.z & u_TexWindow.x) * 8);
+        v = (v & ~(u_TexWindow.y * 8)) | ((u_TexWindow.w & u_TexWindow.y) * 8);
+    }
+    if (depth == 0) { // 4-bit CLUT
+        int px = vram_at(base_x + (u >> 2), base_y + v);
+        int entry = (px >> ((u & 3) * 4)) & 0xF;
+        return vram_at(clut_x + entry, clut_y);
+    } else if (depth == 1) { // 8-bit CLUT
+        int px = vram_at(base_x + (u >> 1), base_y + v);
+        int entry = (px >> ((u & 1) * 8)) & 0xFF;
+        return vram_at(clut_x + entry, clut_y);
+    }
+    // 15-bit direct
+    return vram_at(base_x + u, base_y + v);
+}
+
+vec3 col16_to_rgb(int raw) {
+    float r = float(raw & 31) / 31.0;
+    float g = float((raw >> 5) & 31) / 31.0;
+    float b = float((raw >> 10) & 31) / 31.0;
+    return vec3(r, g, b);
+}
 
 void main()
 {
-    vec4 baseColor = inColor;
-
-    if (u_Textured != 0) {
-        vec4 texSample = texture(s_PSXVram, inTexCoord);
-
-        // En PS1, si el pixel de textura es transparente (máscara o negro transparente)
-        if (texSample.a < 0.01) {
-            discard;
-        }
-
-        if (u_RawTexture != 0) {
-            baseColor = texSample;
-        } else {
-            // Modulación de color PS1: (Color * Tex) * 2 aproximadamente en rango estándar
-            baseColor = texSample * inColor * 2.0;
-            baseColor = clamp(baseColor, 0.0, 1.0);
-            baseColor.a = texSample.a;
-        }
+    bool is_textured = (inFlags & 0x40u) != 0u;
+    if (!is_textured) {
+        outColor = vec4(inColor.rgb, 1.0);
+        return;
     }
 
-    outColor = baseColor;
+    uint texpage = inTPageClut.x;
+    uint clut = inTPageClut.y;
+    int base_x = int(texpage & 0xFu) * 64;
+    int base_y = int((texpage >> 4u) & 1u) * 256;
+    int depth = int(inFlags & 0x3u);
+    int clut_x = int(clut & 0x3Fu) * 16;
+    int clut_y = int((clut >> 6u) & 0x1FFu);
+
+    int iu = int(floor(inUV.x));
+    int iv = int(floor(inUV.y));
+    int raw = fetch_texel(iu, iv, depth, base_x, base_y, clut_x, clut_y);
+
+    // En PS1, pixel 0 es transparente (cutout)
+    if (raw == 0) {
+        discard;
+    }
+
+    vec3 rgb = col16_to_rgb(raw);
+    bool rawTex = (inFlags & 0x4u) != 0u;
+
+    if (!rawTex) {
+        // Modulación PS1: texCol.rgb * inColor.rgb * 2.0
+        rgb = clamp(rgb * inColor.rgb * 2.0, 0.0, 1.0);
+    }
+
+    // Alpha siempre 1.0 para que el compositor de Switch NWindow no trate la imagen como transparente
+    outColor = vec4(rgb, 1.0);
 }

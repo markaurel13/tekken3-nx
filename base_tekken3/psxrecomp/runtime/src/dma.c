@@ -202,7 +202,7 @@ static void trace_dma_reg_write(uint32_t addr, uint32_t val, uint32_t mask,
 
 /* ---- Helpers ---- */
 
-static void update_master_irq(void) {
+static __attribute__((unused)) void update_master_irq(void) {
     /* DICR bit 31 (master IRQ flag) is read-only, calculated as:
      * bit31 = bit15 OR (bit23 AND ((bits16-22 AND bits24-30) != 0))
      *
@@ -396,7 +396,7 @@ static void cancel_async_transfer(int ch) {
     }
 }
 
-static void schedule_delayed_complete(int ch, uint32_t total_words,
+static __attribute__((unused)) void schedule_delayed_complete(int ch, uint32_t total_words,
                                       uint32_t cycles_per_word) {
     if (total_words == 0 || cycles_per_word == 0) {
         complete_transfer(ch);
@@ -426,7 +426,7 @@ static void advance_delayed_complete(int ch, uint32_t cycles) {
     complete_transfer(ch);
 }
 
-static void start_async_mdec_transfer(int ch) {
+static __attribute__((unused)) void start_async_mdec_transfer(int ch) {
     DMAAsyncChannel *a = &mdec_async[ch];
     if (a->active) return;
 
@@ -953,21 +953,21 @@ static void try_execute(int ch) {
     g_dma_cur_ch = ch; g_dma_cur_madr = channels[ch].madr; g_dma_cur_bcr = channels[ch].bcr;
     switch (ch) {
         case 0:
-            start_async_mdec_transfer(0);
+            execute_ch0_mdec_in();
             break;
         case 1:
-            start_async_mdec_transfer(1);
+            execute_ch1_mdec_out();
             break;
         case 2:
-            schedule_delayed_complete(2, execute_ch2_gpu(),
-                                      DMA_GPU_CYCLES_PER_WORD);
+            execute_ch2_gpu();
+            complete_transfer(2);
             break;
         case 3:
             execute_ch3_cdrom();
             break;
         case 4:
-            schedule_delayed_complete(4, execute_ch4_spu(),
-                                      DMA_SPU_CYCLES_PER_WORD);
+            execute_ch4_spu();
+            complete_transfer(4);
             break;
         case 5:
             execute_ch5_pio();
@@ -1056,10 +1056,7 @@ uint32_t dma_cycles_to_internal_event(void) {
             return 1u; /* unsupported RAM->CD direction cancels next tick */
         }
         if (cdrom_dma_ready()) {
-            uint32_t d = cdrom_async.cycles_accum < DMA_CDROM_CYCLES_PER_WORD
-                       ? DMA_CDROM_CYCLES_PER_WORD - cdrom_async.cycles_accum
-                       : 1u;
-            if (d < best) best = d;
+            return 1u;
         }
     }
 
@@ -1116,22 +1113,16 @@ void dma_advance(uint32_t cycles) {
                 a->cycles_accum += cycles;
             }
 
-            uint32_t words_budget = a->cycles_accum / DMA_CDROM_CYCLES_PER_WORD;
             uint32_t addr = channels[3].madr & 0x1FFFFCu;
             uint32_t moved = 0;
             g_dma_cur_ch = 3; g_dma_cur_bcr = channels[3].bcr;
             g_dma_initiator_pc = s_dma_ch_initiator_pc[3];  /* deferred: restore kick PC */
-            /* Snapshot outgoing executed code at the last possible coherent
-             * moment: after the async wait, immediately before the first RAM
-             * word. Scheduling-time capture was too early because guest code
-             * can continue executing while the CD device is not ready. */
-            if (a->remaining_words == a->total_words && words_budget > 0 &&
-                addr < 0x1C0000u) {
+            if (a->remaining_words == a->total_words && addr < 0x1C0000u) {
                 uint32_t bytes = a->total_words * 4u;
                 if (bytes > 0x200000u - addr) bytes = 0x200000u - addr;
                 overlay_capture_before_dma(addr, bytes);
             }
-            while (a->remaining_words > 0 && words_budget > 0 && cdrom_dma_ready()) {
+            while (a->remaining_words > 0 && cdrom_dma_ready()) {
                 uint32_t word = cdrom_dma_read();
                 g_dma_cur_madr = addr;
                 psx_write_word(addr, word);
@@ -1139,12 +1130,10 @@ void dma_advance(uint32_t cycles) {
                 dirty_ram_mark_executable_range(addr, 4);
                 addr = (addr + addr_step) & 0x1FFFFCu;
                 a->remaining_words--;
-                words_budget--;
                 moved++;
             }
 
             if (moved > 0) {
-                a->cycles_accum -= moved * DMA_CDROM_CYCLES_PER_WORD;
                 channels[3].madr = addr;
                 if (a->remaining_words == 0) {
                     finish_async_cdrom_transfer(addr);

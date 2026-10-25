@@ -18,25 +18,21 @@ const struct GpuRenderBackend* deko3d_backend_get(void);
 
 #ifdef __cplusplus
 
-// Estructura de vértice optimizada para la GPU Tegra X1
+// Estructura de vértice optimizada de 32 bytes para la GPU Tegra X1 Maxwell
 struct PS1Vertex {
-    float pos[2];     // X, Y (coordenadas de pantalla/VRAM)
-    float uv[2];      // U, V (textura normalizada)
-    uint8_t color[4]; // R, G, B, A (Gouraud / modulación)
+    float pos[2];          // location 0: 2x32 Float (X, Y coordenadas de VRAM)
+    float uv[2];           // location 1: 2x32 Float (U, V coordenadas de textura)
+    uint8_t color[4];      // location 2: 4x8 Unorm (R, G, B, A modulación / Gouraud)
+    uint16_t tpage_clut[2];// location 3: 2x16 Uint (x: texpage, y: clut)
+    uint32_t flags;        // location 4: 1x32 Uint (depth, raw, semi, blend, textured, abs)
+    uint32_t pad;          // alineación a 32 bytes
 };
 
-// Uniform buffer para proyección de Viewport (binding = 0 en psx_vsh.glsl)
+// Uniform buffer para proyección de Viewport y Texture Window (binding = 0 en psx_vsh.glsl y psx_fsh.glsl)
 struct ViewportUniforms {
-    float screenSize[2];
-    float offset[2];
-};
-
-// Uniform buffer para los modos de primitiva (binding = 1 en psx_fsh.glsl)
-struct DrawModeUniforms {
-    int32_t textured;
-    int32_t rawTexture;
-    int32_t semiTransparent;
-    int32_t blendMode;
+    float screenSize[2];   // 1024.0, 512.0
+    float offset[2];       // m_offsetX, m_offsetY
+    int32_t texWindow[4];  // mask_x, mask_y, off_x, off_y
 };
 
 class Deko3DRenderer {
@@ -59,10 +55,11 @@ public:
     // Estado del viewport y primitivas
     void SetDrawOffset(int x, int y);
     void SetDrawArea(int x1, int y1, int x2, int y2);
+    void SetTextureWindow(uint32_t raw);
     void SetSemiTransparency(int enabled, int mode);
     void SetColorModulation(int r, int g, int b, int raw);
 
-    // Primitivas de PS1
+    // Primitivas de PS1 aceleradas por hardware GPU Maxwell
     void DrawFlatTriangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color);
     void DrawGouraudTriangle(int x0, int y0, uint16_t c0,
                              int x1, int y1, uint16_t c1,
@@ -79,11 +76,17 @@ public:
     void DrawRect(int x, int y, int w, int h, uint16_t color);
     void DrawTexturedRect(int x, int y, int w, int h, int u, int v,
                           uint16_t clut_x, uint16_t clut_y, uint16_t texpage);
+    void DrawTexturedRectScaled(int x, int y, int w, int h,
+                                int u0, int v0, int u1, int v1,
+                                uint16_t clut_x, uint16_t clut_y, uint16_t texpage);
 
     void FillRect(int x, int y, int w, int h, uint16_t color);
     void CopyRect(int sx, int sy, int dx, int dy, int w, int h);
 
-    // Presentación
+    // Transferencia de texturas/CLUTs desde CPU/DMA a GPU
+    void VramTransferIn(int x, int y, int w, int h, const uint16_t* data);
+
+    // Presentación directa sin conversión en CPU
     int RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh);
 
 private:
@@ -98,6 +101,7 @@ private:
     int m_offsetX = 0;
     int m_offsetY = 0;
     int m_clipX1 = 0, m_clipY1 = 0, m_clipX2 = 1024, m_clipY2 = 512;
+    int m_twMaskX = 0, m_twMaskY = 0, m_twOffX = 0, m_twOffY = 0;
     int m_semiEnabled = 0;
     int m_semiMode = 0;
     int m_modR = 128, m_modG = 128, m_modB = 128, m_rawTex = 0;
@@ -114,18 +118,19 @@ private:
     dk::MemBlock m_memStaging;
 
     dk::Image m_framebuffers[NumFramebuffers];
-    dk::Image m_vramTexture;
+    dk::Image m_vramTexture;   // 1024x512 RGBA8 Render Target y Display Source
+    dk::Image m_rawVramImage;   // 1024x512 R16_Uint Fuente de texturas PS1
 
     dk::Shader m_vsh;
     dk::Shader m_fsh;
 
     int m_curSlot = 0;
-    dk::Fence m_fences[NumFramebuffers];
 
-    // Buffers de vértices, descriptores, uniformes y staging en m_memData
+    // Buffers de vértices, descriptores, uniformes y staging
     PS1Vertex* m_vtxRingCpu = nullptr;
     DkGpuAddr m_vtxRingGpu = 0;
-    uint32_t m_vtxCount = 0;
+    uint32_t m_vtxAllocated = 0;
+    uint32_t m_vtxBatchStart = 0;
 
     void* m_imgDescCpu = nullptr;
     DkGpuAddr m_imgDescGpu = 0;
@@ -134,13 +139,11 @@ private:
 
     ViewportUniforms* m_viewportUboCpu = nullptr;
     DkGpuAddr m_viewportUboGpu = 0;
-    DrawModeUniforms* m_drawModeUboCpu = nullptr;
-    DkGpuAddr m_drawModeUboGpu = 0;
 
     uint32_t* m_vramStagingCpu = nullptr;
     DkGpuAddr m_vramStagingGpu = 0;
+    uint32_t m_stagingUploadOffset = 0x600000;
 
-    DrawModeUniforms m_currentDrawMode{};
     bool m_vramDirty = true;
     bool m_initialized = false;
 };
