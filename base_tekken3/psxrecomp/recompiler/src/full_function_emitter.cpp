@@ -2038,7 +2038,8 @@ void FullFunctionEmitter::emit_dispatch(
         out += "        int game_text_in_shell_window = 0;\n";
     }
     out += "        if (!found && (game_shell_overlap || game_text_in_shell_window ||\n";
-    out += "            (psx_game_address_in_text(addr) && dirty_ram_is_dirty(game_phys)))) {\n";
+    out += "            (psx_game_address_in_text(addr) &&\n";
+    out += "             (dirty_ram_is_dirty(game_phys) || !dirty_ram_text_native_ok(game_phys))))) {\n";
     out += "            found = dirty_ram_dispatch(cpu, addr, stop_addr);\n";
     out += "        }\n";
     out += "#endif\n";

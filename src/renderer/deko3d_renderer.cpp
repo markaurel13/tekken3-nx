@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstddef>
+#include <cmath>
 #include <vector>
 #include <algorithm>
 #include <switch.h>
@@ -357,6 +358,17 @@ void Deko3DRenderer::SetColorModulation(int r, int g, int b, int raw) {
 }
 
 void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2) {
+    if (!std::isfinite(v0.pos[0]) || !std::isfinite(v0.pos[1]) ||
+        !std::isfinite(v1.pos[0]) || !std::isfinite(v1.pos[1]) ||
+        !std::isfinite(v2.pos[0]) || !std::isfinite(v2.pos[1])) {
+        return;
+    }
+    if (v0.pos[0] < -2048.0f || v0.pos[0] > 2048.0f || v0.pos[1] < -2048.0f || v0.pos[1] > 2048.0f ||
+        v1.pos[0] < -2048.0f || v1.pos[0] > 2048.0f || v1.pos[1] < -2048.0f || v1.pos[1] > 2048.0f ||
+        v2.pos[0] < -2048.0f || v2.pos[0] > 2048.0f || v2.pos[1] < -2048.0f || v2.pos[1] > 2048.0f) {
+        return;
+    }
+
     if (m_vtxAllocated + 3 > MaxVerticesPerFrame) {
         FlushBatch();
         m_queue.submitCommands(m_cmdBuf.finishList());
@@ -810,6 +822,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     if (di.disabled) {
         m_cmdBuf.bindRenderTargets(&colorTarget);
         m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+        m_cmdBuf.bindRenderTargets({});
     } else {
         m_cmdBuf.bindRenderTargets({});
         if (di.depth24 && m_vram && m_vramStagingCpu) {

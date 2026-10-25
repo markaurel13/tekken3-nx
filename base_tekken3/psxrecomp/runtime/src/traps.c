@@ -16,6 +16,8 @@
 #include "psx_fiber.h"   /* cross-platform fibers (Win32 fibers / POSIX ucontext) */
 #include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
+#include "fntrace.h"
+#include "dma.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -26,6 +28,7 @@ static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
 int psx_get_in_exception(void);
 void psx_exception_longjmp(void);
 void psx_irq_refresh_cause_ip2(void);
+static int is_valid_executable_address(uint32_t a);
 
 /* ── Deterministic TCB scheduler — SCAFFOLDING (plan steps 1-2, INERT) ───────
  * These definitions back psx_scheduler.h. They are NOT yet wired into the live
@@ -1050,19 +1053,41 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
 }
 
 void psx_break(CPUState* cpu, uint32_t code, uint32_t pc) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "BREAK @ PC=0x%08X, code=0x%05X", pc, code);
-    trap_crash(buf);
-    fprintf(stderr, "%s\n", buf); fflush(stderr);
-    exit(1);
+    char buf[256];
+    snprintf(buf, sizeof(buf), "[Traps] BREAK @ PC=0x%08X, code=0x%05X ra=0x%08X sp=0x%08X a0=0x%08X\n",
+             pc, code, cpu->gpr[31], cpu->gpr[29], cpu->gpr[4]);
+    fprintf(stderr, "%s", buf);
+    printf("%s", buf);
+    fflush(stderr);
+    fflush(stdout);
+
+    /* Hardware exception delivery: ExcCode 9 (Breakpoint) */
+    uint32_t sr = cpu->cop0[12];
+    cpu->cop0[8] = pc; /* BadVAddr */
+    cpu->cop0[13] = (cpu->cop0[13] & ~0x8000007Cu) | (9u << 2); /* Cause: BP */
+    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2); /* Push SR exception stack */
+    cpu->cop0[14] = pc + 4u; /* EPC: resume after the break instruction */
+    uint32_t vec = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+    cpu->pc = vec;
 }
 
 void psx_arith_overflow(CPUState* cpu) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "OVERFLOW @ PC=0x%08X", cpu->pc);
-    trap_crash(buf);
-    fprintf(stderr, "%s\n", buf); fflush(stderr);
-    exit(1);
+    snprintf(buf, sizeof(buf), "[Traps] OVERFLOW @ PC=0x%08X ra=0x%08X sp=0x%08X\n",
+             cpu->pc, cpu->gpr[31], cpu->gpr[29]);
+    fprintf(stderr, "%s", buf);
+    printf("%s", buf);
+    fflush(stderr);
+    fflush(stdout);
+
+    /* Hardware exception delivery: ExcCode 12 (Arithmetic Overflow) */
+    uint32_t sr = cpu->cop0[12];
+    cpu->cop0[8] = cpu->pc;
+    cpu->cop0[13] = (cpu->cop0[13] & ~0x8000007Cu) | (12u << 2);
+    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
+    cpu->cop0[14] = cpu->pc + 4u;
+    uint32_t vec = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+    cpu->pc = vec;
 }
 
 void psx_unaligned_access(CPUState* cpu, uint32_t addr, uint32_t pc) {
@@ -1086,6 +1111,177 @@ void psx_unaligned_access(CPUState* cpu, uint32_t addr, uint32_t pc) {
         trap_crash(buf);
         count++;
     }
+}
+
+static int is_valid_executable_address(uint32_t a) {
+    if ((a & 3u) != 0) return 0;
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (p < 0x00800000u) p &= (2u * 1024u * 1024u - 1u);
+    /* Stack area (top 128KB of RAM: 0x1E0000..0x200000) is never executable */
+    if (p >= 0x001E0000u && p < 0x00200000u) return 0;
+    /* Main game text and overlays in RAM: [0x10000, 0x140000) */
+    if (p >= 0x00010000u && p < 0x00140000u) return 1;
+    /* BIOS kernel text in RAM: [0x500, 0x4BA0) */
+    if (p >= 0x00000500u && p < 0x00004BA0u) return 1;
+    /* BIOS ROM: [0x1FC00000, 0x1FC80000) */
+    if (p >= 0x1FC00000u && p < 0x1FC80000u) return 1;
+    return 0;
+}
+
+static void dump_first_miss_diagnostics(CPUState *cpu, uint32_t addr, uint32_t phys) {
+    extern uint64_t s_frame_count;
+    extern uint64_t g_fntrace_seq;
+    extern FntraceEntry g_fntrace_ring[FNTRACE_RING_CAP];
+
+    printf("\n==================== [FIRST MISS DIAGNOSTICS] ====================\n");
+    printf("[FirstMiss] Frame=%llu Target addr=0x%08X (phys=0x%08X)\n",
+           (unsigned long long)s_frame_count, addr, phys);
+    printf("[FirstMiss] Registers: PC=0x%08X RA=0x%08X SP=0x%08X GP=0x%08X FP=0x%08X\n",
+           cpu->pc, cpu->gpr[31], cpu->gpr[29], cpu->gpr[28], cpu->gpr[30]);
+    printf("[FirstMiss] COP0: SR=0x%08X CAUSE=0x%08X EPC=0x%08X\n",
+           cpu->cop0[12], cpu->cop0[13], cpu->cop0[14]);
+
+    /* All 32 GPRs */
+    for (int r = 0; r < 32; r += 4) {
+        printf("[FirstMiss] GPR[%02d..%02d]: %08X %08X %08X %08X\n",
+               r, r + 3, cpu->gpr[r], cpu->gpr[r + 1], cpu->gpr[r + 2], cpu->gpr[r + 3]);
+    }
+
+    /* Stack dump (32 words) */
+    uint32_t sp = cpu->gpr[29];
+    printf("[FirstMiss] Stack dump (sp=0x%08X):\n", sp);
+    if ((sp & 0x1FFFFFFFu) < 0x00200000u) {
+        for (int i = 0; i < 32; i += 4) {
+            uint32_t cur = sp + (uint32_t)(i * 4);
+            printf("  [0x%08X]: %08X %08X %08X %08X\n",
+                   cur,
+                   ((cur & 0x1FFFFFFFu) + 4 <= 0x00200000u) ? cpu->read_word(cur) : 0,
+                   ((cur & 0x1FFFFFFFu) + 8 <= 0x00200000u) ? cpu->read_word(cur + 4) : 0,
+                   ((cur & 0x1FFFFFFFu) + 12 <= 0x00200000u) ? cpu->read_word(cur + 8) : 0,
+                   ((cur & 0x1FFFFFFFu) + 16 <= 0x00200000u) ? cpu->read_word(cur + 12) : 0);
+        }
+    }
+
+    /* Memory dump around target addr (32 words before and 32 words after) */
+    uint32_t dump_base = (addr >= 0x80) ? (addr - 0x80) & ~3u : 0;
+    printf("[FirstMiss] Memory around target [0x%08X..0x%08X]:\n", dump_base, dump_base + 0x100);
+    for (uint32_t o = 0; o < 0x100; o += 16) {
+        uint32_t cur = dump_base + o;
+        uint32_t c_phys = cur & 0x1FFFFFFFu;
+        if (c_phys + 16 <= 0x00200000u) {
+            printf("  [0x%08X]: %08X %08X %08X %08X\n",
+                   cur, cpu->read_word(cur), cpu->read_word(cur + 4),
+                   cpu->read_word(cur + 8), cpu->read_word(cur + 12));
+        }
+    }
+
+    /* Memory dump around overlay base 0x80120000 */
+    printf("[FirstMiss] Overlay base memory [0x80120000..0x80120040]:\n");
+    for (uint32_t o = 0; o < 0x40; o += 16) {
+        uint32_t cur = 0x80120000u + o;
+        printf("  [0x%08X]: %08X %08X %08X %08X\n",
+               cur, cpu->read_word(cur), cpu->read_word(cur + 4),
+               cpu->read_word(cur + 8), cpu->read_word(cur + 12));
+    }
+
+    /* Last 64 Function Dispatches */
+    printf("[FirstMiss] Total dispatches (fntrace_seq): %llu\n", (unsigned long long)g_fntrace_seq);
+    if (g_fntrace_seq > 0) {
+        printf("[FirstMiss] Ultimos 64 dispatches registrados:\n");
+        uint64_t count = g_fntrace_seq < 64u ? g_fntrace_seq : 64u;
+        for (uint64_t i = g_fntrace_seq - count; i < g_fntrace_seq; i++) {
+            const FntraceEntry* e = &g_fntrace_ring[i % FNTRACE_RING_CAP];
+            printf("  [%llu] target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
+                   (unsigned long long)i, e->target, e->ra, e->a0, e->a1, e->sp);
+        }
+    }
+
+    /* Last 32 CDROM DMA Transfers */
+    const DMACDROMHistoryEntry *cd_entries = NULL;
+    uint64_t cd_seq = dma_debug_get_cdrom_history(&cd_entries);
+    printf("[FirstMiss] Total CDROM DMA seq: %llu\n", (unsigned long long)cd_seq);
+    if (cd_entries && cd_seq > 0) {
+        printf("[FirstMiss] Ultimas 32 transferencias CDROM DMA:\n");
+        uint64_t count = cd_seq < 32u ? cd_seq : 32u;
+        for (uint64_t i = cd_seq - count; i < cd_seq; i++) {
+            const DMACDROMHistoryEntry* ce = &cd_entries[i % DMA_CDROM_HISTORY_CAP];
+            printf("  [CD_DMA %llu] frame=%u..%u start=0x%08X final=0x%08X words=%u/%u compl=%u lba=%d (func=0x%08X pc=0x%08X)\n",
+                   (unsigned long long)i, ce->frame_start, ce->frame_end,
+                   ce->start_addr, ce->final_addr, ce->moved_words, ce->requested_words,
+                   ce->completed, ce->lba, ce->func, ce->pc);
+        }
+    }
+
+    /* Always-on dispatch tail ring (works on Switch, unlike fntrace_ring) */
+    printf("[FirstMiss] disp_tail seq=%llu, ultimos 64 dispatches:\n", (unsigned long long)g_disp_tail_seq);
+    {
+        uint64_t n = g_disp_tail_seq < 64u ? g_disp_tail_seq : 64u;
+        for (uint64_t i = g_disp_tail_seq - n; i < g_disp_tail_seq; i++) {
+            const DispTailEntry *t = &g_disp_tail[i & (DISP_TAIL_CAP - 1u)];
+            printf("  [T%llu] target=0x%08X ra=0x%08X sp=0x%08X cycle=%llu\n",
+                   (unsigned long long)i, t->target, t->ra, t->sp, (unsigned long long)t->cycle);
+        }
+    }
+
+    /* Stack-window store ring: who wrote the bogus $ra value? */
+    {
+        typedef struct { uint32_t pc, addr, val, old, sp, ra, frame; uint8_t size, dma; } SwEntryLocal;
+        extern SwEntryLocal g_sw_ring[];
+        extern uint64_t g_sw_seq;
+        uint32_t bad = cpu->gpr[31];
+        printf("[FirstMiss] stack_store_ring seq=%llu; stores cuyo valor == $ra(0x%08X) o sus mitades:\n",
+               (unsigned long long)g_sw_seq, bad);
+        uint64_t total = g_sw_seq < 65536u ? g_sw_seq : 65536u;
+        int hits = 0;
+        for (uint64_t i = g_sw_seq - total; i < g_sw_seq; i++) {
+            const SwEntryLocal *e = &g_sw_ring[i & 65535u];
+            if (e->val == bad || (e->size == 2 && (e->val == (bad & 0xFFFFu) || e->val == (bad >> 16)))) {
+                printf("  [S%llu] frame=%u pc=0x%08X addr=0x%08X size=%u val=0x%08X old=0x%08X sp=0x%08X (addr-sp=%d) ra=0x%08X dma=%u\n",
+                       (unsigned long long)i, e->frame, e->pc, e->addr, e->size, e->val, e->old,
+                       e->sp, (int)(e->addr - e->sp), e->ra, e->dma);
+                hits++;
+            }
+        }
+        if (!hits) printf("  (ninguno: el valor NO lo escribio una store de CPU -> DMA/GTE/escritura directa)\n");
+
+        /* Historial completo (en el anillo) de stores a la zona del frame corrupto
+         * [sp-0x40, sp+0x40): demuestra quien toco el slot de $ra guardado. */
+        {
+            uint32_t lo = cpu->gpr[29] - 0x40u, hi = cpu->gpr[29] + 0x40u;
+            printf("[FirstMiss] TODAS las stores del anillo en [0x%08X,0x%08X):\n", lo, hi);
+            for (uint64_t i = g_sw_seq - total; i < g_sw_seq; i++) {
+                const SwEntryLocal *e = &g_sw_ring[i & 65535u];
+                if (e->addr >= lo && e->addr < hi) {
+                    printf("  [S%llu] frame=%u pc=0x%08X addr=0x%08X size=%u val=0x%08X old=0x%08X sp=0x%08X dma=%u\n",
+                           (unsigned long long)i, e->frame, e->pc, e->addr, e->size, e->val, e->old, e->sp, e->dma);
+                }
+            }
+        }
+        /* Codigo crudo de la funcion que retorna (para desensamblar offline). */
+        {
+            static const uint32_t ranges[][2] = {
+                {0x800B0760u, 0x800B0800u}, {0x8007C090u, 0x8007C140u}, {0x8004DAA8u, 0x8004DB28u}
+            };
+            for (unsigned r = 0; r < 3; r++) {
+                printf("[FirstMiss] code [0x%08X..0x%08X):", ranges[r][0], ranges[r][1]);
+                for (uint32_t a = ranges[r][0]; a < ranges[r][1]; a += 4) {
+                    if (((a - ranges[r][0]) & 0xFu) == 0) printf("\n  [0x%08X]:", a);
+                    printf(" %08X", cpu->read_word(a));
+                }
+                printf("\n");
+            }
+        }
+        printf("[FirstMiss] ultimas 48 stores a la pila:\n");
+        uint64_t n = g_sw_seq < 48u ? g_sw_seq : 48u;
+        for (uint64_t i = g_sw_seq - n; i < g_sw_seq; i++) {
+            const SwEntryLocal *e = &g_sw_ring[i & 65535u];
+            printf("  [S%llu] frame=%u pc=0x%08X addr=0x%08X size=%u val=0x%08X old=0x%08X sp=0x%08X dma=%u\n",
+                   (unsigned long long)i, e->frame, e->pc, e->addr, e->size, e->val, e->old, e->sp, e->dma);
+        }
+    }
+
+    printf("===================================================================\n\n");
+    fflush(stdout);
 }
 
 void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
@@ -1145,24 +1341,33 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
         return;
     }
 
-    /* Non-word-aligned targets — align to 4-byte boundary and re-dispatch. */
+    /* Non-word-aligned targets */
     if (addr & 3) {
-        static int s_misalign_reports = 0;
-        if (s_misalign_reports++ < 10) {
-            printf("[Traps] WARNING: misaligned dispatch target 0x%08X (aligning to 0x%08X, ra=0x%08X a0=0x%08X)\n",
-                   addr, addr & ~3u, cpu->gpr[31], cpu->gpr[4]);
+        uint32_t aligned_addr = addr & ~3u;
+        if (is_valid_executable_address(aligned_addr)) {
+            static int s_misalign_reports = 0;
+            if (s_misalign_reports++ < 10) {
+                printf("[Traps] WARNING: misaligned dispatch target 0x%08X (aligning to 0x%08X, ra=0x%08X a0=0x%08X)\n",
+                       addr, aligned_addr, cpu->gpr[31], cpu->gpr[4]);
+            }
+            addr = aligned_addr;
+            phys &= ~3u;
+            cpu->pc = addr;
+            return;
+        } else {
+            printf("[Traps] WARNING: wild unaligned dispatch target 0x%08X into non-executable memory (sp=0x%08X ra=0x%08X)\n",
+                   addr, cpu->gpr[29], cpu->gpr[31]);
+            addr = aligned_addr;
+            phys &= ~3u;
+            /* Do not re-dispatch unmapped/stack address; fall through to stack unwinder */
         }
-        addr &= ~3u;
-        phys &= ~3u;
-        cpu->pc = addr;
-        return;
     }
 
     /*
      * PlayStation RAM mirror resolution: physical RAM is 2MB, mirrored across
      * 0x00000000..0x007FFFFF. Canonicalize to KSEG0 0x80000000..0x801FFFFF.
      */
-    if ((addr & 0x1FFFFFFFu) < 0x1F000000u) {
+    if ((addr & 0x1FFFFFFFu) < 0x00800000u) {
         uint32_t canon_ram = 0x80000000u | (addr & 0x001FFFFFu);
         if (canon_ram != addr) {
             cpu->pc = canon_ram;
@@ -1366,37 +1571,206 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
         /* Opt-out path: return without executing (function is a no-op),
          * ring-recorded above. Stale registers WILL corrupt the caller —
          * diagnostic use only. */
-        static uint32_t s_last_miss = 0xFFFFFFFFu;
+        static uint32_t s_recent_misses[8] = {0};
+        static int s_recent_idx = 0;
         static int s_miss_repeat = 0;
         static int s_total_miss_reports = 0;
-        if (addr == s_last_miss) {
+        int in_loop = 0;
+        for (int i = 0; i < 8; i++) {
+            if (s_recent_misses[i] == addr) { in_loop = 1; break; }
+        }
+        s_recent_misses[s_recent_idx++ & 7] = addr;
+        if (in_loop) {
             s_miss_repeat++;
         } else {
-            s_last_miss = addr;
             s_miss_repeat = 1;
         }
-        if (s_miss_repeat <= 3 && s_total_miss_reports < 30) {
-            s_total_miss_reports++;
-            printf("[Traps] Dispatch MISS: addr=0x%08X phys=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X (rep=%d)\n",
-                   addr, phys, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], s_miss_repeat);
+        if (s_total_miss_reports == 0) {
+            dump_first_miss_diagnostics(cpu, addr, phys);
         }
-        if (s_miss_repeat > 10) {
-            if (s_miss_repeat == 11) {
+        if (s_miss_repeat <= 5 && s_total_miss_reports < 50) {
+            s_total_miss_reports++;
+            uint32_t m0 = ((phys + 4) <= 0x00200000u) ? cpu->read_word(addr) : 0;
+            uint32_t m1 = ((phys + 8) <= 0x00200000u) ? cpu->read_word(addr + 4) : 0;
+            uint32_t m2 = ((phys + 12) <= 0x00200000u) ? cpu->read_word(addr + 8) : 0;
+            uint32_t m3 = ((phys + 16) <= 0x00200000u) ? cpu->read_word(addr + 12) : 0;
+            printf("[Traps] Dispatch MISS: addr=0x%08X (mem: 0x%08X 0x%08X 0x%08X 0x%08X) phys=0x%08X ra=0x%08X sp=0x%08X a0=0x%08X a1=0x%08X epc=0x%08X (rep=%d)\n",
+                   addr, m0, m1, m2, m3, phys, cpu->gpr[31], cpu->gpr[29], cpu->gpr[4], cpu->gpr[5], cpu->cop0[14], s_miss_repeat);
+            /* Dump top 16 words of the guest stack for post-mortem diagnostics */
+            uint32_t sp = cpu->gpr[29];
+            if ((sp & 0x1FFFFFFFu) < 0x00200000u) {
+                printf("[Traps] Stack @ 0x%08X:", sp);
+                for (int si = 0; si < 16; si++) {
+                    uint32_t cur = sp + (uint32_t)(si * 4);
+                    if ((cur & 0x1FFFFFFFu) + 4 <= 0x00200000u) {
+                        printf(" [%d]=0x%08X", si, cpu->read_word(cur));
+                    }
+                }
+                printf("\n");
+            }
+            fflush(stdout);
+        }
+        if (s_miss_repeat > 8) {
+            if (s_miss_repeat == 9) {
                 printf("[Traps] Dispatch MISS: loop detected for addr 0x%08X (repeat %d), setting cpu->pc = 0 to break loop\n", addr, s_miss_repeat);
+                fflush(stdout);
             }
             g_pc0_reason = PSX_PC0_DISPATCH_MISS;
             cpu->pc = 0;
             return;
         }
-        uint32_t ret_ra = cpu->gpr[31] & ~3u;
-        if (ret_ra != 0 && ret_ra != addr) {
+
+        static const int kEnableSpeculativeRecovery = 0;
+        if (kEnableSpeculativeRecovery) {
+            uint32_t ret_ra = cpu->gpr[31] & ~3u;
             if ((ret_ra & 0x1FFFFFFFu) < 0x00200000u && (ret_ra & 0xE0000000u) == 0) {
                 ret_ra = 0x80000000u | (ret_ra & 0x001FFFFFu);
             }
-            printf("[Traps] Dispatch MISS: returning to $ra 0x%08X (raw $ra 0x%08X) to preserve caller chain\n", ret_ra, cpu->gpr[31]);
-            cpu->pc = ret_ra;
-            return;
+            if (is_valid_executable_address(ret_ra) && ret_ra != addr) {
+                printf("[Traps] Dispatch MISS: returning to valid $ra 0x%08X (raw $ra 0x%08X) to preserve caller chain\n", ret_ra, cpu->gpr[31]);
+                fflush(stdout);
+                cpu->pc = ret_ra;
+                return;
+            }
+
+        /* If $ra is invalid or equal to addr (e.g. caller returned via jr $ra into data/stub,
+         * or $ra already equals the missed address), scan the guest stack for the caller's
+         * saved $ra to recover the caller chain. Strictly verify that the candidate address
+         * is preceded at (w - 8) by a real MIPS call instruction (JAL/JALR/BAL) in executable
+         * code so that data pointers are never misinterpreted as code addresses. */
+        {
+            static uint32_t s_recent_recovered_ra[8] = {0};
+            static int s_recent_ra_idx = 0;
+            uint32_t sp = cpu->gpr[29];
+            uint32_t stack_ra = 0;
+            uint32_t found_off = 0;
+            uint32_t found_call_insn = 0;
+            if ((sp & 0x1FFFFFFFu) < 0x00200000u) {
+                for (uint32_t off = 0; off <= 0x400u; off += 4) {
+                    uint32_t cur_sp = sp + off;
+                    if ((cur_sp & 0x1FFFFFFFu) + 4 > 0x00200000u) break;
+                    uint32_t w = cpu->read_word(cur_sp);
+                    if ((w & 3u) != 0 || w == 0 || w == addr) continue;
+
+                    /* Skip addresses that were just recovered recently and immediately led to another miss (prevent looping) */
+                    int in_recent_ra = 0;
+                    for (int ri = 0; ri < 8; ri++) {
+                        if (s_recent_recovered_ra[ri] == w) { in_recent_ra = 1; break; }
+                    }
+                    if (in_recent_ra) continue;
+
+                    uint32_t w_phys = w & 0x1FFFFFFFu;
+                    /* Strictly require w to be in valid executable code: main game text & overlays [0x10008, 0x140000) or BIOS ROM */
+                    if ((w_phys >= 0x00010008u && w_phys < 0x00140000u) ||
+                        (w_phys >= 0x1FC00008u && w_phys < 0x1FC80000u)) {
+                        uint32_t call_insn = cpu->read_word(w - 8u);
+                        uint32_t op = call_insn >> 26;
+                        int is_call = (op == 3u) || (op == 0u && (call_insn & 0x3Fu) == 9u) ||
+                                      (op == 1u && ((call_insn >> 16) & 0x1Fu) >= 0x10u);
+                        if (is_call) {
+                            stack_ra = w;
+                            found_off = off;
+                            found_call_insn = call_insn;
+                            printf("[Traps] Dispatch MISS: found verified caller return address 0x%08X on stack at sp+0x%X (call_insn=0x%08X)\n",
+                                   stack_ra, off, call_insn);
+                            fflush(stdout);
+                            break;
+                        }
+                    }
+                }
+            }
+            if (stack_ra != 0 && stack_ra != addr) {
+                s_recent_recovered_ra[s_recent_ra_idx++ & 7] = stack_ra;
+                if ((stack_ra & 0x1FFFFFFFu) < 0x00200000u && (stack_ra & 0xE0000000u) == 0) {
+                    stack_ra = 0x80000000u | (stack_ra & 0x001FFFFFu);
+                }
+
+                /* Compute exact caller stack pointer and restore callee-saved registers.
+                 * When returning to stack_ra (the instruction after the call), the callee's
+                 * frame must be completely unwound and any saved $s0..$s7, $fp restored. */
+                uint32_t cur_sp = sp + found_off;
+                uint32_t new_sp = cur_sp;
+                int callee_framesize = -1;
+                int callee_ra_offset = -1;
+
+                if ((found_call_insn >> 26) == 3u) { /* JAL target */
+                    uint32_t callee = (stack_ra & 0xF0000000u) | ((found_call_insn & 0x03FFFFFFu) << 2);
+                    uint32_t c_phys = callee & 0x1FFFFFFFu;
+                    if ((c_phys >= 0x00010008u && c_phys < 0x00140000u) ||
+                        (c_phys >= 0x1FC00008u && c_phys < 0x1FC80000u)) {
+                        /* Scan callee prologue (up to 32 instructions) for stack frame allocation and register saves */
+                        for (int i = 0; i < 32; i++) {
+                            uint32_t insn = cpu->read_word(callee + (uint32_t)(i * 4));
+                            uint32_t op = insn >> 26;
+                            uint32_t rs = (insn >> 21) & 0x1Fu;
+                            uint32_t rt = (insn >> 16) & 0x1Fu;
+                            int16_t imm = (int16_t)(insn & 0xFFFFu);
+
+                            /* addiu $sp, $sp, -framesize */
+                            if (op == 9u && rs == 29u && rt == 29u && imm < 0) {
+                                callee_framesize = -imm;
+                            }
+                            /* sw $ra, ra_offset($sp) */
+                            if (op == 0x2Bu && rs == 29u && rt == 31u) {
+                                callee_ra_offset = imm;
+                            }
+                        }
+
+                        if (callee_framesize > 0 && callee_ra_offset >= 0) {
+                            uint32_t sp_callee = cur_sp - (uint32_t)callee_ra_offset;
+                            new_sp = sp_callee + (uint32_t)callee_framesize;
+
+                            /* Restore saved non-volatile registers ($s0..$s7, $fp) from callee frame */
+                            for (int i = 0; i < 32; i++) {
+                                uint32_t insn = cpu->read_word(callee + (uint32_t)(i * 4));
+                                uint32_t op = insn >> 26;
+                                uint32_t rs = (insn >> 21) & 0x1Fu;
+                                uint32_t rt = (insn >> 16) & 0x1Fu;
+                                int16_t imm = (int16_t)(insn & 0xFFFFu);
+                                if (op == 0x2Bu && rs == 29u && ((rt >= 16u && rt <= 23u) || rt == 30u)) {
+                                    uint32_t save_addr = sp_callee + (uint32_t)imm;
+                                    if ((save_addr & 0x1FFFFFFFu) + 4 <= 0x00200000u) {
+                                        cpu->gpr[rt] = cpu->read_word(save_addr);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (callee_framesize <= 0 || callee_ra_offset < 0) {
+                    /* Fallback: if callee prologue couldn't be parsed, pop the intermediate
+                     * frame (found_off bytes) plus standard 8 bytes margin so the caller
+                     * accesses its own frame instead of callee debris. */
+                    new_sp = cur_sp + 8u;
+                }
+
+                printf("[Traps] Dispatch MISS: recovering via verified stack $ra 0x%08X (sp 0x%08X -> 0x%08X, callee_frame=%d ra_off=%d)\n",
+                       stack_ra, cpu->gpr[29], new_sp, callee_framesize, callee_ra_offset);
+                fflush(stdout);
+
+                cpu->gpr[29] = new_sp;
+                cpu->gpr[31] = stack_ra;
+                cpu->pc = stack_ra;
+                return;
+            }
+
+            /* Fallback: if no verified call found on stack, recover to COP0 EPC (main loop) if valid */
+            uint32_t epc = cpu->cop0[14];
+            uint32_t epc_phys = epc & 0x1FFFFFFFu;
+            if ((epc_phys >= 0x00010008u && epc_phys < 0x00140000u) ||
+                (epc_phys >= 0x1FC00008u && epc_phys < 0x1FC80000u)) {
+                if ((epc & 0x1FFFFFFFu) < 0x00200000u && (epc & 0xE0000000u) == 0) {
+                    epc = 0x80000000u | (epc & 0x001FFFFFu);
+                }
+                printf("[Traps] Dispatch MISS: recovering via COP0 EPC 0x%08X\n", epc);
+                fflush(stdout);
+                cpu->pc = epc;
+                return;
+            }
         }
+        }
+
         g_pc0_reason = PSX_PC0_DISPATCH_MISS;
         cpu->pc = 0;
     }

@@ -725,6 +725,11 @@ static uint32_t execute_ch2_gpu(void) {
         gpu_ws_begin_linked_list();
         uint32_t start_addr =
             psx_mod_gpu_dma_resolve_address(channels[2].madr);
+        if ((start_addr & 0x001FFFFFu) >= 0x00024140u && (start_addr & 0x001FFFFFu) < 0x00095000u) {
+            channels[2].madr = 0x00FFFFFFu;
+            gpu_ws_end_linked_list();
+            return 0;
+        }
         gpu_ws_prepass_linked_list(start_addr);
         const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
         uint32_t last_addr = start_addr;
@@ -741,8 +746,16 @@ static uint32_t execute_ch2_gpu(void) {
                 break;
             }
 
+            if ((addr & 0x001FFFFFu) >= 0x00024140u && (addr & 0x001FFFFFu) < 0x00095000u) {
+                last_addr = 0x00FFFFFFu;
+                break;
+            }
+
             uint32_t header = psx_read_word(addr);
             uint32_t num_words = (header >> 24) & 0xFF;
+            if (num_words > 64u) {
+                num_words = 0u;
+            }
             uint32_t word_addr =
                 psx_mod_gpu_dma_resolve_address(addr + 4u);
 
@@ -790,6 +803,10 @@ static uint32_t execute_ch2_gpu(void) {
 
             uint32_t next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu) {
+                last_addr = 0x00FFFFFFu;
+                break;
+            }
+            if ((next & 0x001FFFFFu) >= 0x00024140u && (next & 0x001FFFFFu) < 0x00095000u) {
                 last_addr = 0x00FFFFFFu;
                 break;
             }

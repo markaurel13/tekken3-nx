@@ -1082,16 +1082,30 @@ int main(int argc, char* argv[]) {
            (unsigned long long)psx_cycle_count, (unsigned long long)s_frame_count);
     printf("[Main] Vectores RAM baja: [0x80]=0x%08X [0xA0]=0x%08X [0xB0]=0x%08X [0xC0]=0x%08X [0x200]=0x%08X\n",
            psx_read_word(0x80), psx_read_word(0xA0), psx_read_word(0xB0), psx_read_word(0xC0), psx_read_word(0x200));
-    printf("[Main] DirtyRAM: blocks=%llu insns=%llu unsup=%llu last_pc=0x%08X last_insn=0x%08X (%s)\n",
+    printf("[Main] DirtyRAM: blocks=%llu insns=%llu unsup=%llu entry=0x%08X (ra=0x%08X sp=0x%08X ran=%u) last_pc=0x%08X last_insn=0x%08X (%s)\n",
            (unsigned long long)g_dirty_ram_blocks_run,
            (unsigned long long)g_dirty_ram_insns_run,
            (unsigned long long)g_dirty_ram_unsupported_midblock,
+           g_dirty_ram_last_unsupported_entry,
+           g_dirty_ram_last_unsupported_entry_ra,
+           g_dirty_ram_last_unsupported_entry_sp,
+           g_dirty_ram_last_unsupported_insns,
            g_dirty_ram_last_unsupported_pc,
            g_dirty_ram_last_unsupported_insn,
            g_dirty_ram_last_unsupported_reason ? g_dirty_ram_last_unsupported_reason : "none");
     for (int r = 0; r < 32; r += 4) {
         printf("[Main] GPR[%02d..%02d]: %08X %08X %08X %08X\n",
                r, r + 3, cpu.gpr[r], cpu.gpr[r + 1], cpu.gpr[r + 2], cpu.gpr[r + 3]);
+    }
+    printf("[Main] Stack dump (sp=0x%08X):\n", cpu.gpr[29]);
+    for (int i = 0; i < 16; i += 4) {
+        uint32_t sp_addr = cpu.gpr[29] + i * 4;
+        printf("  [0x%08X]: %08X %08X %08X %08X\n",
+               sp_addr,
+               psx_read_word(sp_addr),
+               psx_read_word(sp_addr + 4),
+               psx_read_word(sp_addr + 8),
+               psx_read_word(sp_addr + 12));
     }
     printf("[Main] Total dispatches (fntrace_seq): %llu\n", (unsigned long long)g_fntrace_seq);
     if (g_fntrace_seq > 0) {
@@ -1101,6 +1115,15 @@ int main(int argc, char* argv[]) {
             const FntraceEntry* e = &g_fntrace_ring[i % FNTRACE_RING_CAP];
             printf("  [%llu] target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
                    (unsigned long long)i, e->target, e->ra, e->a0, e->a1, e->sp);
+        }
+    }
+    if (g_dirty_ram_block_log_seq > 0) {
+        printf("[Main] Ultimos DirtyRAM blocks registrados:\n");
+        uint64_t bcount = g_dirty_ram_block_log_seq < 15u ? g_dirty_ram_block_log_seq : 15u;
+        for (uint64_t i = g_dirty_ram_block_log_seq - bcount; i < g_dirty_ram_block_log_seq; i++) {
+            const DirtyRamBlockLogEntry* be = &g_dirty_ram_block_log[i & (DIRTY_RAM_BLOCK_LOG_CAP - 1u)];
+            printf("  [DirtyBlock %llu] target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X\n",
+                   (unsigned long long)i, be->target, be->ra, be->a0, be->a1);
         }
     }
     fflush(stdout);
