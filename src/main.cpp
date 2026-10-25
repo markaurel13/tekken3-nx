@@ -237,8 +237,6 @@ extern "C" void overlay_capture_on_dma(uint32_t load_addr, uint32_t size, const 
     (void)bytes;
 }
 
-// Búfer simulado de VRAM de 1024x512 de 16-bit
-static uint16_t s_vram[1024 * 512];
 
 // Sistema de logging unificado (MicroSD + nxlink over Wi-Fi)
 static FILE* s_sd_log = NULL;
@@ -365,7 +363,9 @@ static ssize_t log_devoptab_write(struct _reent *r, void *fd, const char *ptr, s
     (void)r; (void)fd;
     if (s_sd_log) {
         fwrite(ptr, 1, len, s_sd_log);
-        fflush(s_sd_log);
+        if (memchr(ptr, '\n', len) || memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
+            fflush(s_sd_log);
+        }
     }
     if (s_nxlink_sock >= 0) {
         send(s_nxlink_sock, ptr, len, 0);
@@ -776,6 +776,7 @@ static void switch_vblank_callback(void) {
         s_last_dirty_aborts = g_dirty_ram_aborts;
         s_last_dirty_guard_yields = g_dirty_ram_guard_yields;
         s_last_mismatch_count = mism_cnt;
+        if (s_sd_log) fflush(s_sd_log);
     }
 
     // 1. Manejo de bucle principal y salida rápida con botones (Plus + Minus)
@@ -842,7 +843,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v14 - Step 1A Revert pitch32 byte stride & Red Shader Diagnostic)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v17 - Step 1A Robust GP0/GP1 NOPs & Hardware Behavior Fix)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {
@@ -883,8 +884,8 @@ int main(int argc, char* argv[]) {
 
     // 4. Inicializar backend gráfico de bajo nivel con Deko3D
     printf("[Main] [4/7] Inicializando Deko3D Renderer...\n");
-    memset(s_vram, 0, sizeof(s_vram));
-    if (!Deko3DRenderer::Instance().Init(s_vram)) {
+    uint16_t* vram_ptr = gpu_get_vram_ptr();
+    if (!Deko3DRenderer::Instance().Init(vram_ptr)) {
         printf("[Main] Error inicializando Deko3D.\n");
     } else {
         printf("[Main] Deko3D inicializado correctamente.\n");
@@ -892,7 +893,7 @@ int main(int argc, char* argv[]) {
 
     // Registrar Deko3D como el renderer activo de psxrecomp
     gr_set_custom_backend(deko3d_backend_get());
-    gr_init(s_vram);
+    gr_init(vram_ptr);
 
     // 5. Inicializar subsistemas de hardware de PlayStation 1
     printf("[Main] [5/7] Inicializando perifericos de PS1 (DMA, Timers, MDEC, SIO, SPU, GPU)...\n");

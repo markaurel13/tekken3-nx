@@ -44,6 +44,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef RAM_SIZE
+#define RAM_SIZE (2u * 1024u * 1024u)
+#endif
+
 uint64_t g_dirty_ram_blocks_run = 0;
 uint64_t g_dirty_ram_insns_run  = 0;
 uint64_t g_dirty_dispatch_calls = 0;
@@ -546,6 +550,8 @@ static inline uint32_t fetch_word(uint32_t phys) {
      * instruction fetch does not cross translation units for every guest op. */
     static const uint8_t *ram;
     if (!ram) ram = memory_get_ram_ptr();
+    if (phys < 0x00800000u) phys &= (RAM_SIZE - 1u);
+    if (phys >= RAM_SIZE) return 0;
     return  (uint32_t)ram[phys]
          | ((uint32_t)ram[phys + 1] <<  8)
          | ((uint32_t)ram[phys + 2] << 16)
@@ -2678,6 +2684,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     }
 #endif
     uint32_t phys = addr & 0x1FFFFFFFu;
+    if (phys < 0x1F000000u) {
+        phys &= (RAM_SIZE - 1u);
+        addr = 0x80000000u | phys;
+    }
     int clean_game_text_miss = 0;
 
     if (addr == 0x80000048u) {
@@ -2797,7 +2807,8 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * text end is enough evidence to admit that word to the interpreter.
          * Data and invalid targets still fail closed. */
         if (phys < (2u * 1024u * 1024u) &&
-            phys >= g_overlay_region_floor &&
+            (phys >= g_overlay_region_floor || phys >= 0x00008000u ||
+             phys == 0x00000080u || phys == 0xA0u || phys == 0xB0u || phys == 0xC0u) &&
             dirty_ram_word_looks_decodable(fetch_word(phys))) {
             dirty_ram_mark_executable_range(phys, 4u);
         } else {

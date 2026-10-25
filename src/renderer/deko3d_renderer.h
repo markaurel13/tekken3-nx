@@ -42,8 +42,12 @@ public:
     static constexpr uint32_t TargetHeight = 720;
     static constexpr uint32_t VramWidth = 1024;
     static constexpr uint32_t VramHeight = 512;
-    static constexpr unsigned CmdBufferSize = 0x40000;
-    static constexpr unsigned MaxVerticesPerFrame = 65536;
+    static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
+    static constexpr unsigned CmdPoolTotalSize = 16 * 1024 * 1024;   // 16 MB pool total para comandos
+    static constexpr unsigned MaxVerticesPerFrame = 131072;          // 128K vértices por frame (~3.5 MB)
+    static constexpr uint32_t StagingRingStart = 0x00800000;         // 8 MB offset inicial
+    static constexpr uint32_t StagingRingEnd = 64 * 1024 * 1024;     // 64 MB límite de staging
+    static constexpr uint32_t RawVramStagingOffset = 0x00600000;     // 6 MB offset para SyncRawVram
 
     static Deko3DRenderer& Instance();
 
@@ -88,6 +92,9 @@ public:
 
     // Presentación directa sin conversión en CPU
     int RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh);
+
+    // Callback dinámico de adición de memoria para el command buffer
+    void OnCmdBufAddMem(DkCmdBuf cmdbuf, size_t minReqSize);
 
 private:
     Deko3DRenderer() = default;
@@ -143,7 +150,8 @@ private:
 
     uint32_t* m_vramStagingCpu = nullptr;
     DkGpuAddr m_vramStagingGpu = 0;
-    uint32_t m_stagingUploadOffset = 0x600000;
+    uint32_t m_stagingUploadOffset = StagingRingStart;
+    uint32_t m_cmdPoolOffset = CmdBufferSize;
 
     bool m_vramDirty = true;
     bool m_initialized = false;

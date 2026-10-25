@@ -48,6 +48,28 @@ static void DekoDebugCallback(void* userData, const char* context, DkResult resu
     fflush(stdout);
 }
 
+static void DekoCmdBufAddMem(void* userData, DkCmdBuf cmdbuf, size_t minReqSize) {
+    if (userData) {
+        static_cast<Deko3DRenderer*>(userData)->OnCmdBufAddMem(cmdbuf, minReqSize);
+    }
+}
+
+void Deko3DRenderer::OnCmdBufAddMem(DkCmdBuf cmdbuf, size_t minReqSize) {
+    uint32_t allocSize = (uint32_t)((minReqSize + 0x100000 - 1) & ~(0x100000 - 1));
+    if (allocSize < 0x200000) allocSize = 0x200000;
+
+    if (m_cmdPoolOffset + allocSize <= CmdPoolTotalSize) {
+        ::dkCmdBufAddMemory(cmdbuf, m_memData, m_cmdPoolOffset, allocSize);
+        printf("[Deko3D] Dynamic CmdBuf extension: size=0x%X (pool used=0x%X/0x%X)\n",
+               allocSize, m_cmdPoolOffset + allocSize, CmdPoolTotalSize);
+        m_cmdPoolOffset += allocSize;
+        fflush(stdout);
+    } else {
+        printf("[Deko3D] ERROR FATAL: Command pool agotado en OnCmdBufAddMem (req=%zu)!\n", minReqSize);
+        fflush(stdout);
+    }
+}
+
 Deko3DRenderer& Deko3DRenderer::Instance() {
     static Deko3DRenderer s_instance;
     return s_instance;
@@ -101,7 +123,10 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
 
     // 1. Crear Device con depurador y Graphics Queue
     m_device = dk::DeviceMaker{}.setCbDebug(DekoDebugCallback).create();
-    m_queue = dk::QueueMaker{m_device}.setFlags(DkQueueFlags_Graphics).create();
+    m_queue = dk::QueueMaker{m_device}
+        .setFlags(DkQueueFlags_Graphics)
+        .setCommandMemorySize(1024 * 1024)
+        .create();
 
     // 2. Asignar Memoria GPU
     // Bloque para Framebuffers y Texturas de VRAM (32 MB)
@@ -114,18 +139,21 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
         .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code)
         .create();
 
-    // Bloque para Comandos, Buffers de Vértices, Descriptores y UBOs (16 MB)
-    m_memData = dk::MemBlockMaker{m_device, 16 * 1024 * 1024}
+    // Bloque para Comandos, Buffers de Vértices, Descriptores y UBOs (32 MB)
+    m_memData = dk::MemBlockMaker{m_device, 32 * 1024 * 1024}
         .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
         .create();
 
-    // Bloque de staging con caché de CPU activa (16 MB)
-    m_memStaging = dk::MemBlockMaker{m_device, 16 * 1024 * 1024}
+    // Bloque de staging con caché de CPU activa (64 MB)
+    m_memStaging = dk::MemBlockMaker{m_device, 64 * 1024 * 1024}
         .setFlags(DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached)
         .create();
 
-    // 3. Crear Command Buffer
-    m_cmdBuf = dk::CmdBufMaker{m_device}.create();
+    // 3. Crear Command Buffer con callback de memoria dinámica para prevenir overflow
+    m_cmdBuf = dk::CmdBufMaker{m_device}
+        .setUserData(this)
+        .setCbAddMem(DekoCmdBufAddMem)
+        .create();
 
     // 4. Configurar Layout de Framebuffers (1280x720 RGBA8)
     dk::ImageLayout fbLayout;
@@ -184,27 +212,27 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
         printf("[Deko3D] Error crítico: fallo al cargar romfs:/shaders/psx_fsh.dksh\n");
     }
 
-    // 9. Mapear buffers en m_memData (16 MB):
-    // 0x000000..0x100000: Command Buffers por slot (3 * 256 KB)
-    // 0x100000..0x700000: Vertex Ring Buffers por slot (3 * 2 MB = 6 MB)
-    // 0x800000: Image Descriptor Set
-    // 0x800100: Sampler Descriptor Set
-    // 0x800200: ViewportBlock UBO
+    // 9. Mapear buffers en m_memData (32 MB):
+    // 0x00000000..0x01000000: Command Buffer Pool (16 MB: 4 MB inicial + 12 MB extensiones)
+    // 0x01000000..0x01800000: Vertex Ring Buffers (8 MB: hasta 131,072 vertices)
+    // 0x01E00000: Image Descriptor Set
+    // 0x01E00100: Sampler Descriptor Set
+    // 0x01E00200: ViewportBlock UBO
     uint8_t* dataCpu = (uint8_t*)m_memData.getCpuAddr();
     DkGpuAddr dataGpu = m_memData.getGpuAddr();
 
-    m_vtxRingCpu = (PS1Vertex*)(dataCpu + 0x100000);
-    m_vtxRingGpu = dataGpu + 0x100000;
+    m_vtxRingCpu = (PS1Vertex*)(dataCpu + 0x01000000);
+    m_vtxRingGpu = dataGpu + 0x01000000;
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
 
-    m_imgDescCpu = dataCpu + 0x800000;
-    m_imgDescGpu = dataGpu + 0x800000;
-    m_smpDescCpu = dataCpu + 0x800100;
-    m_smpDescGpu = dataGpu + 0x800100;
+    m_imgDescCpu = dataCpu + 0x01E00000;
+    m_imgDescGpu = dataGpu + 0x01E00000;
+    m_smpDescCpu = dataCpu + 0x01E00100;
+    m_smpDescGpu = dataGpu + 0x01E00100;
 
-    m_viewportUboCpu = (ViewportUniforms*)(dataCpu + 0x800200);
-    m_viewportUboGpu = dataGpu + 0x800200;
+    m_viewportUboCpu = (ViewportUniforms*)(dataCpu + 0x01E00200);
+    m_viewportUboGpu = dataGpu + 0x01E00200;
 
     m_vramStagingCpu = (uint32_t*)m_memStaging.getCpuAddr();
     m_vramStagingGpu = m_memStaging.getGpuAddr();
@@ -223,6 +251,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
     memcpy(m_smpDescCpu, &smpDesc, sizeof(smpDesc));
 
     m_cmdBuf.clear();
+    m_cmdPoolOffset = CmdBufferSize;
     m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
     m_cmdBuf.pushData(m_imgDescGpu, &imgDesc, sizeof(imgDesc));
     m_cmdBuf.pushData(m_smpDescGpu, &smpDesc, sizeof(smpDesc));
@@ -241,12 +270,13 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
     m_queue.waitIdle();
 
     m_cmdBuf.clear();
+    m_cmdPoolOffset = CmdBufferSize;
     m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
     m_curSlot = m_queue.acquireImage(m_swapchain);
 
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
-    m_stagingUploadOffset = 0x700000;
+    m_stagingUploadOffset = StagingRingStart;
     m_vramDirty = true;
     m_initialized = true;
 
@@ -257,13 +287,14 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
 void Deko3DRenderer::BeginFrame() {
     m_queue.waitIdle();
     m_cmdBuf.clear();
+    m_cmdPoolOffset = CmdBufferSize;
     m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
 
     m_curSlot = m_queue.acquireImage(m_swapchain);
 
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
-    m_stagingUploadOffset = 0x700000;
+    m_stagingUploadOffset = StagingRingStart;
 }
 
 void Deko3DRenderer::Shutdown() {
@@ -331,6 +362,7 @@ void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, cons
         m_queue.submitCommands(m_cmdBuf.finishList());
         m_queue.waitIdle();
         m_cmdBuf.clear();
+        m_cmdPoolOffset = CmdBufferSize;
         m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
         m_vtxAllocated = 0;
         m_vtxBatchStart = 0;
@@ -348,7 +380,7 @@ void Deko3DRenderer::SyncRawVram() {
 
     // PS1 VRAM es exactamente 1024x512 palabras de 16 bits = 1,048,576 bytes (1 MB)
     const size_t rawVramSize = VramWidth * VramHeight * sizeof(uint16_t);
-    const uint32_t rawOffset = 0x600000; // Offset dedicado en m_memStaging
+    const uint32_t rawOffset = RawVramStagingOffset; // 0x00600000 en m_memStaging
     uint8_t* dst = (uint8_t*)m_memStaging.getCpuAddr() + rawOffset;
 
     memcpy(dst, m_vram, rawVramSize);
@@ -411,12 +443,20 @@ void Deko3DRenderer::FlushBatch() {
     } else {
         int scX = m_clipX1;
         int scY = m_clipY1;
-        int scW = m_clipX2 - m_clipX1 + 1;
-        int scH = m_clipY2 - m_clipY1 + 1;
-        if (scX < 0) { scW += scX; scX = 0; }
-        if (scY < 0) { scH += scY; scY = 0; }
-        if (scW > (int)VramWidth - scX) scW = (int)VramWidth - scX;
-        if (scW <= 0 || scH <= 0) { scX = 0; scY = 0; scW = VramWidth; scH = VramHeight; }
+        int scX2 = m_clipX2;
+        int scY2 = m_clipY2;
+
+        if (scX < 0) scX = 0;
+        if (scY < 0) scY = 0;
+        if (scX2 >= (int)VramWidth) scX2 = (int)VramWidth - 1;
+        if (scY2 >= (int)VramHeight) scY2 = (int)VramHeight - 1;
+
+        int scW = scX2 - scX + 1;
+        int scH = scY2 - scY + 1;
+
+        if (scW <= 0 || scH <= 0 || scX >= (int)VramWidth || scY >= (int)VramHeight) {
+            scX = 0; scY = 0; scW = 0; scH = 0;
+        }
         DkScissor scissor{ (uint32_t)scX, (uint32_t)scY, (uint32_t)scW, (uint32_t)scH };
         m_cmdBuf.setScissors(0, { scissor });
     }
@@ -622,10 +662,9 @@ void Deko3DRenderer::DrawTexturedRectScaled(int x, int y, int w, int h,
 }
 
 void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
+    FlushBatch();
     sw_fill_rect(x, y, w, h, color);
     m_vramDirty = true;
-
-    FlushBatch();
 
     uint8_t rgba[4];
     PS1ColorToRGBA8(color, rgba);
@@ -646,11 +685,20 @@ void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
 }
 
 void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
+    FlushBatch();
     sw_copy_rect(sx, sy, dx, dy, w, h);
     m_vramDirty = true;
     if (!m_initialized || w <= 0 || h <= 0) return;
 
-    FlushBatch();
+    sx &= (VramWidth - 1);
+    sy &= (VramHeight - 1);
+    dx &= (VramWidth - 1);
+    dy &= (VramHeight - 1);
+    if (sx + w > (int)VramWidth) w = (int)VramWidth - sx;
+    if (sy + h > (int)VramHeight) h = (int)VramHeight - sy;
+    if (dx + w > (int)VramWidth) w = (int)VramWidth - dx;
+    if (dy + h > (int)VramHeight) h = (int)VramHeight - dy;
+    if (w <= 0 || h <= 0) return;
 
     dk::ImageView vramTexView{ m_vramTexture };
 
@@ -662,10 +710,10 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
 void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* data) {
     if (!m_initialized || !data || w <= 0 || h <= 0) return;
 
+    FlushBatch();
+
     sw_vram_transfer_in(x, y, w, h, data);
     m_vramDirty = true;
-
-    FlushBatch();
 
     static uint64_t s_upload_count = 0;
     s_upload_count++;
@@ -679,20 +727,22 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     y &= (VramHeight - 1);
     if (x + w > (int)VramWidth) w = (int)VramWidth - x;
     if (y + h > (int)VramHeight) h = (int)VramHeight - y;
+    if (w <= 0 || h <= 0) return;
 
     // Pitch alineado estrictamente a 32 bytes para el Maxwell 2D Copy Engine de Tegra X1
     uint32_t pitch32 = (w * sizeof(uint32_t) + 31u) & ~31u;
     size_t uploadBytes32 = (size_t)pitch32 * h;
     uint32_t align32 = (uint32_t)((uploadBytes32 + 511u) & ~511u);
 
-    // Buffer circular de staging dinámico (0x700000 .. 16 MB = 9 MB)
-    if (m_stagingUploadOffset + align32 > 16 * 1024 * 1024) {
+    // Buffer circular de staging dinámico (StagingRingStart .. StagingRingEnd = 56 MB)
+    if (m_stagingUploadOffset + align32 > StagingRingEnd) {
         FlushBatch();
         m_queue.submitCommands(m_cmdBuf.finishList());
         m_queue.waitIdle();
         m_cmdBuf.clear();
+        m_cmdPoolOffset = CmdBufferSize;
         m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
-        m_stagingUploadOffset = 0x700000;
+        m_stagingUploadOffset = StagingRingStart;
         m_vtxAllocated = 0;
         m_vtxBatchStart = 0;
     }
@@ -743,10 +793,17 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     GpuDisplayInfo di{};
     gpu_get_display_info(&di);
 
+    uint32_t dispX = di.display_x;
+    uint32_t dispY = di.display_y;
     uint32_t w = di.width ? di.width : 320;
     uint32_t h = di.height ? di.height : 240;
-    if (w > VramWidth) w = VramWidth;
-    if (h > VramHeight) h = VramHeight;
+
+    if (dispX >= VramWidth) dispX = 0;
+    if (dispY >= VramHeight) dispY = 0;
+    if (dispX + w > VramWidth) w = VramWidth - dispX;
+    if (dispY + h > VramHeight) h = VramHeight - dispY;
+    if (w == 0) w = 1;
+    if (h == 0) h = 1;
 
     dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
 
@@ -782,7 +839,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             // Presentación directa por hardware GPU Maxwell (0 ms de conversión CPU)
             dk::ImageView vramTexView{ m_vramTexture };
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
-            m_cmdBuf.blitImage(vramTexView, { di.display_x, di.display_y, 0, w, h, 1 },
+            m_cmdBuf.blitImage(vramTexView, { dispX, dispY, 0, w, h, 1 },
                                colorTarget, { 0, 0, 0, TargetWidth, TargetHeight, 1 },
                                DkBlitFlag_FilterLinear);
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);

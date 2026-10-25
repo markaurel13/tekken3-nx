@@ -125,9 +125,19 @@ void SwitchAudio::Update() {
         }
     }
 
-    // Si la cola cayó a 0 (arranque inicial o tirón de carga), encolar 2 buffers para crear colchón;
-    // en marcha normal, encolar 1 buffer (735 muestras = 1/60 s) por cada VBlank de la PS1.
-    int blocksToFill = (activeBuffers == 0) ? 2 : 1;
+    // Colchón dinámico anti-underrun:
+    // Mantener 2-3 buffers (33-50 ms) encolados en hardware para absorber fluctuaciones de framerate
+    // sin introducir latencia perceptible ni clicks/distorsión por agotamiento de cola (underrun).
+    int blocksToFill;
+    if (activeBuffers == 0) {
+        blocksToFill = 3; // Cola vacía: rearmar colchón completo (50 ms)
+    } else if (activeBuffers == 1) {
+        blocksToFill = 2; // Cola baja: recuperar nivel óptimo
+    } else if (activeBuffers <= 3) {
+        blocksToFill = 1; // Régimen estable 60 FPS: 1 buffer por cuadro
+    } else {
+        blocksToFill = 0; // Cola llena (>= 4): drenar para evitar acumulación de retardo
+    }
     bool queuedAny = false;
     alignas(64) int16_t tempPcm[BufferSamples];
 

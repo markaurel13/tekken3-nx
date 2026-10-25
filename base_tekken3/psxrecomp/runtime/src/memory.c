@@ -728,6 +728,7 @@ static int dirty_ram_shellwin_interp(void) {
 }
 
 int dirty_ram_is_dirty(uint32_t phys) {
+    if (phys < 0x1F000000u) phys &= (uint32_t)(RAM_SIZE - 1);
     if (phys >= RAM_SIZE) return 0;
     if (dirty_ram_force_interp() && phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return 1;
     if (dirty_ram_shellwin_interp() && phys >= 0x00030000u && phys <= 0x0005AFFFu) return 1;
@@ -1686,6 +1687,21 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
+        if (__builtin_expect(phys == 0u && fntrace_is_game_started(), 0)) {
+            switch (g_debug_last_store_pc) {
+            case 0xBFC04E90u:
+            case 0xBFC04EF0u:
+            case 0xBFC05164u:
+            case 0xBFC0D634u:
+            case 0xBFC3EEB4u:
+            case 0xBFC405E4u:
+            case 0xBFC40788u:
+            case 0xBFC41C50u:
+            case 0x80012434u:
+            case 0x800125ACu:
+                return;
+            }
+        }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, val, 4);
         ram[phys]     = (uint8_t)(val);

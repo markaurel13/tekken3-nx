@@ -1,4 +1,4 @@
-﻿/* gpu.h — PS1 GPU hardware simulation (Phase 3).
+/* gpu.h — PS1 GPU hardware simulation (Phase 3).
  *
  * Implements GPUSTAT, GP0, GP1, and 1024x512 16-bit VRAM.
  * No rendering to screen — just correct hardware state transitions.
@@ -31,6 +31,7 @@ void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated v
 
 /* Display presentation accessors (Phase 3). */
 const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */
+uint16_t*       gpu_get_vram_ptr(void);
 
 typedef struct {
     uint32_t display_x, display_y;     /* VRAM start of display area (GP1(05h)) */

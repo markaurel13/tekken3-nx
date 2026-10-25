@@ -4603,13 +4603,8 @@ static int gp0_command_word_count(uint8_t opcode) {
         case 0xE6: return 1;  /* mask bits */
 
         default:
-            /* 0x03-0x1E, 0xE7-0xEF, 0xFF: NOP (1 word) per DuckStation */
-            if ((opcode >= 0x03 && opcode <= 0x1E) ||
-                (opcode >= 0xE7 && opcode <= 0xEF) ||
-                opcode == 0xFF) {
-                return 1;
-            }
-            return 0;  /* unknown */
+            /* Real PS1 hardware: All unknown/reserved GP0 opcodes (0x03-0x1E, 0xE7-0xFF, etc.) are 1-word NOPs */
+            return 1;
     }
 }
 
@@ -5504,24 +5499,8 @@ static void gp0_execute_command(void) {
             break;
 
         default:
-            /* NOP range: 0x03-0x1E, 0xE0, 0xE7-0xEF, 0xFF */
-            if ((opcode >= 0x03 && opcode <= 0x1E) ||
-                opcode == 0xE0 ||
-                (opcode >= 0xE7 && opcode <= 0xEF) ||
-                opcode == 0xFF) {
-                break;  /* NOP — silently consume */
-            }
-
-            /* Any other command (drawing, VRAM-to-VRAM, etc.) is not yet
-             * implemented. Fatal halt so we know exactly what's needed next,
-             * with all rings queryable post-mortem. */
-            {
-                static char reason[96];
-                snprintf(reason, sizeof(reason),
-                         "GPU GP0 unimplemented command 0x%02X (word 0x%08X)",
-                         opcode, gp0_cmd_buf[0]);
-                psx_fatal_halt(reason);
-            }
+            /* NOP range / unhandled opcodes: silently consume as NOP per PS1 hardware */
+            break;
     }
     if (selector_fade_side) {
         int x = selector_fade_side == 1 ? 33 :
@@ -5692,11 +5671,9 @@ static void gpu_write_gp0_body(uint32_t val) {
     int word_count = gp0_command_word_count(opcode);
 
     if (word_count == 0) {
-        /* Unknown command — fatal halt with rings queryable post-mortem */
-        static char reason[96];
-        snprintf(reason, sizeof(reason),
-                 "GPU GP0 unknown command 0x%02X (word 0x%08X)", opcode, val);
-        psx_fatal_halt(reason);
+        /* Unknown command — warn and skip as 1-word NOP per PS1 hardware */
+        printf("[GPU GP0] Warning: unknown opcode 0x%02X (word 0x%08X), treating as 1-word NOP\n", opcode, val);
+        return;
     }
 
     if (word_count < 0) {
@@ -5926,12 +5903,9 @@ void gpu_write_gp1(uint32_t val) {
         case 0x18: case 0x19: case 0x1A: case 0x1B:
         case 0x1C: case 0x1D: case 0x1E: case 0x1F:
             gp1_get_info(val); break;
-        default: {
-            static char reason[96];
-            snprintf(reason, sizeof(reason),
-                     "GPU GP1 unknown command 0x%02X (word 0x%08X)", cmd, val);
-            psx_fatal_halt(reason);
-        }
+        default:
+            printf("[GPU GP1] Warning: unknown command 0x%02X (word 0x%08X), ignored\n", cmd, val);
+            break;
     }
 }
 

@@ -8,8 +8,8 @@ layout (location = 3) in uvec2 inTPageClut;
 layout (location = 4) in uint inFlags;
 
 // Outputs al Fragment Shader
-layout (location = 0) out vec2 outUV;
-layout (location = 1) out vec4 outColor;
+layout (location = 0) noperspective out vec2 outUV;
+layout (location = 1) noperspective out vec4 outColor;
 layout (location = 2) flat out uvec2 outTPageClut;
 layout (location = 3) flat out uint outFlags;
 

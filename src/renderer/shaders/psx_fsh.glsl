@@ -1,8 +1,8 @@
 #version 460
 
 // Inputs del Vertex Shader
-layout (location = 0) in vec2 inUV;
-layout (location = 1) in vec4 inColor;
+layout (location = 0) noperspective in vec2 inUV;
+layout (location = 1) noperspective in vec4 inColor;
 layout (location = 2) flat in uvec2 inTPageClut;
 layout (location = 3) flat in uint inFlags;
 
@@ -24,12 +24,12 @@ int vram_at(int x, int y) {
 }
 
 int fetch_texel(int u, int v, int depth, int base_x, int base_y, int clut_x, int clut_y) {
-    u &= 255;
-    v &= 255;
     if ((u_TexWindow.x | u_TexWindow.y) != 0) {
         u = (u & ~(u_TexWindow.x * 8)) | ((u_TexWindow.z & u_TexWindow.x) * 8);
         v = (v & ~(u_TexWindow.y * 8)) | ((u_TexWindow.w & u_TexWindow.y) * 8);
     }
+    u &= 255;
+    v &= 255;
     if (depth == 0) { // 4-bit CLUT
         int px = vram_at(base_x + (u >> 2), base_y + v);
         int entry = (px >> ((u & 3) * 4)) & 0xF;
@@ -66,8 +66,9 @@ void main()
     int clut_x = int(clut & 0x3Fu) * 16;
     int clut_y = int((clut >> 6u) & 0x1FFu);
 
-    int iu = int(floor(inUV.x));
-    int iv = int(floor(inUV.y));
+    // Clamping con epsilon para evitar desbordamiento por truncamiento negativo en bordes de polígonos
+    int iu = clamp(int(floor(inUV.x + 1e-4)), 0, 255);
+    int iv = clamp(int(floor(inUV.y + 1e-4)), 0, 255);
     int raw = fetch_texel(iu, iv, depth, base_x, base_y, clut_x, clut_y);
 
     // Transparencia estándar de PS1: Si el texel es 0, descartar fragmento

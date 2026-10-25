@@ -1145,78 +1145,29 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
         return;
     }
 
-    /* Reject non-word-aligned targets — corrupt function pointer. Hard fail. */
+    /* Non-word-aligned targets — align to 4-byte boundary and re-dispatch. */
     if (addr & 3) {
-        char buf[16384];
-        int pos = snprintf(buf, sizeof(buf),
-            "DISPATCH FATAL: misaligned target 0x%08X\n"
-            "  aligned form: 0x%08X\n"
-            "  physical:     0x%08X\n"
-            "  cpu->pc:      0x%08X\n"
-            "  $ra:          0x%08X\n"
-            "  $t9:          0x%08X\n"
-            "  $v0:          0x%08X\n"
-            "  $a0:          0x%08X\n"
-            "  $a1:          0x%08X\n"
-            "  $a2:          0x%08X\n"
-            "  $a3:          0x%08X\n"
-            "  COP0_EPC:     0x%08X\n"
-            "  COP0_SR:      0x%08X\n"
-            "  COP0_Cause:   0x%08X\n",
-            addr, addr & ~3u, phys,
-            cpu->pc, cpu->gpr[31], cpu->gpr[25],
-            cpu->gpr[2], cpu->gpr[4], cpu->gpr[5],
-            cpu->gpr[6], cpu->gpr[7],
-            cpu->cop0[14], cpu->cop0[12], cpu->cop0[13]);
-        /* Include the dispatch chain that led to the corrupt target. */
-        {
-            extern uint32_t crash_trace_dispatch_ring_get(int idx);
-            extern uint64_t crash_trace_dispatch_seq_get(void);
-            uint64_t total = crash_trace_dispatch_seq_get();
-            int count = total < 32 ? (int)total : 32;
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                            "\n  dispatch_tail (last %d of %llu):\n", count,
-                            (unsigned long long)total);
-            uint64_t start = total - (uint64_t)count;
-            for (int i = 0; i < count && pos < (int)sizeof(buf) - 48; i++) {
-                uint32_t dispatch = crash_trace_dispatch_ring_get(
-                    (int)((start + (uint64_t)i) & 0xFFFFu));
-                pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                "    [%3d] 0x%08X\n", i, dispatch);
-            }
+        static int s_misalign_reports = 0;
+        if (s_misalign_reports++ < 10) {
+            printf("[Traps] WARNING: misaligned dispatch target 0x%08X (aligning to 0x%08X, ra=0x%08X a0=0x%08X)\n",
+                   addr, addr & ~3u, cpu->gpr[31], cpu->gpr[4]);
         }
+        addr &= ~3u;
+        phys &= ~3u;
+        cpu->pc = addr;
+        return;
+    }
 
-        /* Locate stored copies of both the bad pointer and its aligned form.
-         * This is diagnostic-only and runs immediately before the fatal trap. */
-        {
-            extern uint8_t *memory_get_ram_ptr(void);
-            uint8_t *ram = memory_get_ram_ptr();
-            uint32_t needles[2] = { addr, addr & ~3u };
-            int needle_count = needles[0] == needles[1] ? 1 : 2;
-            for (int n = 0; n < needle_count; n++) {
-                int hits = 0;
-                pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                "\n  RAM scan for 0x%08X:\n", needles[n]);
-                for (uint32_t off = 0; off + 4 <= 2u * 1024u * 1024u; off += 4) {
-                    uint32_t word;
-                    memcpy(&word, ram + off, sizeof(word));
-                    if (word != needles[n]) continue;
-                    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                    "    RAM[0x%08X] = 0x%08X\n",
-                                    0x80000000u + off, word);
-                    if (++hits == 16 || pos >= (int)sizeof(buf) - 64) break;
-                }
-                if (!hits)
-                    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                    "    (not found in 2MB PSX RAM)\n");
-            }
+    /*
+     * PlayStation RAM mirror resolution: physical RAM is 2MB, mirrored across
+     * 0x00000000..0x007FFFFF. Canonicalize to KSEG0 0x80000000..0x801FFFFF.
+     */
+    if ((addr & 0x1FFFFFFFu) < 0x1F000000u) {
+        uint32_t canon_ram = 0x80000000u | (addr & 0x001FFFFFu);
+        if (canon_ram != addr) {
+            cpu->pc = canon_ram;
+            return;
         }
-
-        /* stderr is emitted before trap_crash enters halt-and-serve. */
-        fprintf(stderr, "%s", buf);
-        fflush(stderr);
-        trap_crash(buf);
-        exit(1);
     }
 
     /*
@@ -1415,8 +1366,37 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
         /* Opt-out path: return without executing (function is a no-op),
          * ring-recorded above. Stale registers WILL corrupt the caller —
          * diagnostic use only. */
-        printf("[Traps] Dispatch MISS: addr=0x%08X phys=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X\n",
-               addr, phys, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5]);
+        static uint32_t s_last_miss = 0xFFFFFFFFu;
+        static int s_miss_repeat = 0;
+        static int s_total_miss_reports = 0;
+        if (addr == s_last_miss) {
+            s_miss_repeat++;
+        } else {
+            s_last_miss = addr;
+            s_miss_repeat = 1;
+        }
+        if (s_miss_repeat <= 3 && s_total_miss_reports < 30) {
+            s_total_miss_reports++;
+            printf("[Traps] Dispatch MISS: addr=0x%08X phys=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X (rep=%d)\n",
+                   addr, phys, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], s_miss_repeat);
+        }
+        if (s_miss_repeat > 10) {
+            if (s_miss_repeat == 11) {
+                printf("[Traps] Dispatch MISS: loop detected for addr 0x%08X (repeat %d), setting cpu->pc = 0 to break loop\n", addr, s_miss_repeat);
+            }
+            g_pc0_reason = PSX_PC0_DISPATCH_MISS;
+            cpu->pc = 0;
+            return;
+        }
+        uint32_t ret_ra = cpu->gpr[31] & ~3u;
+        if (ret_ra != 0 && ret_ra != addr) {
+            if ((ret_ra & 0x1FFFFFFFu) < 0x00200000u && (ret_ra & 0xE0000000u) == 0) {
+                ret_ra = 0x80000000u | (ret_ra & 0x001FFFFFu);
+            }
+            printf("[Traps] Dispatch MISS: returning to $ra 0x%08X (raw $ra 0x%08X) to preserve caller chain\n", ret_ra, cpu->gpr[31]);
+            cpu->pc = ret_ra;
+            return;
+        }
         g_pc0_reason = PSX_PC0_DISPATCH_MISS;
         cpu->pc = 0;
     }

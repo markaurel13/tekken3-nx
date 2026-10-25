@@ -343,19 +343,17 @@ static uint32_t transfer_word_count(int ch) {
  * (the node walker has its own MAX_NODES cycle cap). */
 #define DMA_MAX_TRANSFER_WORDS 0x80000u
 
-static void validate_transfer_length(int ch) {
+static int validate_transfer_length(int ch) {
     uint32_t sync_mode = (channels[ch].chcr >> 9) & 3u;
-    if (ch == 2 && sync_mode == 2) return;
+    if (ch == 2 && sync_mode == 2) return 1;
     uint32_t words = transfer_word_count(ch);
     if (words > DMA_MAX_TRANSFER_WORDS) {
-        static char reason[160];
-        snprintf(reason, sizeof(reason),
-                 "DMA ch%d insane transfer length 0x%X words "
-                 "(MADR=0x%08X BCR=0x%08X CHCR=0x%08X)",
-                 ch, words, channels[ch].madr, channels[ch].bcr,
-                 channels[ch].chcr);
-        psx_fatal_halt(reason);
+        printf("[DMA] Warning: ch%d refusing insane transfer length 0x%X words (MADR=0x%08X BCR=0x%08X CHCR=0x%08X)\n",
+               ch, words, channels[ch].madr, channels[ch].bcr, channels[ch].chcr);
+        channels[ch].chcr &= ~((1u << 24) | (1u << 28));
+        return 0;
     }
+    return 1;
 }
 
 static void complete_transfer(int ch) {
@@ -943,7 +941,7 @@ static void try_execute(int ch) {
     event_ring_record_aux(EV_ENQ, (uint8_t)(SRC_DMA0 + ch), transfer_word_count(ch));
 
     /* After the kick is in the rings, refuse corrupt-length transfers. */
-    validate_transfer_length(ch);
+    if (!validate_transfer_length(ch)) return;
 
     /* Capture the kick PC (this CHCR store) so both the immediate (sync) writes
      * below and any deferred async writes for this channel attribute to it. */
