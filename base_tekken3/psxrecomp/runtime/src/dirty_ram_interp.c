@@ -867,14 +867,11 @@ static int abort_unsupported(uint32_t pc, uint32_t insn, const char *reason) {
  * non-local-call contract (the Whoopee-Camp splash wild-jr). dirty_ram_is_dirty()
  * keeps clean boot text on the fast compiled path; only overwritten pages divert. */
 static inline int phys_is_overlay_flow_region(uint32_t phys) {
-    if (phys >= 0x001E0000u && phys < RAM_SIZE) return 0;
-    return (phys >= DIRTY_RAM_KERNEL_WINDOW_END && phys < RAM_SIZE) || (phys >= 0x500 && phys < 0x4BA0);
+    return phys >= DIRTY_RAM_KERNEL_WINDOW_END || (phys >= 0x500 && phys < 0x4BA0);
 }
 
 static int is_local_dirty_target(uint32_t target) {
-    if ((target & 3u) != 0) return 0;
     uint32_t phys = target & 0x1FFFFFFFu;
-    if (phys < 0x1F000000u) phys &= (RAM_SIZE - 1u);
     return phys_is_overlay_flow_region(phys) && (dirty_ram_is_dirty(phys) || (phys >= 0x500 && phys < 0x4BA0));
 }
 
@@ -1685,16 +1682,10 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             CRET(CRES_PCCHAIN, 1);
 #undef CRET
         }
-        case 0x0C: { /* SYSCALL */
+        case 0x0C: /* SYSCALL */
             cpu->pc = pc;
-            int sys_ret = psx_syscall(cpu, (insn >> 6) & 0xFFFFFu);
-            if (!sys_ret && cpu->pc == 0) {
-                /* Void syscall handled inline (Enter/ExitCriticalSection).
-                 * Advance to next instruction instead of leaving null pc. */
-                cpu->pc = pc + 4;
-            }
-            return (cpu->pc != 0 && cpu->pc != pc + 4);
-        }
+            psx_syscall(cpu, (insn >> 6) & 0xFFFFFu);
+            return (cpu->pc != 0);
         case 0x0D: /* BREAK */
             psx_break(cpu, (insn >> 6) & 0xFFFFFu, pc);
             return 1;
@@ -2692,16 +2683,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         return 1;
     }
 #endif
-    if ((addr & 3u) != 0) {
-        return 0;
-    }
     uint32_t phys = addr & 0x1FFFFFFFu;
     if (phys < 0x1F000000u) {
         phys &= (RAM_SIZE - 1u);
         addr = 0x80000000u | phys;
-    }
-    if (phys >= 0x001E0000u && phys < RAM_SIZE) {
-        return 0;
     }
     int clean_game_text_miss = 0;
 
@@ -3046,11 +3031,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             g_dirty_ram_last_unsupported_pc     = g_unsupported_pc;
             g_dirty_ram_last_unsupported_insn   = g_unsupported_insn;
             g_dirty_ram_last_unsupported_reason = g_unsupported_reason;
-            printf("[DirtyInterp] Midblock unsupported opcode 0x%08X at pc=0x%08X (%s) entry=0x%08X insns=%d ra=0x%08X sp=0x%08X\n",
-                   g_unsupported_insn, g_unsupported_pc, g_unsupported_reason ? g_unsupported_reason : "none",
-                   addr, insns_executed, cpu->gpr[31], cpu->gpr[29]);
-            fflush(stdout);
-            psx_unknown_dispatch(cpu, g_unsupported_pc, g_unsupported_pc & 0x1FFFFFFFu);
+            cpu->pc = 0;
             OV_FPLOG_RET1();
         }
         g_dirty_ram_insns_run++;
@@ -3142,10 +3123,8 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             }
 #endif
             uint32_t target_phys = target & 0x1FFFFFFFu;
-            if (target_phys < 0x1F000000u) target_phys &= (RAM_SIZE - 1u);
             if (allow_local_dirty_flow && target != 0 &&
                 target != stop_addr &&
-                (target & 3u) == 0 &&
                 phys_is_overlay_flow_region(target_phys) &&
                 (dirty_ram_is_dirty(target_phys) || (target_phys >= 0x500 && target_phys < 0x4BA0))) {
                 /* A runtime overlay may start executing while its final code

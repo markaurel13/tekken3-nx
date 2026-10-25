@@ -32,6 +32,112 @@
 #define SPU_VOICE_COUNT    24
 #define SPU_BLOCK_SAMPLES  28
 
+/* -------------------------------------------------------------------------
+ * TEK AUDIO DIAG (solo Nintendo Switch) — instrumentacion de solo lectura.
+ *
+ * Cuenta quien escribe en la SPU y desde que PC invitado, para separar dos
+ * causas que producen el mismo sintoma (musica si, SFX no):
+ *   a) el driver de sonido del juego NO se ejecuta  -> w_total ~ 0
+ *   b) se ejecuta pero no recibe KEYON (SFX)        -> w_total > 0, w_keyon = 0
+ * No modifica ningun registro ni el estado de las voces. Se puede borrar
+ * entero cuando el diagnostico termine.
+ * ------------------------------------------------------------------------- */
+#if defined(__SWITCH__)
+extern uint32_t g_debug_last_store_pc;
+
+typedef struct SpuDiagSnapshot {
+    uint64_t w_total, w_voice, w_main, w_keyon, w_keyoff, w_cd, w_ctl, w_other;
+    uint64_t w_kon0;               /* escrituras a KEYON con mascara 0 (flush del driver) */
+    uint32_t kon_seq;              /* escrituras a KEYON != 0 (SFX reales)   */
+    uint32_t kon_pc[8];            /* ultimas 8: PC invitado que la emitio   */
+    uint32_t kon_val[8];           /*             mascara de 16 bits         */
+    uint32_t top_pc[4];            /* PCs que mas escriben en la SPU         */
+    uint32_t top_n[4];
+} SpuDiagSnapshot;
+
+typedef struct SpuDiagPcSlot { uint32_t pc, n; } SpuDiagPcSlot;
+
+static SpuDiagSnapshot s_diag;
+static SpuDiagPcSlot   s_diag_pcs[16];
+
+static void spu_diag_collect_top(void);
+
+void spu_diag_get(SpuDiagSnapshot* out)
+{
+    if (!out) return;
+    spu_diag_collect_top();
+    *out = s_diag;
+}
+
+static void spu_diag_pc_note(uint32_t pc)
+{
+    int free_slot = -1, min_slot = 0;
+    if (pc == 0u) return;
+    for (int i = 0; i < 16; i++) {
+        if (s_diag_pcs[i].pc == pc) { s_diag_pcs[i].n++; return; }
+        if (s_diag_pcs[i].pc == 0u && free_slot < 0) free_slot = i;
+        if (s_diag_pcs[i].n < s_diag_pcs[min_slot].n) min_slot = i;
+    }
+    if (free_slot >= 0) { s_diag_pcs[free_slot].pc = pc; s_diag_pcs[free_slot].n = 1u; }
+    else                { s_diag_pcs[min_slot].pc  = pc; s_diag_pcs[min_slot].n  = 1u; }
+}
+
+static void spu_diag_collect_top(void)
+{
+    for (int k = 0; k < 4; k++) { s_diag.top_pc[k] = 0u; s_diag.top_n[k] = 0u; }
+    for (int i = 0; i < 16; i++) {
+        if (s_diag_pcs[i].pc == 0u) continue;
+        for (int k = 0; k < 4; k++) {
+            if (s_diag_pcs[i].n > s_diag.top_n[k]) {
+                for (int m = 3; m > k; m--) {
+                    s_diag.top_n[m]  = s_diag.top_n[m - 1];
+                    s_diag.top_pc[m] = s_diag.top_pc[m - 1];
+                }
+                s_diag.top_n[k]  = s_diag_pcs[i].n;
+                s_diag.top_pc[k] = s_diag_pcs[i].pc;
+                break;
+            }
+        }
+    }
+}
+
+static void spu_diag_note_write(uint32_t addr, uint32_t value)
+{
+    uint32_t pc = g_debug_last_store_pc;
+    s_diag.w_total++;
+    if (addr < 0x1F801D80u) {
+        s_diag.w_voice++;                       /* 0x1C00..0x1D7F voz */
+    } else if (addr < 0x1F801D88u) {
+        s_diag.w_main++;                        /* volumen principal  */
+    } else if (addr < 0x1F801D8Cu) {
+        /* KON (voces 0-15 y 16-23). El driver de Tekken 3 vuelca 16 mitades
+         * desde una tabla sombra, asi que escribe KEYON=0 en cada flush:
+         * eso se cuenta aparte para no confundir "driver vivo" con "SFX". */
+        if ((value & 0xFFFFu) == 0u) {
+            s_diag.w_kon0++;
+        } else {
+            s_diag.w_keyon++;
+            s_diag.kon_pc[s_diag.kon_seq & 7u]  = pc;
+            s_diag.kon_val[s_diag.kon_seq & 7u] = value & 0xFFFFu;
+            s_diag.kon_seq++;
+            if (s_diag.kon_seq <= 64u)
+                printf("[SPUKeyOn] #%u pc=0x%08X mask=0x%04X val32=0x%08X reg=0x%08X\n",
+                       s_diag.kon_seq, pc, (unsigned)(value & 0xFFFFu),
+                       (unsigned)value, (unsigned)addr);
+        }
+    } else if (addr < 0x1F801D90u) {
+        s_diag.w_keyoff++;
+    } else if (addr == 0x1F801DAAu) {
+        s_diag.w_ctl++;                         /* SPUCNT */
+    } else if (addr >= 0x1F801DB0u && addr < 0x1F801DB4u) {
+        s_diag.w_cd++;                          /* volumen CD */
+    } else {
+        s_diag.w_other++;
+    }
+    spu_diag_pc_note(pc);
+}
+#endif
+
 static uint8_t  spu_ram[SPU_RAM_SIZE];
 static uint16_t spu_regs[SPU_REG_COUNT];
 static uint32_t transfer_addr;
@@ -1478,6 +1584,9 @@ void spu_write(uint32_t addr, uint32_t value) {
              * quantization audit (snesrecomp 8ffc797 class). */
             audio_trace_event(AUDIO_EV_REG_WRITE, addr, value & 0xFFFFu);
             spu_regs[idx] = (uint16_t)value;
+#if defined(__SWITCH__)
+            spu_diag_note_write(addr, value);   /* TEK AUDIO DIAG (solo lectura) */
+#endif
 
             /* Voice repeat/loop address (voice reg 7) is LIVE state on real
              * hardware: writing it after KEYON retargets where the next

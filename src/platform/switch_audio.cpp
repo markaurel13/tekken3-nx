@@ -9,6 +9,156 @@ extern "C" {
     void spu_render(int16_t* out_stereo, int frames);
 }
 
+// ---------------------------------------------------------------------------
+// DIAGNOSTICO TEMPORAL: por que suenan la musica (bus CD) y no los SFX (voces
+// SPU). Solo lectura: consulta el estado de la SPU y los taps de audio, no
+// altera ni un registro. Poner TEK_AUDIO_DIAG a 0 (o borrar el bloque) cuando
+// se localice la causa.
+// ---------------------------------------------------------------------------
+#include "spu.h"
+#include "audio_trace.h"
+
+#define TEK_AUDIO_DIAG 1
+
+#if TEK_AUDIO_DIAG
+/* Espejo exacto de SpuDiagSnapshot (spu.c, solo __SWITCH__). */
+extern "C" {
+typedef struct SpuDiagSnapshotC {
+    uint64_t w_total, w_voice, w_main, w_keyon, w_keyoff, w_cd, w_ctl, w_other;
+    uint64_t w_kon0;
+    uint32_t kon_seq;
+    uint32_t kon_pc[8];
+    uint32_t kon_val[8];
+    uint32_t top_pc[4];
+    uint32_t top_n[4];
+} SpuDiagSnapshotC;
+void spu_diag_get(SpuDiagSnapshotC* out);
+}
+static void tek_audio_diag(void)
+{
+    static unsigned s_call = 0;
+    static uint32_t s_prev_keyon = 0;
+    static uint64_t s_prev_render = 0;
+    static uint64_t s_prev_nz = 0;
+    static uint64_t s_prev_vox_aud = 0;
+    static uint64_t s_prev_spu_aud = 0;
+
+    if (++s_call % 60u != 0u) return;
+
+    SpuDebugInfo   d;  spu_debug_info(&d);
+    SpuGlobalState g;  spu_get_global_state(&g);
+    AudioTraceStats ts; audio_trace_get_stats(&ts);
+
+    printf("[SPUDiag] t=%us keyon=+%u/%u active=0x%06X endx=0x%06X ctrl=0x%04X "
+           "(en=%u cd=%u rev=%u) main_raw=(0x%04X,0x%04X) main=(%d,%d) cdvol=(%d,%d) "
+           "sweepL=0x%06X sweepR=0x%06X sweepMain=0x%X\n",
+           s_call / 60u,
+           (unsigned)(d.key_on_count - s_prev_keyon), (unsigned)d.key_on_count,
+           (unsigned)g.active_mask, (unsigned)g.endx, (unsigned)d.ctrl,
+           (unsigned)((d.ctrl >> 15) & 1u), (unsigned)(d.ctrl & 1u),
+           (unsigned)((d.ctrl >> 7) & 1u),
+           (unsigned)g.main_vol_l, (unsigned)g.main_vol_r,
+           (int)d.main_l, (int)d.main_r, (int)d.cd_l, (int)d.cd_r,
+           (unsigned)g.sweep_l_mask, (unsigned)g.sweep_r_mask,
+           (unsigned)g.sweep_main);
+
+    printf("[SPUMix] render=+%llu/%llu nonzero=+%llu peak_blk=%d peak_hist=%d "
+           "cd_push=%llu cd_under=%llu cd_ovf=%llu cd_frames=%u\n",
+           (unsigned long long)(d.render_frames - s_prev_render),
+           (unsigned long long)d.render_frames,
+           (unsigned long long)(d.nonzero_frames - s_prev_nz),
+           (int)d.last_peak, (int)d.peak,
+           (unsigned long long)d.cd_push_frames,
+           (unsigned long long)d.cd_underflow_frames,
+           (unsigned long long)d.cd_overflow_frames,
+           (unsigned)d.cd_frames);
+
+    /* Taps: audibles = frames con |sample| > 256 (~-42 dBFS). Si el tap de
+     * VOCES se queda clavado mientras el de SPU_OUT avanza, las voces no
+     * generan senal y lo que se oye es solo el bus CD. */
+    printf("[SPUTap] spu_out=+%llu aud=%llu pk=%d | voices=+%llu aud=+%llu/%llu pk=%d | "
+           "cd_in=+%llu aud=%llu pk=%d\n",
+           (unsigned long long)(ts.tap_frames[AUDIO_TAP_SPU_OUT] - s_prev_render),
+           (unsigned long long)(ts.tap_audible[AUDIO_TAP_SPU_OUT] - s_prev_spu_aud),
+           ts.tap_peak[AUDIO_TAP_SPU_OUT],
+           (unsigned long long)ts.tap_frames[AUDIO_TAP_VOICES],
+           (unsigned long long)(ts.tap_audible[AUDIO_TAP_VOICES] - s_prev_vox_aud),
+           (unsigned long long)ts.tap_audible[AUDIO_TAP_VOICES],
+           ts.tap_peak[AUDIO_TAP_VOICES],
+           (unsigned long long)ts.tap_frames[AUDIO_TAP_CD_IN],
+           (unsigned long long)ts.tap_audible[AUDIO_TAP_CD_IN],
+           ts.tap_peak[AUDIO_TAP_CD_IN]);
+
+    /* Banco de samples en SPU RAM: si esta todo a cero es que el juego nunca
+     * subio su banco (DMA4) y las voces solo pueden reproducir silencio. */
+    {
+        const uint8_t* ram = spu_get_ram();
+        uint32_t nz = 0;
+        if (ram) for (uint32_t i = 0; i < 512u * 1024u; i++) if (ram[i]) nz++;
+        printf("[SPURam] nonzero=%u/%u\n", (unsigned)nz, 512u * 1024u);
+    }
+
+    /* Voces vivas: env>0 y volumen distinto de cero = deberia oirse. Si no
+     * hay ninguna activa en los menus, el juego no esta pidiendo SFX. */
+    {
+        int shown = 0;
+        for (int v = 0; v < 24; v++) {
+            SpuVoiceState vs;
+            spu_get_voice_state(v, &vs);
+            if (!vs.active && vs.env_level == 0) continue;
+            const uint8_t* ram = spu_get_ram();
+            const uint8_t* blk = ram ? ram + (vs.cur_addr & (512u * 1024u - 1u)) : nullptr;
+            printf("[SPUVox] v%d act=%d adsr=%d env=%04X vol=(%d,%d) pitch=%04X "
+                   "cur=%05X loop=%05X adpcm=%02X%02X%02X%02X%02X%02X%02X%02X\n",
+                   v, vs.active, (int)vs.adsr_phase, (unsigned)vs.env_level,
+                   (int)vs.vol_cur_l, (int)vs.vol_cur_r, (unsigned)vs.pitch,
+                   (unsigned)vs.cur_addr, (unsigned)vs.repeat_addr,
+                   blk ? blk[0] : 0u, blk ? blk[1] : 0u, blk ? blk[2] : 0u,
+                   blk ? blk[3] : 0u, blk ? blk[4] : 0u, blk ? blk[5] : 0u,
+                   blk ? blk[6] : 0u, blk ? blk[7] : 0u);
+            if (++shown >= 6) break;
+        }
+        if (!shown) printf("[SPUVox] (ninguna voz activa)\n");
+    }
+
+    /* Quien escribe en la SPU: si el driver de sonido del juego esta vivo,
+     * w_voice sube cada frame (actualiza volumen/pitch/ADSR de las voces).
+     * Si w_total se queda en 0 mientras hay musica, el driver no se ejecuta
+     * y por eso nunca llega un KEYON de SFX. */
+    {
+        SpuDiagSnapshotC sd; spu_diag_get(&sd);
+        static uint64_t p_tot = 0, p_voice = 0, p_main = 0, p_kon = 0,
+                        p_koff = 0, p_ctl = 0, p_cd = 0, p_oth = 0, p_kon0 = 0;
+        printf("[SPUWr] tot=+%llu voice=+%llu main=+%llu keyon(nz)=+%llu kon0=+%llu "
+               "koff=+%llu ctl=+%llu cd=+%llu other=+%llu kon_total=%u\n",
+               (unsigned long long)(sd.w_total - p_tot),
+               (unsigned long long)(sd.w_voice - p_voice),
+               (unsigned long long)(sd.w_main - p_main),
+               (unsigned long long)(sd.w_keyon - p_kon),
+               (unsigned long long)(sd.w_kon0 - p_kon0),
+               (unsigned long long)(sd.w_keyoff - p_koff),
+               (unsigned long long)(sd.w_ctl - p_ctl),
+               (unsigned long long)(sd.w_cd - p_cd),
+               (unsigned long long)(sd.w_other - p_oth),
+               (unsigned)sd.kon_seq);
+        printf("[SPUWr] topPC %08X:%u %08X:%u %08X:%u %08X:%u\n",
+               (unsigned)sd.top_pc[0], (unsigned)sd.top_n[0],
+               (unsigned)sd.top_pc[1], (unsigned)sd.top_n[1],
+               (unsigned)sd.top_pc[2], (unsigned)sd.top_n[2],
+               (unsigned)sd.top_pc[3], (unsigned)sd.top_n[3]);
+        p_tot = sd.w_total; p_voice = sd.w_voice; p_main = sd.w_main;
+        p_kon = sd.w_keyon; p_koff = sd.w_keyoff; p_ctl = sd.w_ctl;
+        p_cd = sd.w_cd; p_oth = sd.w_other; p_kon0 = sd.w_kon0;
+    }
+
+    s_prev_keyon   = d.key_on_count;
+    s_prev_render  = d.render_frames;
+    s_prev_nz      = d.nonzero_frames;
+    s_prev_vox_aud = ts.tap_audible[AUDIO_TAP_VOICES];
+    s_prev_spu_aud = ts.tap_audible[AUDIO_TAP_SPU_OUT];
+}
+#endif
+
 SwitchAudio& SwitchAudio::Instance() {
     static SwitchAudio s_instance;
     return s_instance;
@@ -187,6 +337,10 @@ void SwitchAudio::Update() {
                (unsigned long long)s_total_queued,
                m_currentBuffer);
     }
+
+#if TEK_AUDIO_DIAG
+    tek_audio_diag();
+#endif
 }
 
 void SwitchAudio::QueueFrames(const int16_t* pcmStereo, size_t frames) {

@@ -1645,22 +1645,14 @@ int main(int argc, char** argv) {
 
         ds << "/* Exact static-code validity for this entry's emitted CFG ranges. */\n";
         ds << "int psx_game_text_native_ok(uint32_t addr) {\n";
-        ds << "    if ((addr & 0x1FFFFFFFu) < 0x1F000000u) {\n";
-        ds << "        addr = 0x80000000u | (addr & 0x001FFFFFu);\n";
-        ds << "    }\n";
         ds << "    const PsxGameDispatchEntry* entry = psx_game_find_entry(addr);\n";
         ds << "    if (!entry || entry->range_count == 0) return 0;\n";
-        ds << "    if (!dirty_ram_text_native_ok_ranges_from(\n";
-        ds << "        &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count, addr)) return 0;\n";
-        ds << "    extern int dirty_ram_text_native_ok(uint32_t phys);\n";
-        ds << "    return dirty_ram_text_native_ok(addr & 0x1FFFFFFFu);\n";
+        ds << "    return dirty_ram_text_native_ok_ranges_from(\n";
+        ds << "        &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count, addr);\n";
         ds << "}\n\n";
 
         ds << "/* Maps PS1 address to compiled game code. Returns 1 if dispatched, 0 if unknown. */\n";
         ds << "int psx_dispatch_game_compiled(CPUState* cpu, uint32_t addr) {\n";
-        ds << "    if ((addr & 0x1FFFFFFFu) < 0x1F000000u) {\n";
-        ds << "        addr = 0x80000000u | (addr & 0x001FFFFFu);\n";
-        ds << "    }\n";
         ds << "    const PsxGameDispatchEntry* entry = psx_game_find_entry(addr);\n";
         ds << "    if (!entry) {\n";
         ds << "        dirty_native_game_miss_reason_record(addr & 0x1FFFFFFFu, 0u);\n";
@@ -1674,13 +1666,6 @@ int main(int argc, char** argv) {
         ds << "            &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count, addr)) {\n";
         ds << "        dirty_native_game_miss_reason_record(addr & 0x1FFFFFFFu, 2u);\n";
         ds << "        return 0;\n";
-        ds << "    }\n";
-        ds << "    {\n";
-        ds << "        extern int dirty_ram_text_native_ok(uint32_t phys);\n";
-        ds << "        if (!dirty_ram_text_native_ok(addr & 0x1FFFFFFFu)) {\n";
-        ds << "            dirty_native_game_miss_reason_record(addr & 0x1FFFFFFFu, 2u);\n";
-        ds << "            return 0;\n";
-        ds << "        }\n";
         ds << "    }\n";
         ds << "    psx_check_interrupts_dispatch_entry(cpu, addr);\n";
         if (codegen.cps_enabled())

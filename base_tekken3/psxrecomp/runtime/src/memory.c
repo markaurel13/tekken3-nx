@@ -1654,23 +1654,6 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
     e->frame = (uint32_t)s_frame_count;
 }
 
-/* Stack-window store ring (diagnostic): records every CPU word/half store into
- * the top 64KB of RAM so a post-mortem can find who wrote a bogus saved-$ra
- * slot. Stores that never appear here came from a non-CPU writer (DMA/GTE). */
-#define SW_RING_CAP 65536u
-typedef struct { uint32_t pc, addr, val, old, sp, ra, frame; uint8_t size, dma; } SwEntry;
-SwEntry  g_sw_ring[SW_RING_CAP];
-uint64_t g_sw_seq = 0;
-static inline void sw_note(uint32_t phys, uint32_t val, uint32_t old, uint8_t size) {
-    if (phys < 0x001F0000u || phys >= 0x00200000u) return;
-    extern CPUState *debug_cpu_ptr;
-    SwEntry *e = &g_sw_ring[g_sw_seq++ & (SW_RING_CAP - 1u)];
-    e->pc = g_debug_last_store_pc; e->addr = 0x80000000u | phys; e->val = val; e->old = old;
-    e->sp = debug_cpu_ptr ? debug_cpu_ptr->gpr[29] : 0;
-    e->ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0;
-    e->frame = (uint32_t)s_frame_count; e->size = size; e->dma = (uint8_t)(g_dma_exec_depth > 0);
-}
-
 static void psx_write_word_raw(uint32_t addr, uint32_t val);
 extern void gte_precision_invalidate_word(uint32_t addr);
 void psx_write_word(uint32_t addr, uint32_t val) {
@@ -1702,11 +1685,6 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     if (sr_ptr && (*sr_ptr & 0x10000u)) return;
 
     uint32_t phys = psx_phys_addr(addr);
-    if (phys >= 0x001F0000u && phys < 0x00200000u) {
-        uint32_t old_w = (uint32_t)ram[phys] | ((uint32_t)ram[phys + 1] << 8) |
-                         ((uint32_t)ram[phys + 2] << 16) | ((uint32_t)ram[phys + 3] << 24);
-        sw_note(phys, val, old_w, 4);
-    }
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
         if (__builtin_expect(phys == 0u && fntrace_is_game_started(), 0)) {
@@ -1723,9 +1701,6 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
             case 0x800125ACu:
                 return;
             }
-        }
-        if (__builtin_expect(phys >= 0x00024140u && phys < 0x00095000u && fntrace_is_game_started(), 0)) {
-            return;
         }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, val, 4);
@@ -1807,9 +1782,6 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         debug_server_trace_write_check(phys, read_ram_word(phys), val, 4);
         parity_trace_note_write(phys, 4, effective_store_pc());
         card_data_writes_check(phys, val, 4);
-        if (__builtin_expect(phys >= 0x00024140u && phys < 0x00095000u && fntrace_is_game_started(), 0)) {
-            return;
-        }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, val, 4);
         overlay_watch_note_write(phys, 4);
@@ -1936,14 +1908,8 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
     uint32_t phys = psx_phys_addr(addr);
-    if (phys >= 0x001F0000u && phys < 0x00200000u) {
-        sw_note(phys, (uint32_t)val, (uint32_t)ram[phys] | ((uint32_t)ram[phys + 1] << 8), 2);
-    }
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
-        if (__builtin_expect(phys >= 0x00024140u && phys < 0x00095000u && fntrace_is_game_started(), 0)) {
-            return;
-        }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, (uint32_t)val, 2);
         ram[phys]     = (uint8_t)(val);
@@ -1956,9 +1922,6 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         debug_server_trace_write_check(phys, (uint32_t)read_ram_half(phys), (uint32_t)val, 2);
         parity_trace_note_write(phys, 2, effective_store_pc());
         card_data_writes_check(phys, (uint32_t)val, 2);
-        if (__builtin_expect(phys >= 0x00024140u && phys < 0x00095000u && fntrace_is_game_started(), 0)) {
-            return;
-        }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, (uint32_t)val, 2);
         overlay_watch_note_write(phys, 2);
@@ -2292,14 +2255,8 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
     uint32_t phys = psx_phys_addr(addr);
-    if (phys >= 0x001F0000u && phys < 0x00200000u) {
-        sw_note(phys, (uint32_t)val, (uint32_t)ram[phys], 1);
-    }
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
-        if (__builtin_expect(phys >= 0x00024140u && phys < 0x00095000u && fntrace_is_game_started(), 0)) {
-            return;
-        }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, (uint32_t)val, 1);
         ram[phys] = val;
@@ -2311,9 +2268,6 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
         debug_server_trace_write_check(phys, (uint32_t)ram[phys], (uint32_t)val, 1);
         parity_trace_note_write(phys, 1, effective_store_pc());
         card_data_writes_check(phys, (uint32_t)val, 1);
-        if (__builtin_expect(phys >= 0x00024140u && phys < 0x00095000u && fntrace_is_game_started(), 0)) {
-            return;
-        }
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, (uint32_t)val, 1);
         overlay_watch_note_write(phys, 1);
