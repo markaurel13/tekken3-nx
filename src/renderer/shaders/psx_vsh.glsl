@@ -29,7 +29,7 @@ void main()
     const float shift = 0.484375; // 0.5 - 1.0/64.0 (alineación de píxeles enteros PS1)
     vec2 ndc;
     ndc.x = (inPos.x + shift) / 512.0 - 1.0;
-    ndc.y = (inPos.y + shift) / 256.0 - 1.0;
+    ndc.y = 1.0 - (inPos.y + shift) / 256.0;
 
     gl_Position = vec4(ndc, 0.0, 1.0);
     outUV = inUV;

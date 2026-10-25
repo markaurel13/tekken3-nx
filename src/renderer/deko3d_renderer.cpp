@@ -446,11 +446,12 @@ void Deko3DRenderer::FlushBatch() {
     static uint64_t s_flush_count = 0;
     s_flush_count++;
     if (s_flush_count <= 10 || (s_flush_count % 300) == 0) {
-        printf("[Deko3D] FlushBatch #%llu: cnt=%u clip=(%d,%d..%d,%d) abs=%d v0=(%.1f,%.1f) uv0=(%.1f,%.1f) flags=0x%x\n",
+        printf("[Deko3D] FlushBatch #%llu: cnt=%u clip=(%d,%d..%d,%d) abs=%d v0=(%.1f,%.1f) uv0=(%.1f,%.1f) tp=0x%x clut=0x%x flags=0x%x\n",
                (unsigned long long)s_flush_count, count,
                m_clipX1, m_clipY1, m_clipX2, m_clipY2, isAbsolute ? 1 : 0,
                m_vtxRingCpu[m_vtxBatchStart].pos[0], m_vtxRingCpu[m_vtxBatchStart].pos[1],
                m_vtxRingCpu[m_vtxBatchStart].uv[0], m_vtxRingCpu[m_vtxBatchStart].uv[1],
+               m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0], m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1],
                m_vtxRingCpu[m_vtxBatchStart].flags);
         fflush(stdout);
     }
