@@ -70,7 +70,7 @@ void main()
     int iv = int(floor(inUV.y));
     int raw = fetch_texel(iu, iv, depth, base_x, base_y, clut_x, clut_y);
 
-    // En PS1, pixel 0 es transparente (cutout)
+    // Transparencia estándar de PS1: Si el texel es 0, descartar fragmento
     if (raw == 0) {
         discard;
     }

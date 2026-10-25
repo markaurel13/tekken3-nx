@@ -43,6 +43,11 @@ static inline void PS1Color24ToRGBA8(uint32_t c, uint8_t rgba[4]) {
     rgba[3] = 255;
 }
 
+static void DekoDebugCallback(void* userData, const char* context, DkResult result, const char* message) {
+    printf("[Deko3D Debug] ctx='%s' res=%d msg='%s'\n", context ? context : "", (int)result, message ? message : "");
+    fflush(stdout);
+}
+
 Deko3DRenderer& Deko3DRenderer::Instance() {
     static Deko3DRenderer s_instance;
     return s_instance;
@@ -94,8 +99,8 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
     printf("[Deko3D] Inicializando pipeline gráfico acelerado por GPU Tegra X1...\n");
     fflush(stdout);
 
-    // 1. Crear Device y Graphics Queue
-    m_device = dk::DeviceMaker{}.create();
+    // 1. Crear Device con depurador y Graphics Queue
+    m_device = dk::DeviceMaker{}.setCbDebug(DekoDebugCallback).create();
     m_queue = dk::QueueMaker{m_device}.setFlags(DkQueueFlags_Graphics).create();
 
     // 2. Asignar Memoria GPU
@@ -224,6 +229,14 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
     m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 1);
     m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 1);
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Descriptors);
+
+    // Limpiar m_vramTexture a negro inicial
+    dk::ImageView vramTarget{ m_vramTexture };
+    m_cmdBuf.bindRenderTargets(&vramTarget);
+    m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+    m_cmdBuf.bindRenderTargets({});
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+
     m_queue.submitCommands(m_cmdBuf.finishList());
     m_queue.waitIdle();
 
@@ -233,7 +246,8 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
 
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
-    m_stagingUploadOffset = 0x600000;
+    m_stagingUploadOffset = 0x700000;
+    m_vramDirty = true;
     m_initialized = true;
 
     printf("[Deko3D] Hardware GPU Renderer activo (60 FPS target).\n");
@@ -249,7 +263,7 @@ void Deko3DRenderer::BeginFrame() {
 
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
-    m_stagingUploadOffset = 0x600000;
+    m_stagingUploadOffset = 0x700000;
 }
 
 void Deko3DRenderer::Shutdown() {
@@ -326,11 +340,49 @@ void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, cons
     m_vtxRingCpu[m_vtxAllocated + 1] = v1;
     m_vtxRingCpu[m_vtxAllocated + 2] = v2;
     m_vtxAllocated += 3;
+    __asm__ __volatile__("dsb sy" ::: "memory");
+}
+
+void Deko3DRenderer::SyncRawVram() {
+    if (!m_vramDirty || !m_vram) return;
+
+    // PS1 VRAM es exactamente 1024x512 palabras de 16 bits = 1,048,576 bytes (1 MB)
+    const size_t rawVramSize = VramWidth * VramHeight * sizeof(uint16_t);
+    const uint32_t rawOffset = 0x600000; // Offset dedicado en m_memStaging
+    uint8_t* dst = (uint8_t*)m_memStaging.getCpuAddr() + rawOffset;
+
+    memcpy(dst, m_vram, rawVramSize);
+    m_memStaging.flushCpuCache(rawOffset, rawVramSize);
+
+    dk::ImageView rawView{ m_rawVramImage };
+    // Con w = 1024, el pitch = 1024 * 2 = 2048 bytes (alineado a 512 bytes, múltiplo perfecto para Maxwell 2D)
+    m_cmdBuf.copyBufferToImage(
+        { m_memStaging.getGpuAddr() + rawOffset, 0, 0 },
+        rawView,
+        { 0, 0, 0, VramWidth, VramHeight, 1 }
+    );
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+
+    static uint64_t s_sync_count = 0;
+    s_sync_count++;
+    if (s_sync_count <= 5 || (s_sync_count % 300) == 0) {
+        uint32_t nz = 0;
+        for (size_t i = 0; i < VramWidth * VramHeight; i++) {
+            if (m_vram[i]) nz++;
+        }
+        printf("[Deko3D] SyncRawVram #%llu: non_zero_texels=%u / 524288\n",
+               (unsigned long long)s_sync_count, nz);
+        fflush(stdout);
+    }
+
+    m_vramDirty = false;
 }
 
 void Deko3DRenderer::FlushBatch() {
     uint32_t count = m_vtxAllocated - m_vtxBatchStart;
     if (count == 0) return;
+
+    SyncRawVram();
 
     // 1. Configurar Uniforms de Viewport y Texture Window
     m_viewportUboCpu->screenSize[0] = (float)VramWidth;
@@ -364,8 +416,7 @@ void Deko3DRenderer::FlushBatch() {
         if (scX < 0) { scW += scX; scX = 0; }
         if (scY < 0) { scH += scY; scY = 0; }
         if (scW > (int)VramWidth - scX) scW = (int)VramWidth - scX;
-        if (scH > (int)VramHeight - scY) scH = (int)VramHeight - scY;
-        if (scW <= 0 || scH <= 0) { scX = 0; scY = 0; scW = 0; scH = 0; }
+        if (scW <= 0 || scH <= 0) { scX = 0; scY = 0; scW = VramWidth; scH = VramHeight; }
         DkScissor scissor{ (uint32_t)scX, (uint32_t)scY, (uint32_t)scW, (uint32_t)scH };
         m_cmdBuf.setScissors(0, { scissor });
     }
@@ -415,8 +466,7 @@ void Deko3DRenderer::FlushBatch() {
     m_cmdBuf.bindColorWriteState(cwState);
 
     // 6. Vincular Shaders, Descriptores y Uniform Buffers
-    DkShader const shaders[] = { m_vsh, m_fsh };
-    m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, shaders);
+    m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
 
     m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
     m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
@@ -440,18 +490,25 @@ void Deko3DRenderer::FlushBatch() {
     m_cmdBuf.bindVtxBuffers(0, { { m_vtxRingGpu, (uint32_t)(MaxVerticesPerFrame * sizeof(PS1Vertex)) } });
 
     // 8. Barrera de memoria y ejecución del Draw Call
-    m_cmdBuf.barrier(DkBarrier_Primitives, DkInvalidateFlags_Shader | DkInvalidateFlags_Descriptors);
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    m_cmdBuf.barrier(DkBarrier_Primitives, DkInvalidateFlags_Shader | DkInvalidateFlags_Descriptors | DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
     m_cmdBuf.draw(DkPrimitive_Triangles, count, 1, m_vtxBatchStart, 0);
 
     static uint64_t s_flush_count = 0;
     s_flush_count++;
     if (s_flush_count <= 10 || (s_flush_count % 300) == 0) {
-        printf("[Deko3D] FlushBatch #%llu: cnt=%u clip=(%d,%d..%d,%d) abs=%d v0=(%.1f,%.1f) uv0=(%.1f,%.1f) tp=0x%x clut=0x%x flags=0x%x\n",
+        uint16_t tp = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0];
+        uint16_t clut = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1];
+        uint32_t clut_x = (clut & 0x3Fu) * 16u;
+        uint32_t clut_y = (clut >> 6u) & 0x1FFu;
+        uint16_t c0 = m_vram ? m_vram[clut_y * VramWidth + clut_x] : 0;
+        uint16_t c1 = m_vram ? m_vram[clut_y * VramWidth + clut_x + 1] : 0;
+        printf("[Deko3D] FlushBatch #%llu: cnt=%u clip=(%d,%d..%d,%d) abs=%d v0=(%.1f,%.1f) uv0=(%.1f,%.1f) tp=0x%x clut=0x%x(c0=0x%04x,c1=0x%04x) flags=0x%x\n",
                (unsigned long long)s_flush_count, count,
                m_clipX1, m_clipY1, m_clipX2, m_clipY2, isAbsolute ? 1 : 0,
                m_vtxRingCpu[m_vtxBatchStart].pos[0], m_vtxRingCpu[m_vtxBatchStart].pos[1],
                m_vtxRingCpu[m_vtxBatchStart].uv[0], m_vtxRingCpu[m_vtxBatchStart].uv[1],
-               m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0], m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1],
+               tp, clut, c0, c1,
                m_vtxRingCpu[m_vtxBatchStart].flags);
         fflush(stdout);
     }
@@ -566,6 +623,9 @@ void Deko3DRenderer::DrawTexturedRectScaled(int x, int y, int w, int h,
 
 void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
     sw_fill_rect(x, y, w, h, color);
+    m_vramDirty = true;
+
+    FlushBatch();
 
     uint8_t rgba[4];
     PS1ColorToRGBA8(color, rgba);
@@ -581,19 +641,19 @@ void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
 
     PushTriangle(v0, v1, v2);
     PushTriangle(v1, v3, v2);
+
+    FlushBatch();
 }
 
 void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
     sw_copy_rect(sx, sy, dx, dy, w, h);
+    m_vramDirty = true;
     if (!m_initialized || w <= 0 || h <= 0) return;
 
     FlushBatch();
 
-    dk::ImageView rawView{ m_rawVramImage };
     dk::ImageView vramTexView{ m_vramTexture };
 
-    m_cmdBuf.copyImage(rawView, { (uint32_t)sx, (uint32_t)sy, 0, (uint32_t)w, (uint32_t)h, 1 },
-                       rawView, { (uint32_t)dx, (uint32_t)dy, 0, (uint32_t)w, (uint32_t)h, 1 });
     m_cmdBuf.copyImage(vramTexView, { (uint32_t)sx, (uint32_t)sy, 0, (uint32_t)w, (uint32_t)h, 1 },
                        vramTexView, { (uint32_t)dx, (uint32_t)dy, 0, (uint32_t)w, (uint32_t)h, 1 });
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
@@ -603,6 +663,7 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     if (!m_initialized || !data || w <= 0 || h <= 0) return;
 
     sw_vram_transfer_in(x, y, w, h, data);
+    m_vramDirty = true;
 
     FlushBatch();
 
@@ -619,36 +680,31 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     if (x + w > (int)VramWidth) w = (int)VramWidth - x;
     if (y + h > (int)VramHeight) h = (int)VramHeight - y;
 
-    size_t uploadBytes16 = (size_t)w * h * sizeof(uint16_t);
-    size_t uploadBytes32 = (size_t)w * h * sizeof(uint32_t);
-    uint32_t align16 = (uint32_t)((uploadBytes16 + 511u) & ~511u);
+    // Pitch alineado estrictamente a 32 bytes para el Maxwell 2D Copy Engine de Tegra X1
+    uint32_t pitch32 = (w * sizeof(uint32_t) + 31u) & ~31u;
+    size_t uploadBytes32 = (size_t)pitch32 * h;
     uint32_t align32 = (uint32_t)((uploadBytes32 + 511u) & ~511u);
-    uint32_t totalNeeded = align16 + align32;
 
-    // Si nos pasamos de los 16 MB del staging buffer, enviar comandos a GPU y sincronizar
-    if (m_stagingUploadOffset + totalNeeded > 16 * 1024 * 1024) {
+    // Buffer circular de staging dinámico (0x700000 .. 16 MB = 9 MB)
+    if (m_stagingUploadOffset + align32 > 16 * 1024 * 1024) {
         FlushBatch();
         m_queue.submitCommands(m_cmdBuf.finishList());
         m_queue.waitIdle();
         m_cmdBuf.clear();
         m_cmdBuf.addMemory(m_memData, 0, CmdBufferSize);
-        m_stagingUploadOffset = 0x600000;
+        m_stagingUploadOffset = 0x700000;
         m_vtxAllocated = 0;
         m_vtxBatchStart = 0;
     }
 
-    uint32_t uploadOffset16 = m_stagingUploadOffset;
-    uint32_t uploadOffset32 = uploadOffset16 + align16;
-    m_stagingUploadOffset += totalNeeded;
+    uint32_t uploadOffset32 = m_stagingUploadOffset;
+    m_stagingUploadOffset += align32;
 
-    uint16_t* dst16 = (uint16_t*)((uint8_t*)m_memStaging.getCpuAddr() + uploadOffset16);
-    uint32_t* dst32 = (uint32_t*)((uint8_t*)m_memStaging.getCpuAddr() + uploadOffset32);
+    uint8_t* dst32Base = (uint8_t*)m_memStaging.getCpuAddr() + uploadOffset32;
 
     for (int row = 0; row < h; row++) {
         const uint16_t* srcRow = data + (size_t)row * w;
-        uint16_t* dRow16 = dst16 + (size_t)row * w;
-        uint32_t* dRow32 = dst32 + (size_t)row * w;
-        memcpy(dRow16, srcRow, (size_t)w * sizeof(uint16_t));
+        uint32_t* dRow32 = (uint32_t*)(dst32Base + (size_t)row * pitch32);
         for (int col = 0; col < w; col++) {
             uint16_t c = srcRow[col];
             uint32_t r5 = c & 0x1Fu;
@@ -661,18 +717,10 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
         }
     }
 
-    m_memStaging.flushCpuCache(uploadOffset16, uploadBytes16);
     m_memStaging.flushCpuCache(uploadOffset32, uploadBytes32);
 
-    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_L2Cache);
-
-    dk::ImageView rawView{ m_rawVramImage };
-    m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset16, 0, 0 },
-                               rawView,
-                               { (uint32_t)x, (uint32_t)y, 0, (uint32_t)w, (uint32_t)h, 1 });
-
     dk::ImageView vramTexView{ m_vramTexture };
-    m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset32, 0, 0 },
+    m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset32, pitch32, 0 },
                                vramTexView,
                                { (uint32_t)x, (uint32_t)y, 0, (uint32_t)w, (uint32_t)h, 1 });
 
@@ -839,7 +887,6 @@ static void dk_draw_textured_rect(int x, int y, int w, int h, int u, int v,
 static void dk_draw_textured_rect_scaled(int x, int y, int w, int h,
                                         int u0, int v0, int u1, int v1,
                                         uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
-    sw_draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, clut_x, clut_y, texpage);
     Deko3DRenderer::Instance().DrawTexturedRectScaled(x, y, w, h, u0, v0, u1, v1, clut_x, clut_y, texpage);
 }
 

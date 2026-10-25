@@ -842,7 +842,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v12 - Step 1A Deko3D NDC Scissor Alignment & Hardware Rasterizer Fix)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v14 - Step 1A Revert pitch32 byte stride & Red Shader Diagnostic)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {

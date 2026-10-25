@@ -96,6 +96,7 @@ private:
     bool LoadShader(dk::Shader& shader, dk::MemBlock& block, uint32_t offset, const char* path);
     void PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2);
     void FlushBatch();
+    void SyncRawVram();
 
     uint16_t* m_vram = nullptr;
     int m_offsetX = 0;
