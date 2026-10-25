@@ -401,6 +401,11 @@ static void fire_vblank_edge(void) {
     g_vblank_raise_count++;
     event_ring_record(EV_ISTAT_RAISE, IRQ_VBLANK);
     gpu_vblank_tick();  /* Toggle LCF (GPUSTAT bit 31) */
+    {
+        extern void memory_log_frame_prim_diag(uint32_t frame);
+        extern uint64_t s_frame_count;
+        memory_log_frame_prim_diag((uint32_t)s_frame_count);
+    }
 #ifndef PSX_ENABLE_BLOCK_CYCLES
     timers_tick(33868); /* ~1 NTSC frame worth of cycles */
     cdrom_tick();      /* Process pending CDROM responses */

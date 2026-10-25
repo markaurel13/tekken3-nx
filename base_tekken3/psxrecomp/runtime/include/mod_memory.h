@@ -38,6 +38,8 @@ static inline uint32_t psx_mod_gpu_dma_resolve_address_for(
     if (psx_mod_gpu_dma_aperture_offset_for(
             canonical, 4u, used, (uint32_t *)0))
         return canonical;
+    if (canonical < 0x00800000u)
+        return canonical;
     return canonical & 0x001FFFFCu;
 }
 

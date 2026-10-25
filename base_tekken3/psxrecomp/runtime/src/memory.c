@@ -30,12 +30,14 @@
 #include <string.h>
 
 #define RAM_SIZE        (2 * 1024 * 1024)
+#define RAM_OVERFLOW_SIZE (6u * 1024u * 1024u)
 #define SCRATCHPAD_SIZE 1024
 #define BIOS_ROM_SIZE   (512 * 1024)
 #define MOD_MEMORY_BASE 0x1F000000u
 #define MOD_MEMORY_SIZE (1u * 1024u * 1024u)
 
 static uint8_t ram[RAM_SIZE];
+static uint8_t s_ram_overflow[RAM_OVERFLOW_SIZE];
 static uint8_t scratchpad[SCRATCHPAD_SIZE];
 static uint8_t bios_rom[BIOS_ROM_SIZE];
 static uint8_t mod_memory[MOD_MEMORY_SIZE];
@@ -100,15 +102,10 @@ int g_psx_load_delay = -1;
 
 /* Physical address translation for guest accesses. The 2 MB main RAM is
  * mirrored 4x across the first 8 MB of each segment (mem-ctrl RAM_SIZE
- * register, default 0x0B88) and games rely on it — Kula World's crt0
- * parks $sp in the 4th mirror (0x807FFFF8). Fold the mirrors here so the
- * RAM bounds checks below see canonical offsets; without this, mirror
- * writes fell into the open-bus no-op and mirror reads returned 0 (the
- * guest's stack silently vanished and $ra came back as 0). */
+/* Physical address translation for guest accesses.
+ * The 8 MB window (0..0x7FFFFF) is backed by 2 MB RAM + 6 MB extended RAM aperture. */
 static inline uint32_t psx_phys_addr(uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys < 0x00800000u) phys &= (uint32_t)(RAM_SIZE - 1);
-    return phys;
+    return addr & 0x1FFFFFFFu;
 }
 
 /* Expose RAM pointer for oracle comparison (find_first_divergence). */
@@ -1075,6 +1072,7 @@ uint32_t memory_get_bios_checksum(void) { return s_bios_checksum; }
 
 void memory_init(const char* bios_path) {
     memset(ram, 0, sizeof(ram));
+    memset(s_ram_overflow, 0, sizeof(s_ram_overflow));
     memset(scratchpad, 0, sizeof(scratchpad));
     /* Rematch re-enters without process exit — wipe sticky I/O regs that
      * live outside device *_init (I_STAT/I_MASK cleared in interrupts_init). */
@@ -1579,6 +1577,12 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
         if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(phys, v);
         return v;
     }
+    if (phys < 0x00800000u) {
+        uint32_t off = phys - RAM_SIZE;
+        uint32_t v;
+        memcpy(&v, &s_ram_overflow[off], sizeof(v));
+        return v;
+    }
     {
         uint32_t off;
         if (mod_gpu_dma_memory_offset(phys, 4u, &off)) {
@@ -1656,6 +1660,42 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
 
 static void psx_write_word_raw(uint32_t addr, uint32_t val);
 extern void gte_precision_invalidate_word(uint32_t addr);
+
+/* Primitive buffer diagnostic tracker */
+static uint32_t s_prim_min_addr = 0xFFFFFFFFu;
+static uint32_t s_prim_max_addr = 0x00000000u;
+static uint32_t s_prim_stores = 0;
+
+void memory_track_prim_store(uint32_t addr) {
+    if (addr < s_prim_min_addr) s_prim_min_addr = addr;
+    if (addr > s_prim_max_addr) s_prim_max_addr = addr;
+    s_prim_stores++;
+}
+
+void memory_log_frame_prim_diag(uint32_t frame) {
+    if (s_prim_stores > 0) {
+        if ((frame % 120 == 0) || (s_prim_max_addr >= 0x801F0000u)) {
+            printf("[PrimDiag] f=%u stores=%u range=[0x%08X..0x%08X] span=%u KB\n",
+                   frame, s_prim_stores, s_prim_min_addr, s_prim_max_addr,
+                   (s_prim_max_addr >= s_prim_min_addr) ? (s_prim_max_addr - s_prim_min_addr) / 1024u : 0u);
+            fflush(stdout);
+        }
+        s_prim_min_addr = 0xFFFFFFFFu;
+        s_prim_max_addr = 0x00000000u;
+        s_prim_stores = 0;
+    }
+}
+
+static inline void log_extended_ram_store(uint32_t addr, uint32_t val, uint32_t width) {
+    static uint32_t s_extended_reports = 0;
+    if (__builtin_expect(s_extended_reports < 30, 0)) {
+        s_extended_reports++;
+        printf("[ExtendedRAM] Mapped store to 8MB aperture: raw=0x%08X (off=0x%08X) val=0x%08X size=%u PC=0x%08X f=%u\n",
+               addr, (addr & 0x1FFFFFFFu) - RAM_SIZE, val, width, g_debug_last_store_pc, (uint32_t)s_frame_count);
+        fflush(stdout);
+    }
+}
+
 void psx_write_word(uint32_t addr, uint32_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
@@ -1687,6 +1727,9 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
+        if (g_debug_last_store_pc >= 0x80036000u && g_debug_last_store_pc <= 0x80038000u) {
+            memory_track_prim_store(addr);
+        }
         if (__builtin_expect(phys == 0u && fntrace_is_game_started(), 0)) {
             switch (g_debug_last_store_pc) {
             case 0xBFC04E90u:
@@ -1708,6 +1751,15 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         ram[phys + 1] = (uint8_t)(val >> 8);
         ram[phys + 2] = (uint8_t)(val >> 16);
         ram[phys + 3] = (uint8_t)(val >> 24);
+        return;
+    }
+    if (phys < 0x00800000u) {
+        log_extended_ram_store(addr, val, 4);
+        uint32_t off = phys - RAM_SIZE;
+        s_ram_overflow[off]     = (uint8_t)(val);
+        s_ram_overflow[off + 1] = (uint8_t)(val >> 8);
+        s_ram_overflow[off + 2] = (uint8_t)(val >> 16);
+        s_ram_overflow[off + 3] = (uint8_t)(val >> 24);
         return;
     }
 #endif
@@ -1794,6 +1846,15 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         ram[phys + 3] = (uint8_t)(val >> 24);
         return;
     }
+    if (phys < 0x00800000u) {
+        log_extended_ram_store(addr, val, 4);
+        uint32_t off = phys - RAM_SIZE;
+        s_ram_overflow[off]     = (uint8_t)(val);
+        s_ram_overflow[off + 1] = (uint8_t)(val >> 8);
+        s_ram_overflow[off + 2] = (uint8_t)(val >> 16);
+        s_ram_overflow[off + 3] = (uint8_t)(val >> 24);
+        return;
+    }
     {
         uint32_t off;
         if (mod_gpu_dma_memory_offset(phys, 4u, &off)) {
@@ -1854,6 +1915,10 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
 
     if (phys < RAM_SIZE) {
         return (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
+    }
+    if (phys < 0x00800000u) {
+        uint32_t off = phys - RAM_SIZE;
+        return (uint16_t)s_ram_overflow[off] | ((uint16_t)s_ram_overflow[off + 1] << 8);
     }
     {
         uint32_t off;
@@ -1916,6 +1981,13 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         ram[phys + 1] = (uint8_t)(val >> 8);
         return;
     }
+    if (phys < 0x00800000u) {
+        log_extended_ram_store(addr, (uint32_t)val, 2);
+        uint32_t off = phys - RAM_SIZE;
+        s_ram_overflow[off]     = (uint8_t)(val);
+        s_ram_overflow[off + 1] = (uint8_t)(val >> 8);
+        return;
+    }
 #endif
 
     if (phys < RAM_SIZE) {
@@ -1930,6 +2002,13 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
 #endif
         ram[phys]     = (uint8_t)(val);
         ram[phys + 1] = (uint8_t)(val >> 8);
+        return;
+    }
+    if (phys < 0x00800000u) {
+        log_extended_ram_store(addr, (uint32_t)val, 2);
+        uint32_t off = phys - RAM_SIZE;
+        s_ram_overflow[off]     = (uint8_t)(val);
+        s_ram_overflow[off + 1] = (uint8_t)(val >> 8);
         return;
     }
     {
@@ -1985,6 +2064,9 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
 
     if (phys < RAM_SIZE) {
         return ram[phys];
+    }
+    if (phys < 0x00800000u) {
+        return s_ram_overflow[phys - RAM_SIZE];
     }
     {
         uint32_t off;
@@ -2175,8 +2257,7 @@ static inline int psx_cyc_main_ram_fast_addr(uint32_t addr, uint32_t width,
         g_dma_exec_depth > 0 || addr >= 0xC0000000u)
         return 0;
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys >= 0x00800000u) return 0;
-    phys &= (uint32_t)(RAM_SIZE - 1);
+    if (phys >= 0x00200000u) return 0;
     /* Aligned guest loads cannot cross this boundary, but fail closed for a
      * malformed/unaligned caller instead of introducing a host OOB read. */
     if (phys > (uint32_t)RAM_SIZE - width) return 0;
@@ -2262,6 +2343,11 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
         ram[phys] = val;
         return;
     }
+    if (phys < 0x00800000u) {
+        log_extended_ram_store(addr, (uint32_t)val, 1);
+        s_ram_overflow[phys - RAM_SIZE] = val;
+        return;
+    }
 #endif
 
     if (phys < RAM_SIZE) {
@@ -2275,6 +2361,11 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
         { extern void cosim_note_ram_write(uint32_t,uint32_t); cosim_note_ram_write(phys, 1); }
 #endif
         ram[phys] = val;
+        return;
+    }
+    if (phys < 0x00800000u) {
+        log_extended_ram_store(addr, (uint32_t)val, 1);
+        s_ram_overflow[phys - RAM_SIZE] = val;
         return;
     }
     {

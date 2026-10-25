@@ -612,6 +612,8 @@ static void prof_report(uint64_t frame) {
     s_prof_last_irq = g_prof_irq_calls; s_prof_last_svc = g_prof_svc_calls;
 }
 
+extern "C" void memory_log_frame_prim_diag(uint32_t frame);
+
 static void switch_vblank_callback(void) {
     u64 frame_start_tick = armGetSystemTick();
     if (s_prof_last_cb_end) s_prof_guest_ticks += frame_start_tick - s_prof_last_cb_end;
@@ -623,6 +625,7 @@ static void switch_vblank_callback(void) {
         s_prof_cb_ticks += e - st; s_prof_last_cb_end = e; s_prof_frames++;
     } } prof_guard{frame_start_tick, prof_prev_phase};
     s_frame_count++;
+    memory_log_frame_prim_diag((uint32_t)s_frame_count);
     u64 now_tick = armGetSystemTick();
     if (s_last_vblank_tick == 0) {
         s_last_vblank_tick = now_tick;
@@ -1060,6 +1063,10 @@ int main(int argc, char* argv[]) {
 
     // Activar el planificador determinista TCB (sin fibras de host, óptimo para Switch)
     psx_hle_scheduler_set_default(1);
+
+    // Armar registro continuo de dispatches en buffer circular para diagnostico
+    extern void fntrace_arm(uint32_t target);
+    fntrace_arm(0xFFFFFFFFu);
 
     printf("[Main] ================================================\n");
     printf("[Main] ¡Iniciando ejecucion nativa de Tekken 3!\n");

@@ -263,16 +263,16 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
 #ifdef __SWITCH__
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (__builtin_expect(phys < 0x00800000u, 1)) {
+    if (__builtin_expect(phys < 0x00200000u, 1)) {
         psx_cyc_charge(2u);
         uint32_t value;
-        memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        memcpy(&value, g_psx_ram + phys, sizeof(value));
         return value;
     }
     return psx_cyc_load_word_slow(cpu, addr, rt, reg_mask);
 #elif defined(PSX_ENABLE_BLOCK_CYCLES)
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
+    if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00200000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
         if (g_psx_load_delay) {
             psx_cyc_base(cpu);
@@ -287,7 +287,7 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
             cpu->ld_which_t = (uint8_t)rt;
         }
         uint32_t value;
-        memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        memcpy(&value, g_psx_ram + phys, sizeof(value));
         return value;
     }
     return psx_cyc_load_word_slow(cpu, addr, rt, reg_mask);
@@ -302,16 +302,16 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
 #ifdef __SWITCH__
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (__builtin_expect(phys < 0x00800000u, 1)) {
+    if (__builtin_expect(phys < 0x00200000u, 1)) {
         psx_cyc_charge(2u);
         uint16_t value;
-        memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        memcpy(&value, g_psx_ram + phys, sizeof(value));
         return value;
     }
     return psx_cyc_load_half_slow(cpu, addr, rt, reg_mask);
 #elif defined(PSX_ENABLE_BLOCK_CYCLES)
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
+    if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00200000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
         if (g_psx_load_delay) {
             psx_cyc_base(cpu);
@@ -326,7 +326,7 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
             cpu->ld_which_t = (uint8_t)rt;
         }
         uint16_t value;
-        memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        memcpy(&value, g_psx_ram + phys, sizeof(value));
         return value;
     }
     return psx_cyc_load_half_slow(cpu, addr, rt, reg_mask);

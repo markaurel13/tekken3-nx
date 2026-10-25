@@ -14,7 +14,9 @@
 #include <string.h>
 #include <setjmp.h>
 #include "psx_fiber.h"   /* cross-platform fibers (Win32 fibers / POSIX ucontext) */
-#include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
+#include "psx_scheduler.h"
+#include "fntrace.h"
+#include "dirty_ram_interp.h"
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
@@ -1069,12 +1071,12 @@ void psx_unaligned_access(CPUState* cpu, uint32_t addr, uint32_t pc) {
     /* Survivable fault: log diagnostics and let the generated code's
      * `return;` skip the rest of the current function. */
     static int count = 0;
-    if (count < 3) {
+    if (count < 10) {
         char buf[1024];
         int n = snprintf(buf, sizeof(buf),
-            "ADEL: addr=0x%08X PC=0x%08X ra=0x%08X v0=0x%08X a0=0x%08X t9=0x%08X (hit #%d)\n"
+            "[PSX ADEL] addr=0x%08X PC=0x%08X ra=0x%08X v0=0x%08X a0=0x%08X t9=0x%08X sp=0x%08X (hit #%d)\n"
             "  Callback table at 0x800DFEE0:",
-            addr, pc, cpu->gpr[31], cpu->gpr[2], cpu->gpr[4], cpu->gpr[25], count + 1);
+            addr, pc, cpu->gpr[31], cpu->gpr[2], cpu->gpr[4], cpu->gpr[25], cpu->gpr[29], count + 1);
         for (int i = 0; i < 11; i++) {
             uint32_t cb = cpu->read_word(0x800DFEE0u + (uint32_t)(i * 4));
             n += snprintf(buf + n, sizeof(buf) - (size_t)n, " [%d]=0x%08X", i, cb);
@@ -1083,7 +1085,8 @@ void psx_unaligned_access(CPUState* cpu, uint32_t addr, uint32_t pc) {
             "\n  Mask=0x%08X s0=0x%08X s1=0x%08X s2=0x%08X",
             cpu->read_word(0x800DFF0Cu),
             cpu->gpr[16], cpu->gpr[17], cpu->gpr[18]);
-        trap_crash(buf);
+        printf("%s\n", buf);
+        fflush(stdout);
         count++;
     }
 }
@@ -1379,6 +1382,55 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
             s_total_miss_reports++;
             printf("[Traps] Dispatch MISS: addr=0x%08X phys=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X (rep=%d)\n",
                    addr, phys, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], s_miss_repeat);
+            if (s_miss_repeat == 1) {
+                printf("[Traps] === DIAGNOSTICO DETALLADO DISPATCH MISS ===\n");
+                for (int r = 0; r < 32; r += 4) {
+                    printf("  GPR[%02d..%02d]: %08X %08X %08X %08X\n",
+                           r, r + 3, cpu->gpr[r], cpu->gpr[r + 1], cpu->gpr[r + 2], cpu->gpr[r + 3]);
+                }
+                printf("  COP0: SR=0x%08X CAUSE=0x%08X EPC=0x%08X\n",
+                       cpu->cop0[12], cpu->cop0[13], cpu->cop0[14]);
+                printf("  Stack dump (sp=0x%08X):\n", cpu->gpr[29]);
+                for (int i = 0; i < 32; i += 4) {
+                    uint32_t a = cpu->gpr[29] + (uint32_t)(i * 4);
+                    printf("    [0x%08X]: %08X %08X %08X %08X\n",
+                           a, cpu->read_word(a), cpu->read_word(a + 4), cpu->read_word(a + 8), cpu->read_word(a + 12));
+                }
+                uint32_t ra_val = cpu->gpr[31] & ~3u;
+                uint32_t ra_base = (ra_val >= 32u) ? (ra_val - 32u) : 0u;
+                printf("  Codigo en RAM viva alrededor de $ra [0x%08X..0x%08X]:\n", ra_base, ra_base + 64u);
+                for (uint32_t a = ra_base; a < ra_base + 64u; a += 16u) {
+                    printf("    [0x%08X]: %08X %08X %08X %08X\n",
+                           a, cpu->read_word(a), cpu->read_word(a + 4), cpu->read_word(a + 8), cpu->read_word(a + 12));
+                }
+                uint32_t tgt_base = (addr >= 16u) ? (addr - 16u) : 0u;
+                printf("  Memoria en RAM viva alrededor de target [0x%08X..0x%08X]:\n", tgt_base, tgt_base + 48u);
+                for (uint32_t a = tgt_base; a < tgt_base + 48u; a += 16u) {
+                    printf("    [0x%08X]: %08X %08X %08X %08X\n",
+                           a, cpu->read_word(a), cpu->read_word(a + 4), cpu->read_word(a + 8), cpu->read_word(a + 12));
+                }
+                if (g_fntrace_seq > 0) {
+                    printf("  Ultimos 30 dispatches registrados (g_fntrace_ring, total_seq=%llu):\n", (unsigned long long)g_fntrace_seq);
+                    uint64_t count = g_fntrace_seq < 30u ? g_fntrace_seq : 30u;
+                    for (uint64_t i = g_fntrace_seq - count; i < g_fntrace_seq; i++) {
+                        const FntraceEntry* e = &g_fntrace_ring[i % FNTRACE_RING_CAP];
+                        printf("    [%llu | f=%u] target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
+                               (unsigned long long)i, e->frame, e->target, e->ra, e->a0, e->a1, e->sp);
+                    }
+                }
+                extern uint64_t g_dirty_ram_block_log_seq;
+                extern DirtyRamBlockLogEntry g_dirty_ram_block_log[];
+                if (g_dirty_ram_block_log_seq > 0) {
+                    printf("  Ultimos 10 DirtyRAM blocks (total_seq=%llu):\n", (unsigned long long)g_dirty_ram_block_log_seq);
+                    uint64_t bcount = g_dirty_ram_block_log_seq < 10u ? g_dirty_ram_block_log_seq : 10u;
+                    for (uint64_t i = g_dirty_ram_block_log_seq - bcount; i < g_dirty_ram_block_log_seq; i++) {
+                        const DirtyRamBlockLogEntry* be = &g_dirty_ram_block_log[i & (DIRTY_RAM_BLOCK_LOG_CAP - 1u)];
+                        printf("    [DirtyBlock %llu | f=%u] target=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
+                               (unsigned long long)i, be->frame, be->target, be->ra, be->a0, be->a1, be->sp);
+                    }
+                }
+                fflush(stdout);
+            }
         }
         if (s_miss_repeat > 10) {
             if (s_miss_repeat == 11) {
