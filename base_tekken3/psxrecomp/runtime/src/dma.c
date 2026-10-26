@@ -806,7 +806,6 @@ static uint32_t execute_ch2_gpu(void) {
                         psx_mod_gpu_dma_resolve_address(word_addr + 4u);
                 }
                 actual_words += num_words;
-                gpu_node_complete();
             }
 
             if (next == 0xFFFFFFu) {

@@ -27,7 +27,6 @@ void     gpu_set_gp0_source(uint32_t addr); /* diagnostic source for next GP0 wo
  * OT rank. This lets diagnostics distinguish front-layer UI packets from
  * depth-sorted world packets without guessing from primitive shape. */
 void     gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count);
-void     gpu_node_complete(void);
 void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated vblank */
 
 /* Display presentation accessors (Phase 3). */

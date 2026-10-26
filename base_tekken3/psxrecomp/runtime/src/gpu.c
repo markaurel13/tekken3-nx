@@ -2648,31 +2648,6 @@ void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
         gp0_ot_rank = gp0_ot_rank == 0xFFFFu ? 0u
                                              : (uint16_t)(gp0_ot_rank + 1u);
     }
-    if (gp0_state == GP0_COLLECTING || gp0_state == GP0_POLYLINE_MONO || gp0_state == GP0_POLYLINE_SHADED) {
-        static uint32_t s_desync_cnt = 0;
-        if (s_desync_cnt++ < 30) {
-            printf("[GPU_RECOVER_DESYNC] Node at 0x%08X (cnt=%u) found gp0_state=%d (coll=%u/%u cmd0=0x%08X)! Resetting to IDLE.\n",
-                   addr, word_count, gp0_state, gp0_words_collected, gp0_words_needed, gp0_cmd_buf[0]);
-            fflush(stdout);
-        }
-        gp0_state = GP0_IDLE;
-        gp0_words_collected = 0;
-        gp0_words_needed = 0;
-    }
-}
-
-void gpu_node_complete(void) {
-    if (gp0_state == GP0_COLLECTING || gp0_state == GP0_POLYLINE_MONO || gp0_state == GP0_POLYLINE_SHADED) {
-        static uint32_t s_node_inc_cnt = 0;
-        if (s_node_inc_cnt++ < 30) {
-            printf("[GPU_NODE_INCOMPLETE] Node ended with incomplete command: state=%d coll=%u/%u cmd0=0x%08X! Resetting to IDLE.\n",
-                   gp0_state, gp0_words_collected, gp0_words_needed, gp0_cmd_buf[0]);
-            fflush(stdout);
-        }
-        gp0_state = GP0_IDLE;
-        gp0_words_collected = 0;
-        gp0_words_needed = 0;
-    }
 }
 
 void gpu_ws_end_linked_list(void) {
@@ -3827,77 +3802,6 @@ static void setup_textured_draw(uint32_t color24, int semi_trans, int raw_textur
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
 }
 
-/* Validate and latch CLUT. In Tekken 3 / PS1, texture CLUTs reside in off-screen
- * VRAM (y >= 448, specifically rows 480..511).
- *
- * Case 1: Relative CLUTs (clut_y < 32, i.e. clut < 0x0800):
- * Some character and mesh primitives specify CLUT as an unbased index into the
- * 32-row palette bank starting at row 480 (e.g. 0x012F -> row 4 of table at x=752,
- * y=480+4=484 -> 0x792F). We base these to row 480 (clut += 0x7800).
- *
- * Case 2: Corrupted/de-phased CLUTs (32 <= clut_y < 448):
- * These point into active display framebuffers (0..479). These are genuine
- * desyncs/corruptions. We log diagnostic details and recover using the appropriate
- * latched palette (separated by Player 1, Player 2, and general to avoid cross-pollution).
- */
-static inline uint16_t validate_and_latch_clut(uint16_t clut, uint16_t tpage, uint16_t *out_x, uint16_t *out_y) {
-    uint16_t clut_x = (clut & 0x3Fu) * 16u;
-    uint16_t clut_y = (clut >> 6u) & 0x1FFu;
-
-    static uint16_t s_last_valid_p1[16]  = {0}; /* rows 504..507 (0x7E00..0x7EC0) */
-    static uint16_t s_last_valid_p2[16]  = {0}; /* rows 508..511 (0x7F00..0x7FC0) */
-    static uint16_t s_last_valid_gen[16] = {0}; /* rows 480..503 (0x7800..0x7DFC) */
-    static uint16_t s_global_last_valid  = 0x7E40u;
-
-    /* Case 1: unbased 32-row relative palette index (y < 32) */
-    if (clut_y < 32u) {
-        static uint32_t s_base_adjust_cnt = 0;
-        uint16_t adjusted = (uint16_t)(clut + 0x7800u);
-        if (s_base_adjust_cnt++ < 40) {
-            printf("[GPU_CLUT_BASE_ADJUST] Relative clut=0x%04X (x=%u, rel_y=%u) -> adjusted to 0x%04X (y=%u) on tpage=0x%X\n",
-                   clut, clut_x, clut_y, adjusted, clut_y + 480u, tpage);
-            fflush(stdout);
-        }
-        clut = adjusted;
-        clut_x = (clut & 0x3Fu) * 16u;
-        clut_y = (clut >> 6u) & 0x1FFu;
-    }
-
-    if (clut_y >= 448u) {
-        /* Fully valid palette row in off-screen VRAM */
-        if (clut_y >= 504u && clut_y <= 507u) {
-            s_last_valid_p1[tpage & 0xFu] = clut;
-        } else if (clut_y >= 508u && clut_y <= 511u) {
-            s_last_valid_p2[tpage & 0xFu] = clut;
-        } else {
-            s_last_valid_gen[tpage & 0xFu] = clut;
-        }
-        s_global_last_valid = clut;
-    } else {
-        /* Case 2: Corrupted/de-phased CLUT pointing into display buffer (32 <= clut_y < 448) */
-        static uint32_t s_bad_clut_log_cnt = 0;
-        uint16_t rep = 0;
-        uint8_t tp_idx = tpage & 0xFu;
-        if (s_last_valid_gen[tp_idx])      rep = s_last_valid_gen[tp_idx];
-        else if (s_last_valid_p1[tp_idx])  rep = s_last_valid_p1[tp_idx];
-        else if (s_last_valid_p2[tp_idx])  rep = s_last_valid_p2[tp_idx];
-        else                               rep = s_global_last_valid;
-
-        if (s_bad_clut_log_cnt++ < 40) {
-            printf("[GPU_CLUT_DESYNC_RECOVER] Invalid clut=0x%04X (x=%u, y=%u in display area) on tpage=0x%X (cmd0=0x%08X src=0x%08X)! Recovering with 0x%04X\n",
-                   clut, clut_x, clut_y, tpage, gp0_cmd_buf[0], gp0_cmd_source_addr, rep);
-            fflush(stdout);
-        }
-        clut = rep;
-        clut_x = (clut & 0x3Fu) * 16u;
-        clut_y = (clut >> 6u) & 0x1FFu;
-    }
-
-    if (out_x) *out_x = clut_x;
-    if (out_y) *out_y = clut_y;
-    return clut;
-}
-
 /* Execute textured triangle (GP0 0x24-0x27) */
 static void gp0_exec_textured_tri(void) {
     uint32_t color24 = gp0_cmd_buf[0] & 0xFFFFFFu;
@@ -3917,8 +3821,8 @@ static void gp0_exec_textured_tri(void) {
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
     if (psx_gpu_triangle_oversize(vx, vy, 0, 1, 2)) return;
 
     ws_nw_hud_shift_vertices(vx, 3);
@@ -3958,8 +3862,8 @@ static void gp0_exec_textured_quad(void) {
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
@@ -4052,8 +3956,8 @@ static void gp0_exec_shaded_textured_tri(void) {
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
     if (psx_gpu_triangle_oversize(vx, vy, 0, 1, 2)) return;
 
     ws_nw_hud_shift_vertices(vx, 3);
@@ -4097,8 +4001,8 @@ static void gp0_exec_shaded_textured_quad(void) {
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
@@ -4222,8 +4126,8 @@ static void gp0_exec_textured_rect(void) {
     int u0 = gp0_cmd_buf[2] & 0xFF;
     int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
     int w = gp0_cmd_buf[3] & 0x3FF;
     int h = (gp0_cmd_buf[3] >> 16) & 0x1FF;
     if (w > 1023) w = 1023;
@@ -4297,8 +4201,8 @@ static void gp0_exec_textured_8x8(void) {
     int u0 = gp0_cmd_buf[2] & 0xFF;
     int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
 
     setup_textured_draw(color24, semi_trans, raw_texture);
     if (ws_w && ws_w != 8)
@@ -4337,8 +4241,8 @@ static void gp0_exec_textured_16x16(void) {
     int u0 = gp0_cmd_buf[2] & 0xFF;
     int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x, clut_y;
-    clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
 
     {
         int dw = (ws_w && ws_w != 16) ? ws_w : 16;
@@ -4363,14 +4267,6 @@ static void gp0_exec_fill_rect(void) {
      * Word 0: 0x02BBGGRR (color)
      * Word 1: YstartXstart (X bits 0-9 aligned to 16, Y bits 16-24)
      * Word 2: YsizXsiz (W bits 0-9 rounded up to 16, H bits 16-24) */
-    /* Reject desynchronized vertex coordinate words erroneously parsed as FillRect */
-    if ((gp0_cmd_buf[1] & 0xFE00FC00u) != 0 || (gp0_cmd_buf[2] & 0xFE00FC00u) != 0) {
-        printf("[GP0_FillRect_REJECTED] Rejected bogus FillRect with invalid coord bits: w1=0x%08x w2=0x%08x src=0x%08x\n",
-               gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_source_addr);
-        fflush(stdout);
-        return;
-    }
-
     uint32_t color24 = gp0_cmd_buf[0] & 0x00FFFFFF;
     uint16_t color16 = rgb888_to_rgb555(color24);
 
@@ -4382,55 +4278,6 @@ static void gp0_exec_fill_rect(void) {
     /* Fill ignores draw area, mask bits, and draw offset — writes directly to
      * VRAM. Routed through the renderer so it also fills the hi-res
      * supersampling mirror (no-op cost when supersampling is off). */
-    static uint32_t s_fill_log_count = 0;
-    bool suspicious = (color16 == 0x37F4) || (dst_x >= 384) || (dst_y >= 480) || ((dst_y + height) > 480 && height > 240);
-    if (suspicious || (s_fill_log_count < 20) || (s_fill_log_count % 300 == 0)) {
-        s_fill_log_count++;
-        printf("[GP0_FillRect%s] f=%llu rect=(%u,%u %ux%u) col16=0x%04x col24=0x%06x src=0x%08x RA=0x%08x PC=0x%08x\n",
-               suspicious ? "_ALERT" : "",
-               (unsigned long long)s_frame_count, dst_x, dst_y, width, height, color16, color24,
-               gp0_cmd_source_addr,
-               debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
-               debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
-        if (suspicious && gp0_ring) {
-            printf("[GP0_FillRect_ALERT] Dumping preceding GP0 commands before suspicious fill:\n");
-            for (int k = 10; k >= 1; k--) {
-                uint32_t idx = (gp0_ring_head + GP0_RING_CAP - k) % GP0_RING_CAP;
-                GpuGp0RingEntry *re = &gp0_ring[idx];
-                printf("  [-#%d] seq=%u f=%u op=0x%02x src=0x%08x words=[0x%08x, 0x%08x, 0x%08x]\n",
-                       k, re->seq, re->frame, re->opcode, re->src_addr,
-                       re->cmd[0], re->cmd[1], re->cmd[2]);
-            }
-        }
-        fflush(stdout);
-    }
-
-    /* Never allow FillRect to write into texture memory (x >= 384) */
-    if (dst_x >= 384) {
-        printf("[GP0_FillRect_BLOCKED] Blocked FillRect in Texture region: x=%u >= 384 (col=0x%04x)\n", dst_x, color16);
-        fflush(stdout);
-        return;
-    }
-    if ((dst_x + width) > 384) {
-        printf("[GP0_FillRect_CLAMPED] Clamped FillRect width from %u to %u (x=%u, col=0x%04x) to protect Texture region\n",
-               width, 384 - dst_x, dst_x, color16);
-        fflush(stdout);
-        width = 384 - dst_x;
-    }
-
-    if (dst_y >= 480) {
-        printf("[GP0_FillRect_BLOCKED] Blocked FillRect in CLUT region: y=%u >= 480 (col=0x%04x)\n", dst_y, color16);
-        fflush(stdout);
-        return;
-    }
-    if ((dst_y + height) > 480) {
-        printf("[GP0_FillRect_CLAMPED] Clamped FillRect height from %u to %u (y=%u, col=0x%04x) to protect CLUT region\n",
-               height, 480 - dst_y, dst_y, color16);
-        fflush(stdout);
-        height = 480 - dst_y;
-    }
-    if (width == 0 || height == 0) return;
-
     gr_fill_rect((int)dst_x, (int)dst_y, (int)width, (int)height, color16);
 
     /* Native-wide: when the game clears a display buffer, clear the full width
@@ -5599,8 +5446,8 @@ static void gp0_execute_command(void) {
             int u0 = gp0_cmd_buf[2] & 0xFF;
             int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
             uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-            uint16_t clut_x, clut_y;
-            clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
+            uint16_t clut_x = (clut & 0x3F) * 16;
+            uint16_t clut_y = (clut >> 6) & 0x1FF;
             setup_textured_draw(color24, semi_trans, raw_texture);
             gr_draw_textured_rect(x0, y0, 1, 1, u0, v0, clut_x, clut_y, current_texpage());
             break;
