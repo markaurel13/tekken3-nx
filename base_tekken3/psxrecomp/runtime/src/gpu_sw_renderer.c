@@ -28,6 +28,7 @@
  */
 
 #include "gpu_sw_renderer.h"
+#include <stdio.h>
 #include "gpu_vram_dirty.h"
 #include "gpu_sw_edges.h"
 #include "native_wide_present_authority.h"
@@ -702,15 +703,20 @@ static void hr_fill_block(int x, int y, int w, int h, uint16_t color) {
 
 void sw_fill_rect(int x, int y, int w, int h, uint16_t color) {
     /* Fill rect ignores draw area, mask bits, and semi-transparency.
-     * It writes directly to VRAM with coordinates wrapping. */
+     * Writes directly to VRAM. Protect CLUT region (lines 480..511). */
     int x0 = x & (VRAM_WIDTH - 1);
     int y0 = y & (VRAM_HEIGHT - 1);
 
+    if (y0 >= 480) return;
+    if (y0 + h > 480) h = 480 - y0;
+    if (x0 + w > VRAM_WIDTH) w = VRAM_WIDTH - x0;
+    if (w <= 0 || h <= 0) return;
+
     for (int row = 0; row < h; row++) {
-        int py = (y0 + row) & (VRAM_HEIGHT - 1);
+        int py = y0 + row;
+        uint16_t *dst = &g_vram[py * VRAM_WIDTH + x0];
         for (int col = 0; col < w; col++) {
-            int px = (x0 + col) & (VRAM_WIDTH - 1);
-            g_vram[py * VRAM_WIDTH + px] = color;
+            dst[col] = color;
         }
     }
     gpu_vram_dirty_mark_rect(x0, y0, w, h);
@@ -724,6 +730,16 @@ void sw_fill_rect(int x, int y, int w, int h, uint16_t color) {
 
 void sw_copy_rect(int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
     uint16_t row_buf[VRAM_WIDTH];
+
+    int dy0 = dst_y & (VRAM_HEIGHT - 1);
+    if (dy0 >= 480 || (dy0 + h) > 480) {
+        static int s_sw_copy_warn = 0;
+        if (s_sw_copy_warn++ < 50) {
+            printf("[sw_copy_rect_ALERT] src=(%d,%d) dst=(%d,%d %dx%d) (touches lines 480..511!)\n",
+                   src_x, src_y, dst_x, dst_y, w, h);
+            fflush(stdout);
+        }
+    }
 
     /* Hi-res scratch: one native row's worth of source super-rows. */
     int s = g_scale;

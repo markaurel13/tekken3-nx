@@ -53,8 +53,23 @@ vec3 col16_to_rgb(int raw) {
 void main()
 {
     bool is_textured = (inFlags & 0x40u) != 0u;
+    bool semi_flag = (inFlags & 0x8u) != 0u;
+    uint semi_mode = (inFlags >> 4u) & 0x3u;
+
     if (!is_textured) {
-        outColor = vec4(inColor.rgb, 1.0);
+        vec3 col = inColor.rgb;
+        float a = 1.0;
+        if (semi_flag) {
+            if (semi_mode == 0u) {
+                a = 0.5;
+            } else if (semi_mode == 3u) {
+                col *= 0.25;
+                a = 1.0;
+            } else if (semi_mode == 1u) {
+                a = 1.0;
+            }
+        }
+        outColor = vec4(col, a);
         return;
     }
 
@@ -84,6 +99,29 @@ void main()
         rgb = clamp(rgb * inColor.rgb * 2.0, 0.0, 1.0);
     }
 
-    // Alpha siempre 1.0 para que el compositor de Switch NWindow no trate la imagen como transparente
-    outColor = vec4(rgb, 1.0);
+    // Semi-transparencia por texel en PS1:
+    // Para primitivas texturizadas, la semi-transparencia SOLO se aplica si el bit 15 (STP) del texel es 1.
+    // Si el bit 15 es 0, el texel es estrictamente OPACO independientemente del flag semi del polígono.
+    bool is_semi = semi_flag && ((raw & 0x8000) != 0);
+    float a = 1.0;
+    if (is_semi) {
+        if (semi_mode == 0u) {
+            a = 0.5;
+        } else if (semi_mode == 3u) {
+            rgb *= 0.25;
+            a = 1.0;
+        } else if (semi_mode == 1u) {
+            a = 1.0;
+        }
+    } else {
+        // Si el texel es opaco y el modo activo es 1 o 3 (donde DstFactor es SrcAlpha en GPU),
+        // a debe ser 0.0 para que DstFactor sea 0.0 y el resultado sea 100% opaco (Src + 0*Dst).
+        if (semi_flag && (semi_mode == 1u || semi_mode == 3u)) {
+            a = 0.0;
+        } else {
+            a = 1.0;
+        }
+    }
+
+    outColor = vec4(rgb, a);
 }

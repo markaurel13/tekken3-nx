@@ -745,6 +745,10 @@ static uint32_t execute_ch2_gpu(void) {
         uint32_t cur_empty_nodes = 0;
         uint32_t cur_packet_count = 0;
         for (;;) {
+            if ((addr & 0x00FFFFFFu) == 0x00FFFFFFu) {
+                last_addr = 0x00FFFFFFu;
+                break;
+            }
             if (safety++ > MAX_NODES || cur_empty_nodes > 4096) {
                 hit_limit = 1;
                 last_addr = 0x00FFFFFFu;
@@ -753,6 +757,14 @@ static uint32_t execute_ch2_gpu(void) {
 
             uint32_t header = psx_read_word(addr);
             uint32_t num_words = (header >> 24) & 0xFF;
+            uint32_t next = header & 0xFFFFFFu;
+            if (next == 0xFFFFFFu && num_words > 32) {
+                last_addr = 0x00FFFFFFu;
+                break;
+            }
+            if (num_words > 32) {
+                num_words = 32;
+            }
             uint32_t word_addr =
                 psx_mod_gpu_dma_resolve_address(addr + 4u);
 
@@ -803,7 +815,6 @@ static uint32_t execute_ch2_gpu(void) {
                 actual_words += num_words;
             }
 
-            uint32_t next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu) {
                 last_addr = 0x00FFFFFFu;
                 break;

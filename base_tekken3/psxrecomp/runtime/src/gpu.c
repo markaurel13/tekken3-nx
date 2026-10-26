@@ -66,6 +66,15 @@ static uint32_t gp0_next_source_addr = 0xFFFFFFFFu;
 static uint32_t gp0_cmd_source_addr  = 0xFFFFFFFFu;
 static uint16_t gp0_ot_rank = 0xFFFFu;
 
+#ifdef __SWITCH__
+#define GP0_RING_CAP        (1u << 12)
+#else
+#define GP0_RING_CAP        (1u << 20)  /* 1 048 576 entries */
+#endif
+static GpuGp0RingEntry *gp0_ring = NULL;  /* lazy-alloc on first record */
+static uint64_t gp0_ring_seq    = 0;      /* total commands recorded */
+static uint32_t gp0_ring_head   = 0;      /* next write slot */
+
 /* ---- Widescreen proportion correction --------------------------------------
  * Active only when [video] aspect_ratio != 4:3 AND the game's [widescreen]
  * block opts in (see config_loader.h). Two mechanisms, both driven from the
@@ -2624,6 +2633,11 @@ static void ws_refresh_current_reveal_margins(void) {
  * active back buffer and frame, before this list submits any margin geometry. */
 void gpu_ws_begin_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
+    if (gp0_state != GP0_IDLE) {
+        gp0_state = GP0_IDLE;
+        gp0_words_collected = 0;
+        gp0_words_needed = 0;
+    }
     ws_nw_sync_target();
     if (!ws_nw_full_mirror) ws_refresh_current_reveal_margins();
 }
@@ -2633,11 +2647,22 @@ void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
     if (word_count == 0) {
         gp0_ot_rank = gp0_ot_rank == 0xFFFFu ? 0u
                                              : (uint16_t)(gp0_ot_rank + 1u);
+    } else {
+        if (gp0_state != GP0_IDLE) {
+            gp0_state = GP0_IDLE;
+            gp0_words_collected = 0;
+            gp0_words_needed = 0;
+        }
     }
 }
 
 void gpu_ws_end_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
+    if (gp0_state != GP0_IDLE) {
+        gp0_state = GP0_IDLE;
+        gp0_words_collected = 0;
+        gp0_words_needed = 0;
+    }
 }
 
 
@@ -4248,6 +4273,14 @@ static void gp0_exec_fill_rect(void) {
      * Word 0: 0x02BBGGRR (color)
      * Word 1: YstartXstart (X bits 0-9 aligned to 16, Y bits 16-24)
      * Word 2: YsizXsiz (W bits 0-9 rounded up to 16, H bits 16-24) */
+    /* Reject desynchronized vertex coordinate words erroneously parsed as FillRect */
+    if ((gp0_cmd_buf[1] & 0xFE00FC00u) != 0 || (gp0_cmd_buf[2] & 0xFE00FC00u) != 0) {
+        printf("[GP0_FillRect_REJECTED] Rejected bogus FillRect with invalid coord bits: w1=0x%08x w2=0x%08x src=0x%08x\n",
+               gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_source_addr);
+        fflush(stdout);
+        return;
+    }
+
     uint32_t color24 = gp0_cmd_buf[0] & 0x00FFFFFF;
     uint16_t color16 = rgb888_to_rgb555(color24);
 
@@ -4259,6 +4292,55 @@ static void gp0_exec_fill_rect(void) {
     /* Fill ignores draw area, mask bits, and draw offset — writes directly to
      * VRAM. Routed through the renderer so it also fills the hi-res
      * supersampling mirror (no-op cost when supersampling is off). */
+    static uint32_t s_fill_log_count = 0;
+    bool suspicious = (color16 == 0x37F4) || (dst_x >= 384) || (dst_y >= 480) || ((dst_y + height) > 480 && height > 240);
+    if (suspicious || (s_fill_log_count < 20) || (s_fill_log_count % 300 == 0)) {
+        s_fill_log_count++;
+        printf("[GP0_FillRect%s] f=%llu rect=(%u,%u %ux%u) col16=0x%04x col24=0x%06x src=0x%08x RA=0x%08x PC=0x%08x\n",
+               suspicious ? "_ALERT" : "",
+               (unsigned long long)s_frame_count, dst_x, dst_y, width, height, color16, color24,
+               gp0_cmd_source_addr,
+               debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
+               debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
+        if (suspicious && gp0_ring) {
+            printf("[GP0_FillRect_ALERT] Dumping preceding GP0 commands before suspicious fill:\n");
+            for (int k = 10; k >= 1; k--) {
+                uint32_t idx = (gp0_ring_head + GP0_RING_CAP - k) % GP0_RING_CAP;
+                GpuGp0RingEntry *re = &gp0_ring[idx];
+                printf("  [-#%d] seq=%u f=%u op=0x%02x src=0x%08x words=[0x%08x, 0x%08x, 0x%08x]\n",
+                       k, re->seq, re->frame, re->opcode, re->src_addr,
+                       re->cmd[0], re->cmd[1], re->cmd[2]);
+            }
+        }
+        fflush(stdout);
+    }
+
+    /* Never allow FillRect to write into texture memory (x >= 384) */
+    if (dst_x >= 384) {
+        printf("[GP0_FillRect_BLOCKED] Blocked FillRect in Texture region: x=%u >= 384 (col=0x%04x)\n", dst_x, color16);
+        fflush(stdout);
+        return;
+    }
+    if ((dst_x + width) > 384) {
+        printf("[GP0_FillRect_CLAMPED] Clamped FillRect width from %u to %u (x=%u, col=0x%04x) to protect Texture region\n",
+               width, 384 - dst_x, dst_x, color16);
+        fflush(stdout);
+        width = 384 - dst_x;
+    }
+
+    if (dst_y >= 480) {
+        printf("[GP0_FillRect_BLOCKED] Blocked FillRect in CLUT region: y=%u >= 480 (col=0x%04x)\n", dst_y, color16);
+        fflush(stdout);
+        return;
+    }
+    if ((dst_y + height) > 480) {
+        printf("[GP0_FillRect_CLAMPED] Clamped FillRect height from %u to %u (y=%u, col=0x%04x) to protect CLUT region\n",
+               height, 480 - dst_y, dst_y, color16);
+        fflush(stdout);
+        height = 480 - dst_y;
+    }
+    if (width == 0 || height == 0) return;
+
     gr_fill_rect((int)dst_x, (int)dst_y, (int)width, (int)height, color16);
 
     /* Native-wide: when the game clears a display buffer, clear the full width
@@ -4423,6 +4505,18 @@ static void gp0_exec_cpu_to_vram(void) {
     vram_write_h = (h == 0) ? 0x200 : (uint16_t)h;
     t3_note_framebuffer_write(vram_write_x, vram_write_y,
                              vram_write_w, vram_write_h);
+
+    if (vram_write_y >= 480 || (vram_write_y + vram_write_h) > 480) {
+        static uint32_t s_a0_clut_log_cnt = 0;
+        if (s_a0_clut_log_cnt++ < 60 || vram_write_h > 1 || (vram_write_x == 208 && vram_write_y == 505)) {
+            printf("[GP0_A0_Upload] f=%llu rect=(%u,%u %ux%u) rem_words=%u RA=0x%08x PC=0x%08x\n",
+                   (unsigned long long)s_frame_count, vram_write_x, vram_write_y, vram_write_w, vram_write_h,
+                   (uint32_t)((((uint32_t)vram_write_w * (uint32_t)vram_write_h) + 1) / 2),
+                   debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
+                   debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
+            fflush(stdout);
+        }
+    }
 
     /* Record for debug */
     if (a0_history_count < A0_HISTORY_CAP) {
@@ -4828,12 +4922,16 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     const uint32_t max_nodes = 0x40000u;
 
     for (;;) {
+        if ((addr & 0x00FFFFFFu) == 0x00FFFFFFu) break;
         if (safety++ > max_nodes) {
             ws_ui_prepass_count = 0;
             return;
         }
         uint32_t header = psx_read_word(addr);
         uint32_t num_words = (header >> 24) & 0xFFu;
+        uint32_t next = header & 0xFFFFFFu;
+        if (next == 0xFFFFFFu && num_words > 32) break;
+        if (num_words > 32) num_words = 32;
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
         } else if (rank != 0xFFFFu) {
@@ -4871,7 +4969,6 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             }
         }
 
-        uint32_t next = header & 0xFFFFFFu;
         if (next == 0xFFFFFFu) break;
         addr = psx_mod_gpu_dma_resolve_address(next);
     }
@@ -5038,16 +5135,6 @@ static void gp0_capture_builder_chain(uint32_t out[6]) {
     }
 }
 
-#ifdef __SWITCH__
-#define GP0_RING_CAP        (1u << 12)
-#else
-#define GP0_RING_CAP        (1u << 20)  /* 1 048 576 entries */
-#endif
-/* GpuGp0RingEntry + GPU_GP0_RING_MAX_WORDS are public types in gpu.h. */
-
-static GpuGp0RingEntry *gp0_ring = NULL;  /* lazy-alloc on first record */
-static uint64_t gp0_ring_seq    = 0;      /* total commands recorded */
-static uint32_t gp0_ring_head   = 0;      /* next write slot */
 
 static void gp0_ring_record(const uint32_t *words, int n) {
     if (!gp0_ring) {
@@ -5472,6 +5559,18 @@ static void gp0_execute_command(void) {
             if (src_x != dst_x || src_y != dst_y)
                 t3_note_framebuffer_write((uint32_t)dst_x, (uint32_t)dst_y,
                                          (uint32_t)w, (uint32_t)h);
+
+            if (dst_y >= 480 || (dst_y + h) > 480) {
+                static uint32_t s_copy_alert_cnt = 0;
+                if (s_copy_alert_cnt++ < 40) {
+                    printf("[GP0_CopyRect_ALERT] f=%llu src=(%d,%d) dst=(%d,%d %dx%d) RA=0x%08x PC=0x%08x\n",
+                           (unsigned long long)s_frame_count, src_x, src_y, dst_x, dst_y, w, h,
+                           debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
+                           debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
+                    fflush(stdout);
+                }
+            }
+
             gr_copy_rect(src_x, src_y, dst_x, dst_y, w, h);
             break;
         }
@@ -5563,6 +5662,18 @@ static void gpu_write_gp0_body(uint32_t val) {
             /* CPU VRAM remains immediately authoritative, preserving mid-DMA
              * reads/savestates. The renderer mirror is committed in bulk when
              * the GP0 payload completes. */
+            if (pixel == 0x37F4 || ((pixel & 0x7FFF) == 0x37F4)) {
+                static uint32_t s_pixel_alert_cnt = 0;
+                if (s_pixel_alert_cnt++ < 40) {
+                    printf("[GP0_A0_ALERT_0x37F4] f=%llu pixel=0x%04x stored at (%u,%u) [transfer rect: %u,%u %ux%u] RA=0x%08x PC=0x%08x\n",
+                           (unsigned long long)s_frame_count, pixel, wx, wy,
+                           vram_write_x, vram_write_y, vram_write_w, vram_write_h,
+                           debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
+                           debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
+                    fflush(stdout);
+                }
+            }
+
             vram[(uint32_t)wy * 1024u + wx] = pixel;
             gpu_vram_dirty_mark_row((uint32_t)wy);
 

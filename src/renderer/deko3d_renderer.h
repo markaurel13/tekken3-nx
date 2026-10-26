@@ -45,9 +45,8 @@ public:
     static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
     static constexpr unsigned CmdPoolTotalSize = 16 * 1024 * 1024;   // 16 MB pool total para comandos
     static constexpr unsigned MaxVerticesPerFrame = 131072;          // 128K vértices por frame (~3.5 MB)
-    static constexpr uint32_t StagingRingStart = 0x00800000;         // 8 MB offset inicial
-    static constexpr uint32_t StagingRingEnd = 64 * 1024 * 1024;     // 64 MB límite de staging
-    static constexpr uint32_t RawVramStagingOffset = 0x00600000;     // 6 MB offset para SyncRawVram
+    static constexpr uint32_t StagingRingStart = 0x00600000;         // 6 MB offset inicial (0x0..0x600000 reservado para depth24 FMVs)
+    static constexpr uint32_t StagingRingEnd = 64 * 1024 * 1024;     // 64 MB límite de staging (58 MB anillo dinámico)
 
     static Deko3DRenderer& Instance();
 
