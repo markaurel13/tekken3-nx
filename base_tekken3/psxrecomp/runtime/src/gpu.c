@@ -2647,12 +2647,31 @@ void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
     if (word_count == 0) {
         gp0_ot_rank = gp0_ot_rank == 0xFFFFu ? 0u
                                              : (uint16_t)(gp0_ot_rank + 1u);
-    } else {
-        if (gp0_state != GP0_IDLE) {
-            gp0_state = GP0_IDLE;
-            gp0_words_collected = 0;
-            gp0_words_needed = 0;
+    }
+    if (gp0_state == GP0_COLLECTING || gp0_state == GP0_POLYLINE_MONO || gp0_state == GP0_POLYLINE_SHADED) {
+        static uint32_t s_desync_cnt = 0;
+        if (s_desync_cnt++ < 30) {
+            printf("[GPU_RECOVER_DESYNC] Node at 0x%08X (cnt=%u) found gp0_state=%d (coll=%u/%u cmd0=0x%08X)! Resetting to IDLE.\n",
+                   addr, word_count, gp0_state, gp0_words_collected, gp0_words_needed, gp0_cmd_buf[0]);
+            fflush(stdout);
         }
+        gp0_state = GP0_IDLE;
+        gp0_words_collected = 0;
+        gp0_words_needed = 0;
+    }
+}
+
+void gpu_node_complete(void) {
+    if (gp0_state == GP0_COLLECTING || gp0_state == GP0_POLYLINE_MONO || gp0_state == GP0_POLYLINE_SHADED) {
+        static uint32_t s_node_inc_cnt = 0;
+        if (s_node_inc_cnt++ < 30) {
+            printf("[GPU_NODE_INCOMPLETE] Node ended with incomplete command: state=%d coll=%u/%u cmd0=0x%08X! Resetting to IDLE.\n",
+                   gp0_state, gp0_words_collected, gp0_words_needed, gp0_cmd_buf[0]);
+            fflush(stdout);
+        }
+        gp0_state = GP0_IDLE;
+        gp0_words_collected = 0;
+        gp0_words_needed = 0;
     }
 }
 
@@ -3808,6 +3827,36 @@ static void setup_textured_draw(uint32_t color24, int semi_trans, int raw_textur
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
 }
 
+/* Validate and latch CLUT. In Tekken 3 / PS1, texture CLUTs reside in off-screen
+ * VRAM (y >= 448, specifically rows 480..511). Any CLUT pointing to y < 448
+ * points into active display/framebuffer area and is a corrupted/de-synced command.
+ * We latch valid CLUTs per texture page and fallback to the last valid CLUT. */
+static inline uint16_t validate_and_latch_clut(uint16_t clut, uint16_t tpage, uint16_t *out_x, uint16_t *out_y) {
+    uint16_t clut_x = (clut & 0x3Fu) * 16u;
+    uint16_t clut_y = (clut >> 6u) & 0x1FFu;
+    static uint16_t s_last_valid_clut[16] = {0};
+    static uint16_t s_global_last_valid = 0x7E40;
+
+    if (clut_y >= 448u) {
+        s_last_valid_clut[tpage & 0xFu] = clut;
+        s_global_last_valid = clut;
+    } else {
+        static uint32_t s_bad_clut_log_cnt = 0;
+        uint16_t rep = s_last_valid_clut[tpage & 0xFu] ? s_last_valid_clut[tpage & 0xFu] : s_global_last_valid;
+        if (s_bad_clut_log_cnt++ < 40) {
+            printf("[GPU_CLUT_RECOVER] Invalid clut=0x%04X (x=%u, y=%u < 448) on tpage=0x%X! Recovering with 0x%04X\n",
+                   clut, clut_x, clut_y, tpage, rep);
+            fflush(stdout);
+        }
+        clut = rep;
+        clut_x = (clut & 0x3Fu) * 16u;
+        clut_y = (clut >> 6u) & 0x1FFu;
+    }
+    if (out_x) *out_x = clut_x;
+    if (out_y) *out_y = clut_y;
+    return clut;
+}
+
 /* Execute textured triangle (GP0 0x24-0x27) */
 static void gp0_exec_textured_tri(void) {
     uint32_t color24 = gp0_cmd_buf[0] & 0xFFFFFFu;
@@ -3822,13 +3871,13 @@ static void gp0_exec_textured_tri(void) {
     u[0] = gp0_cmd_buf[2] & 0xFF;        v[0] = (gp0_cmd_buf[2] >> 8) & 0xFF;
     u[1] = gp0_cmd_buf[4] & 0xFF;        v[1] = (gp0_cmd_buf[4] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[6] & 0xFF;        v[2] = (gp0_cmd_buf[6] >> 8) & 0xFF;
-    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
     /* Texpage from word 4 bits 16-31 */
     uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[4] >> 16);
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
+    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
     if (psx_gpu_triangle_oversize(vx, vy, 0, 1, 2)) return;
 
     ws_nw_hud_shift_vertices(vx, 3);
@@ -3864,12 +3913,12 @@ static void gp0_exec_textured_quad(void) {
     u[1] = gp0_cmd_buf[4] & 0xFF;  v[1] = (gp0_cmd_buf[4] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[6] & 0xFF;  v[2] = (gp0_cmd_buf[6] >> 8) & 0xFF;
     u[3] = gp0_cmd_buf[8] & 0xFF;  v[3] = (gp0_cmd_buf[8] >> 8) & 0xFF;
-    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
     uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[4] >> 16);
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
+    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
@@ -3958,12 +4007,12 @@ static void gp0_exec_shaded_textured_tri(void) {
     u[0] = gp0_cmd_buf[2] & 0xFF;  v[0] = (gp0_cmd_buf[2] >> 8) & 0xFF;
     u[1] = gp0_cmd_buf[5] & 0xFF;  v[1] = (gp0_cmd_buf[5] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[8] & 0xFF;  v[2] = (gp0_cmd_buf[8] >> 8) & 0xFF;
-    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
     uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[5] >> 16);
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
+    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
     if (psx_gpu_triangle_oversize(vx, vy, 0, 1, 2)) return;
 
     ws_nw_hud_shift_vertices(vx, 3);
@@ -4003,12 +4052,12 @@ static void gp0_exec_shaded_textured_quad(void) {
     u[1] = gp0_cmd_buf[5] & 0xFF;   v[1] = (gp0_cmd_buf[5] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[8] & 0xFF;   v[2] = (gp0_cmd_buf[8] >> 8) & 0xFF;
     u[3] = gp0_cmd_buf[11] & 0xFF;  v[3] = (gp0_cmd_buf[11] >> 8) & 0xFF;
-    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
     uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[5] >> 16);
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
+    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, tpage, &clut_x, &clut_y);
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
@@ -4132,8 +4181,8 @@ static void gp0_exec_textured_rect(void) {
     int u0 = gp0_cmd_buf[2] & 0xFF;
     int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
     int w = gp0_cmd_buf[3] & 0x3FF;
     int h = (gp0_cmd_buf[3] >> 16) & 0x1FF;
     if (w > 1023) w = 1023;
@@ -4207,8 +4256,8 @@ static void gp0_exec_textured_8x8(void) {
     int u0 = gp0_cmd_buf[2] & 0xFF;
     int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
 
     setup_textured_draw(color24, semi_trans, raw_texture);
     if (ws_w && ws_w != 8)
@@ -4247,8 +4296,8 @@ static void gp0_exec_textured_16x16(void) {
     int u0 = gp0_cmd_buf[2] & 0xFF;
     int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
+    uint16_t clut_x, clut_y;
+    clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
 
     {
         int dw = (ws_w && ws_w != 16) ? ws_w : 16;
@@ -4930,8 +4979,6 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         uint32_t header = psx_read_word(addr);
         uint32_t num_words = (header >> 24) & 0xFFu;
         uint32_t next = header & 0xFFFFFFu;
-        if (next == 0xFFFFFFu && num_words > 32) break;
-        if (num_words > 32) num_words = 32;
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
         } else if (rank != 0xFFFFu) {
@@ -5511,8 +5558,8 @@ static void gp0_execute_command(void) {
             int u0 = gp0_cmd_buf[2] & 0xFF;
             int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
             uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-            uint16_t clut_x = (clut & 0x3F) * 16;
-            uint16_t clut_y = (clut >> 6) & 0x1FF;
+            uint16_t clut_x, clut_y;
+            clut = validate_and_latch_clut(clut, current_texpage(), &clut_x, &clut_y);
             setup_textured_draw(color24, semi_trans, raw_texture);
             gr_draw_textured_rect(x0, y0, 1, 1, u0, v0, clut_x, clut_y, current_texpage());
             break;

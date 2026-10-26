@@ -564,6 +564,20 @@ void Deko3DRenderer::FlushBatch() {
 
     static uint64_t s_flush_count = 0;
     s_flush_count++;
+    {
+        uint16_t tp = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0];
+        uint16_t clut = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1];
+        uint32_t clut_x = (clut & 0x3Fu) * 16u;
+        uint32_t clut_y = (clut >> 6u) & 0x1FFu;
+        if ((m_vtxRingCpu[m_vtxBatchStart].flags & 0x40u) && clut_y < 448u) {
+            static uint32_t s_bad_clut_batch_cnt = 0;
+            if (s_bad_clut_batch_cnt++ < 30) {
+                printf("[Deko3D_ALERT] FlushBatch #%llu: INVALID CLUT clut=0x%04X (x=%u, y=%u < 448) tp=0x%x cnt=%u\n",
+                       (unsigned long long)s_flush_count, clut, clut_x, clut_y, tp, count);
+                fflush(stdout);
+            }
+        }
+    }
     if (s_flush_count <= 10 || (s_flush_count % 300) == 0) {
         uint16_t tp = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0];
         uint16_t clut = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1];
