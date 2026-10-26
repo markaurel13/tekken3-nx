@@ -208,6 +208,10 @@ static constexpr uint32_t kSwitchOverlayHotPcs[] = {
     0x000E0F20u,
     0x000E11DCu,
     0x000E1D4Cu,
+    0x000FDE0Cu,
+    0x000FEA08u,
+    0x000FEBE0u,
+    0x000FECF8u,
     0x0010EB70u,
     0x0010ED3Cu,
     0x0010F838u,
@@ -224,17 +228,38 @@ static bool switch_overlay_span_contains_pc(uint32_t load_addr, uint32_t size, u
 }
 
 extern "C" void overlay_capture_before_dma(uint32_t load_addr, uint32_t size) {
-    /* Lightweight Switch capture: no outgoing-variant preservation yet.  This
-     * hook exists so dma.c can call the standard overlay API without linking the
-     * desktop SDL/threaded capture backend. */
     (void)load_addr;
     (void)size;
 }
 
+extern "C" int fntrace_is_game_started(void);
+
 extern "C" void overlay_capture_on_dma(uint32_t load_addr, uint32_t size, const uint8_t* bytes) {
-    (void)load_addr;
-    (void)size;
-    (void)bytes;
+    if (!bytes || size == 0) return;
+    // CRITICAL: Never capture during boot / before game handoff!
+    // Capturing boot-time executable sectors caused thousands of synchronous SD writes,
+    // freezing boot DMA at 1.6 FPS and causing a black screen before Namco Presents.
+    if (!fntrace_is_game_started()) return;
+
+    uint32_t phys = load_addr & 0x1FFFFFFFu;
+    // Only track genuine dynamic runtime overlays (0x800F0000 - 0x80100000)
+    if (phys < 0x000F0000u || phys >= 0x00100000u) return;
+
+    // Limit in-memory captures
+    if (s_switch_overlay_captures.size() >= 32) return;
+
+    static uint32_t s_log_dma_cap_cnt = 0;
+    if (s_log_dma_cap_cnt++ < 30) {
+        printf("[OverlayCapture] DMA CD overlay transfer to phys 0x%08X (size %u bytes)\n", phys, size);
+        fflush(stdout);
+    }
+    SwitchOverlayCaptureEntry e;
+    e.seq = ++s_switch_overlay_capture_seq;
+    e.load_addr = phys;
+    e.size = size;
+    e.bytes.assign(bytes, bytes + size);
+    s_switch_overlay_capture_bytes += size;
+    s_switch_overlay_captures.push_back(std::move(e));
 }
 
 
@@ -269,7 +294,11 @@ static void switch_overlay_capture_write_bin(const SwitchOverlayCaptureEntry& e)
 }
 
 static void switch_overlay_capture_write_json(void) {
+    if (s_switch_overlay_captures.empty()) return;
     switch_overlay_capture_mkdirs();
+    for (const auto& e : s_switch_overlay_captures) {
+        switch_overlay_capture_write_bin(e);
+    }
     const char* path = "sdmc:/switch/tekken3/overlay_captures_switch/overlay_captures.json";
     FILE* f = fopen(path, "w");
     if (!f) {
@@ -874,6 +903,7 @@ static void switch_vblank_callback(void) {
     if (!appletMainLoop() || switch_input_is_exit_requested()) {
         printf("[VBlank] Solicitud de salida detectada en frame %llu. Saliendo...\n",
                (unsigned long long)s_frame_count);
+        memcard_flush_all();
         exit(0);
     }
 
@@ -1007,6 +1037,7 @@ int main(int argc, char* argv[]) {
     // Inicializar tarjetas de memoria en la microSD
     mkdir("sdmc:/switch/tekken3/saves", 0777);
     memcard_init("sdmc:/switch/tekken3/saves");
+    std::atexit(memcard_flush_all);
 
     // Conectar el callback de VBlank de la GPU hacia Deko3D + audren
     gpu_set_vblank_callback(switch_vblank_callback);
@@ -1225,6 +1256,7 @@ int main(int argc, char* argv[]) {
 
     // 10. Limpieza ordenada si el juego termina
     printf("[Main] Finalizando subsistemas...\n");
+    memcard_flush_all();
     switch_overlay_capture_write_json();
     if (s_sd_log) {
         fclose(s_sd_log);

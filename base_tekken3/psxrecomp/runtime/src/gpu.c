@@ -3828,30 +3828,71 @@ static void setup_textured_draw(uint32_t color24, int semi_trans, int raw_textur
 }
 
 /* Validate and latch CLUT. In Tekken 3 / PS1, texture CLUTs reside in off-screen
- * VRAM (y >= 448, specifically rows 480..511). Any CLUT pointing to y < 448
- * points into active display/framebuffer area and is a corrupted/de-synced command.
- * We latch valid CLUTs per texture page and fallback to the last valid CLUT. */
+ * VRAM (y >= 448, specifically rows 480..511).
+ *
+ * Case 1: Relative CLUTs (clut_y < 32, i.e. clut < 0x0800):
+ * Some character and mesh primitives specify CLUT as an unbased index into the
+ * 32-row palette bank starting at row 480 (e.g. 0x012F -> row 4 of table at x=752,
+ * y=480+4=484 -> 0x792F). We base these to row 480 (clut += 0x7800).
+ *
+ * Case 2: Corrupted/de-phased CLUTs (32 <= clut_y < 448):
+ * These point into active display framebuffers (0..479). These are genuine
+ * desyncs/corruptions. We log diagnostic details and recover using the appropriate
+ * latched palette (separated by Player 1, Player 2, and general to avoid cross-pollution).
+ */
 static inline uint16_t validate_and_latch_clut(uint16_t clut, uint16_t tpage, uint16_t *out_x, uint16_t *out_y) {
     uint16_t clut_x = (clut & 0x3Fu) * 16u;
     uint16_t clut_y = (clut >> 6u) & 0x1FFu;
-    static uint16_t s_last_valid_clut[16] = {0};
-    static uint16_t s_global_last_valid = 0x7E40;
+
+    static uint16_t s_last_valid_p1[16]  = {0}; /* rows 504..507 (0x7E00..0x7EC0) */
+    static uint16_t s_last_valid_p2[16]  = {0}; /* rows 508..511 (0x7F00..0x7FC0) */
+    static uint16_t s_last_valid_gen[16] = {0}; /* rows 480..503 (0x7800..0x7DFC) */
+    static uint16_t s_global_last_valid  = 0x7E40u;
+
+    /* Case 1: unbased 32-row relative palette index (y < 32) */
+    if (clut_y < 32u) {
+        static uint32_t s_base_adjust_cnt = 0;
+        uint16_t adjusted = (uint16_t)(clut + 0x7800u);
+        if (s_base_adjust_cnt++ < 40) {
+            printf("[GPU_CLUT_BASE_ADJUST] Relative clut=0x%04X (x=%u, rel_y=%u) -> adjusted to 0x%04X (y=%u) on tpage=0x%X\n",
+                   clut, clut_x, clut_y, adjusted, clut_y + 480u, tpage);
+            fflush(stdout);
+        }
+        clut = adjusted;
+        clut_x = (clut & 0x3Fu) * 16u;
+        clut_y = (clut >> 6u) & 0x1FFu;
+    }
 
     if (clut_y >= 448u) {
-        s_last_valid_clut[tpage & 0xFu] = clut;
+        /* Fully valid palette row in off-screen VRAM */
+        if (clut_y >= 504u && clut_y <= 507u) {
+            s_last_valid_p1[tpage & 0xFu] = clut;
+        } else if (clut_y >= 508u && clut_y <= 511u) {
+            s_last_valid_p2[tpage & 0xFu] = clut;
+        } else {
+            s_last_valid_gen[tpage & 0xFu] = clut;
+        }
         s_global_last_valid = clut;
     } else {
+        /* Case 2: Corrupted/de-phased CLUT pointing into display buffer (32 <= clut_y < 448) */
         static uint32_t s_bad_clut_log_cnt = 0;
-        uint16_t rep = s_last_valid_clut[tpage & 0xFu] ? s_last_valid_clut[tpage & 0xFu] : s_global_last_valid;
+        uint16_t rep = 0;
+        uint8_t tp_idx = tpage & 0xFu;
+        if (s_last_valid_gen[tp_idx])      rep = s_last_valid_gen[tp_idx];
+        else if (s_last_valid_p1[tp_idx])  rep = s_last_valid_p1[tp_idx];
+        else if (s_last_valid_p2[tp_idx])  rep = s_last_valid_p2[tp_idx];
+        else                               rep = s_global_last_valid;
+
         if (s_bad_clut_log_cnt++ < 40) {
-            printf("[GPU_CLUT_RECOVER] Invalid clut=0x%04X (x=%u, y=%u < 448) on tpage=0x%X! Recovering with 0x%04X\n",
-                   clut, clut_x, clut_y, tpage, rep);
+            printf("[GPU_CLUT_DESYNC_RECOVER] Invalid clut=0x%04X (x=%u, y=%u in display area) on tpage=0x%X (cmd0=0x%08X src=0x%08X)! Recovering with 0x%04X\n",
+                   clut, clut_x, clut_y, tpage, gp0_cmd_buf[0], gp0_cmd_source_addr, rep);
             fflush(stdout);
         }
         clut = rep;
         clut_x = (clut & 0x3Fu) * 16u;
         clut_y = (clut >> 6u) & 0x1FFu;
     }
+
     if (out_x) *out_x = clut_x;
     if (out_y) *out_y = clut_y;
     return clut;

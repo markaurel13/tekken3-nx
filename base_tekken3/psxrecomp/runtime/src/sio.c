@@ -1662,6 +1662,12 @@ static void mc_process_byte(uint8_t tx_byte) {
         mc_cmd = tx_byte;
         sio_mc_cmd_count++;
         if (tx_byte == 0x52 || tx_byte == 0x57 || tx_byte == 0x53) {
+            static uint32_t s_mc_cmd_log_cnt = 0;
+            if (s_mc_cmd_log_cnt++ < 30 || (s_mc_cmd_log_cnt % 50) == 0) {
+                printf("[SIO_MC] Comando tarjeta detectado: 0x%02X (%s) en slot %d\n",
+                       tx_byte, (tx_byte == 0x52 ? "READ" : (tx_byte == 0x57 ? "WRITE" : "GETID")), mc_slot + 1);
+                fflush(stdout);
+            }
             if (tx_byte == 0x52) sio_mc_read_count++;
             mc_state = MC_ID1;
             sio_rx_data = mc_flag;

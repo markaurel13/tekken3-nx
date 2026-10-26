@@ -912,6 +912,9 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         FlushBatch();
     }
 
+    static uint64_t s_present_count = 0;
+    s_present_count++;
+
     GpuDisplayInfo di{};
     gpu_get_display_info(&di);
 
@@ -937,6 +940,16 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         m_cmdBuf.bindRenderTargets({});
         if (di.depth24 && m_vram && m_vramStagingCpu) {
             // Ruta para FMVs de 24-bit
+            static uint32_t s_fmv_log_cnt = 0;
+            if (s_fmv_log_cnt++ < 10 || (s_fmv_log_cnt % 60) == 0) {
+                printf("[FMV_Diag] 24-bit FMV Present #%llu: disp=(%u,%u %ux%u)\n",
+                       (unsigned long long)s_present_count, dispX, dispY, w, h);
+                fflush(stdout);
+            }
+            m_cmdBuf.bindRenderTargets(&colorTarget);
+            m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+            m_cmdBuf.bindRenderTargets({});
+
             uint32_t* slotStagingCpu = m_vramStagingCpu + (size_t)m_curSlot * (VramWidth * VramHeight);
             DkGpuAddr slotStagingGpu = m_vramStagingGpu + (size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t));
             for (uint32_t y = 0; y < h; y++) {
@@ -973,9 +986,6 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     m_queue.submitCommands(finalCmdList);
 
     m_queue.presentImage(m_swapchain, m_curSlot);
-
-    static uint64_t s_present_count = 0;
-    s_present_count++;
     if (s_present_count <= 10 || (s_present_count % 120) == 0) {
         printf("[Deko3D] Present #%llu disp=(%u,%u,%ux%u) d24=%d dis=%d vtx=%u\n",
                (unsigned long long)s_present_count,

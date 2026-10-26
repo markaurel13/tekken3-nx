@@ -101,6 +101,8 @@ static void memcard_ensure_dir(const char* dir) {
             if (i == 2 && tmp[1] == ':')
                 continue;
 #endif
+            if (i > 0 && tmp[i - 1] == ':')
+                continue;
             tmp[i] = '\0';
 #ifdef _WIN32
             (void)_mkdir(tmp);
@@ -144,8 +146,12 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
             fclose(f);
             if (n == MEMCARD_SIZE) {
                 cards[i].present = 1;
+                printf("[Memcard] Slot %d montada exitosamente desde: %s (128 KB)\n", i + 1, cards[i].filepath);
+            } else {
+                printf("[Memcard] Slot %d archivo corrupto o incompleto (%zu bytes): %s\n", i + 1, n, cards[i].filepath);
             }
         } else {
+            printf("[Memcard] Slot %d no existe (%s). Creando y formateando tarjeta de 128 KB...\n", i + 1, cards[i].filepath);
             memcard_format(cards[i].data);
             f = fopen(cards[i].filepath, "wb");
             if (f) {
@@ -154,9 +160,15 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
                 int close_ok = (fclose(f) == 0);
                 if (n == MEMCARD_SIZE && flush_ok && close_ok) {
                     cards[i].present = 1;
+                    printf("[Memcard] Slot %d formateada y guardada exitosamente en: %s\n", i + 1, cards[i].filepath);
+                } else {
+                    printf("[Memcard] Slot %d ERROR al escribir archivo formateado: %s\n", i + 1, cards[i].filepath);
                 }
+            } else {
+                printf("[Memcard] Slot %d ERROR no se pudo crear archivo (fopen wb fallo): %s\n", i + 1, cards[i].filepath);
             }
         }
+        fflush(stdout);
     }
 }
 
@@ -237,6 +249,11 @@ int memcard_write_sector(int card, int sector, const uint8_t* buf) {
 
     memcpy(cards[card].data + sector * MEMCARD_SECTOR_SIZE, buf, MEMCARD_SECTOR_SIZE);
     cards[card].dirty = 1;
+    static uint32_t s_mc_write_log_cnt = 0;
+    if (s_mc_write_log_cnt++ < 30 || (s_mc_write_log_cnt % 50) == 0) {
+        printf("[Memcard] Escribiendo sector %d en tarjeta %d (dirty=1)\n", sector, card + 1);
+        fflush(stdout);
+    }
     return 0;
 }
 
@@ -252,7 +269,16 @@ void memcard_flush(int card) {
         int close_ok = (fclose(f) == 0);
         if (n == MEMCARD_SIZE && flush_ok && close_ok) {
             cards[card].dirty = 0;
+            printf("[Memcard] Guardado a disco (flush) completado: %s (128 KB)\n", cards[card].filepath);
+            fflush(stdout);
+        } else {
+            printf("[Memcard] ERROR: Guardado incompleto en %s (n=%zu, flush=%d, close=%d)\n",
+                   cards[card].filepath, n, flush_ok, close_ok);
+            fflush(stdout);
         }
+    } else {
+        printf("[Memcard] ERROR: No se pudo abrir %s para escritura en flush\n", cards[card].filepath);
+        fflush(stdout);
     }
 }
 
