@@ -489,6 +489,14 @@ static int mc_open(CPUState* cpu, const char* path, uint32_t mode)
     }
 
     if (found_block != -1) {
+        if (file_size < 8192u) {
+            file_size = 8192u;
+            int off = found_block * 128;
+            *(uint32_t*)&data[off + 0x04] = 8192u;
+            data[off + 0x7F] = memcard_calc_checksum(&data[off]);
+            memcard_mark_dirty(slot);
+            memcard_flush(slot);
+        }
         int fd = mc_alloc_handle();
         if (fd < 0) {
             hle_deliver_card_event(cpu, 0x8000u);
@@ -526,17 +534,22 @@ static int mc_open(CPUState* cpu, const char* path, uint32_t mode)
             return -1;
         }
 
+        uint32_t blocks = (mode >> 16) & 0xFFFFu;
+        if (blocks == 0) blocks = 1;
+        uint32_t initial_size = blocks * 8192u;
+
         /* Configurar directory frame */
         int off = free_block * 128;
         memset(&data[off], 0, 128);
         data[off + 0] = 0x51; /* primer bloque en uso */
-        *(uint32_t*)&data[off + 0x04] = 0; /* tamaño inicial 0 */
+        *(uint32_t*)&data[off + 0x04] = initial_size;
         data[off + 8] = 0xFF; /* siguiente bloque = ninguno */
         data[off + 9] = 0xFF;
         strncpy((char*)&data[off + 0x0A], fname, 20);
         data[off + 0x7F] = memcard_calc_checksum(&data[off]);
 
         memcard_mark_dirty(slot);
+        memcard_flush(slot);
 
         int fd = mc_alloc_handle();
         if (fd < 0) {
@@ -547,12 +560,12 @@ static int mc_open(CPUState* cpu, const char* path, uint32_t mode)
         h->slot = slot;
         h->block = free_block;
         h->offset = 0;
-        h->size = 0;
+        h->size = initial_size;
         h->mode = mode;
         strncpy(h->filename, fname, sizeof(h->filename) - 1);
         hle_deliver_card_event(cpu, 0x0004u);
-        printf("[MemcardHLE] open(\"%s\", mode=0x%X) CREADO en bloque %d -> fd=0x%X\n",
-               path, mode, free_block, fd);
+        printf("[MemcardHLE] open(\"%s\", mode=0x%X) CREADO en bloque %d (size=%u) -> fd=0x%X\n",
+               path, mode, free_block, initial_size, fd);
         fflush(stdout);
         return fd;
     }
@@ -608,9 +621,9 @@ static int mc_write(CPUState* cpu, int fd, uint32_t guest_buf, uint32_t count)
         return -1;
     }
 
-    if (h->offset + count > 8192u) {
-        if (h->offset >= 8192u) count = 0;
-        else count = 8192u - h->offset;
+    if (h->offset + count > h->size) {
+        if (h->offset >= h->size) count = 0;
+        else count = h->size - h->offset;
     }
 
     uint32_t block_data_offset = (uint32_t)h->block * 8192u + h->offset;
@@ -619,19 +632,12 @@ static int mc_write(CPUState* cpu, int fd, uint32_t guest_buf, uint32_t count)
     }
     h->offset += count;
 
-    if (h->offset > h->size) {
-        h->size = h->offset;
-        int off = h->block * 128;
-        *(uint32_t*)&data[off + 0x04] = h->size;
-        data[off + 0x7F] = memcard_calc_checksum(&data[off]);
-    }
-
     memcard_mark_dirty(h->slot);
     memcard_flush(h->slot);
 
     hle_deliver_card_event(cpu, 0x0004u);
-    printf("[MemcardHLE] write(fd=0x%X, count=%u) -> escritos=%u (nuevo tamano=%u)\n",
-           fd, count, count, h->size);
+    printf("[MemcardHLE] write(fd=0x%X, count=%u) -> escritos=%u (offset=%u/%u)\n",
+           fd, count, count, h->offset, h->size);
     fflush(stdout);
     return (int)count;
 }
@@ -682,6 +688,54 @@ static int mc_format(CPUState* cpu, const char* dev)
     return 1;
 }
 
+static int mc_erase(CPUState* cpu, const char* path)
+{
+    int slot = -1;
+    const char* fname = NULL;
+    if (strncmp(path, "bu00:", 5) == 0) {
+        slot = 0;
+        fname = path + 5;
+    } else if (strncmp(path, "bu10:", 5) == 0) {
+        slot = 1;
+        fname = path + 5;
+    } else {
+        return -2;
+    }
+
+    if (!memcard_is_present(slot)) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return 0;
+    }
+
+    uint8_t* data = memcard_get_data(slot);
+    if (!data) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return 0;
+    }
+
+    for (int s = 1; s <= 15; s++) {
+        int off = s * 128;
+        if (data[off] == 0x51) {
+            char name[21] = {0};
+            memcpy(name, &data[off + 0x0A], 20);
+            name[20] = '\0';
+            if (strncmp(name, fname, 20) == 0) {
+                data[off] = 0xA0; /* Liberar bloque */
+                data[off + 0x7F] = memcard_calc_checksum(&data[off]);
+                memcard_mark_dirty(slot);
+                memcard_flush(slot);
+                hle_deliver_card_event(cpu, 0x0004u);
+                printf("[MemcardHLE] erase(\"%s\") -> borrado bloque %d\n", path, s);
+                fflush(stdout);
+                return 1;
+            }
+        }
+    }
+
+    hle_deliver_card_event(cpu, 0x8000u);
+    return 0;
+}
+
 static int s_firstfile_slot = -1;
 static int s_firstfile_idx = 1;
 static char s_firstfile_pattern[32] = {0};
@@ -689,7 +743,13 @@ static char s_firstfile_pattern[32] = {0};
 static int mc_match_pattern(const char* pat, const char* name)
 {
     if (!pat || pat[0] == '\0' || strcmp(pat, "*") == 0) return 1;
-    return (strncmp(pat, name, strlen(pat)) == 0);
+    const char* star = strchr(pat, '*');
+    if (star) {
+        size_t prefix_len = star - pat;
+        if (prefix_len == 0) return 1;
+        return (strncmp(pat, name, prefix_len) == 0);
+    }
+    return (strncmp(pat, name, 20) == 0);
 }
 
 static int mc_fill_direntry(CPUState* cpu, uint32_t dir_ptr, int slot, int block)
@@ -705,12 +765,11 @@ static int mc_fill_direntry(CPUState* cpu, uint32_t dir_ptr, int slot, int block
     }
     cpu->write_word(dir_ptr + 20, 0x10u); /* attr */
     uint32_t size = *(uint32_t*)&data[off + 0x04];
+    if (size < 8192u) size = 8192u;
     cpu->write_word(dir_ptr + 24, size); /* size */
     cpu->write_word(dir_ptr + 28, 0u);   /* next */
     cpu->write_word(dir_ptr + 32, (uint32_t)block); /* head */
-    for (int i = 0; i < 14; i++) {
-        cpu->write_byte(dir_ptr + 36 + i, 0);
-    }
+    cpu->write_word(dir_ptr + 36, 0u);   /* system[4] / reserved - exact 40 bytes total */
     return 1;
 }
 
@@ -871,6 +930,14 @@ static int hle_service_memcard_b0(CPUState* cpu, uint32_t fn)
         cpu->gpr[2] = (uint32_t)res;
         return 1;
     }
+    case 0x45u: { /* erase */
+        char path[128] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], path, sizeof(path));
+        int res = mc_erase(cpu, path);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
     case 0x49u: { /* _bu_init */
         cpu->gpr[2] = 0u;
         return 1;
@@ -949,6 +1016,14 @@ static int hle_service_memcard_a0(CPUState* cpu, uint32_t fn)
     }
     case 0x43u: { /* nextfile */
         int res = mc_nextfile(cpu, cpu->gpr[4]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x45u: { /* erase */
+        char path[128] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], path, sizeof(path));
+        int res = mc_erase(cpu, path);
         if (res == -2) return 0;
         cpu->gpr[2] = (uint32_t)res;
         return 1;
