@@ -387,3 +387,25 @@ int memcard_reload_bound(void) {
     }
     return 0;
 }
+
+uint8_t* memcard_get_data(int card) {
+    if (card < 0 || card >= MAX_CARDS) return NULL;
+    return cards[card].data;
+}
+
+void memcard_mark_dirty(int card) {
+    if (card < 0 || card >= MAX_CARDS) return;
+    cards[card].dirty = 1;
+}
+
+void memcard_format_card(int card) {
+    if (card < 0 || card >= MAX_CARDS) return;
+    memcard_format(cards[card].data);
+    cards[card].present = 1;
+    cards[card].dirty = 1;
+}
+
+uint8_t memcard_calc_checksum(const uint8_t *frame) {
+    return frame_checksum(frame);
+}
+

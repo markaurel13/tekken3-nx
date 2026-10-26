@@ -1,4 +1,4 @@
-﻿#ifndef PSXRECOMP_MEMCARD_H
+#ifndef PSXRECOMP_MEMCARD_H
 #define PSXRECOMP_MEMCARD_H
 
 #include <stdint.h>
@@ -84,6 +84,12 @@ int memcard_rebind_paths(const char *path0, const char *path1);
 
 /* Reload in-memory images from the currently bound filepaths (0 = ok). */
 int memcard_reload_bound(void);
+
+/* Direct buffer access & helper functions for HLE */
+uint8_t* memcard_get_data(int card);
+void memcard_mark_dirty(int card);
+void memcard_format_card(int card);
+uint8_t memcard_calc_checksum(const uint8_t *frame);
 
 #ifdef __cplusplus
 }

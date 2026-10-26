@@ -33,12 +33,15 @@
  */
 
 #include "bios_hle.h"
+#include "memcard.h"
 
 #include "cpu_state.h"
 #include "psx_cycles.h"
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
 /* fntrace.c — game-entry handoff latch (drives the boot turbo window). */
 extern int fntrace_is_game_started(void);
@@ -308,12 +311,728 @@ int psx_bios_hle_boot_turbo_active(void)
     return s_boot_skip_on && !fntrace_is_game_started();
 }
 
+static const char* b0_fn_name(uint32_t fn) {
+    switch (fn) {
+        case 0x07: return "DeliverEvent";
+        case 0x08: return "OpenEvent";
+        case 0x09: return "CloseEvent";
+        case 0x0A: return "WaitEvent";
+        case 0x0B: return "TestEvent";
+        case 0x0C: return "EnableEvent";
+        case 0x0D: return "DisableEvent";
+        case 0x11: return "InitCARD";
+        case 0x12: return "InitCARD/Pad";
+        case 0x13: return "StartCARD/Pad";
+        case 0x14: return "StopCARD/Pad";
+        case 0x15: return "_card_load";
+        case 0x16: return "_card_auto";
+        case 0x32: return "open";
+        case 0x33: return "lseek";
+        case 0x34: return "read";
+        case 0x35: return "write";
+        case 0x36: return "close";
+        case 0x37: return "ioctl";
+        case 0x41: return "format";
+        case 0x42: return "firstfile";
+        case 0x43: return "nextfile";
+        case 0x44: return "rename";
+        case 0x45: return "erase";
+        case 0x47: return "addDevice";
+        case 0x49: return "_bu_init/printDev";
+        case 0x4A: return "InitCARD2/_card_clear";
+        case 0x4B: return "StartCARD2";
+        case 0x4C: return "StopCARD2";
+        case 0x4D: return "_card_write";
+        case 0x4E: return "_card_read";
+        case 0x4F: return "_new_card";
+        case 0x50: return "_card_status";
+        case 0x56: return "GetB0Table";
+        case 0x5B: return "_card_info/ChangeClearPad";
+        default: return "unknown";
+    }
+}
+
+static void try_print_guest_str(CPUState* cpu, uint32_t addr, char* out, size_t max_len) {
+    out[0] = '\0';
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (phys < 0x200000u) {
+        size_t i = 0;
+        while (i < max_len - 1 && phys + i < 0x200000u) {
+            uint8_t c = cpu->read_byte(phys + i);
+            if (c == 0) break;
+            if (c < 32 || c > 126) { out[0] = '\0'; return; }
+            out[i++] = (char)c;
+        }
+        out[i] = '\0';
+    }
+}
+
+/* ── Memory Card HLE (Vía A) ──────────────────────────────────────────────── */
+
+static void hle_deliver_card_event(CPUState* cpu, uint32_t spec)
+{
+    uint32_t base = cpu->read_word(KADDR_EVCB_BASE);
+    if (base == 0) base = cpu->read_word(0x80000120u);
+    if (base == 0) base = cpu->read_word(0x00000120u);
+    if (base == 0) return;
+    uint32_t size_bytes = cpu->read_word(KADDR_EVCB_SIZE);
+    if (size_bytes == 0) size_bytes = cpu->read_word(0x80000124u);
+    if (size_bytes == 0) size_bytes = cpu->read_word(0x00000124u);
+    uint32_t n = size_bytes / EVCB_STRIDE;
+    if (n == 0 || n > 0x1000u) return;
+
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t ev = base + i * EVCB_STRIDE;
+        if (cpu->read_word(ev + EV_STATUS) != EVST_ENABLED) continue;
+        uint32_t cls = cpu->read_word(ev + EV_CLASS);
+        if (cls != 0xF4000001u && cls != 0xF0000011u) continue;
+        if (cpu->read_word(ev + EV_SPEC) != spec) continue;
+
+        uint32_t mode = cpu->read_word(ev + EV_MODE);
+        if (mode == EVMD_MARK) {
+            cpu->write_word(ev + EV_STATUS, EVST_READY);
+        } else if (mode == EVMD_CALLBACK) {
+            uint32_t func = cpu->read_word(ev + EV_FUNC);
+            if (func != 0 && psx_bios_image.deliver_event_ret != 0) {
+                uint32_t saved_ra = cpu->gpr[31];
+                cpu->gpr[31] = psx_bios_image.deliver_event_ret;
+                extern int g_exec_phase;
+                int prev_phase = g_exec_phase;
+                g_exec_phase = 3;
+                psx_dispatch_call(cpu, func, psx_bios_image.deliver_event_ret);
+                g_exec_phase = prev_phase;
+                cpu->gpr[31] = saved_ra;
+            }
+        }
+    }
+}
+
+#define MAX_MC_HANDLES 8
+#define MC_FD_FIRST    0x40
+
+typedef struct {
+    int      in_use;
+    int      slot;        /* 0 o 1 */
+    int      block;       /* 1 a 15 */
+    uint32_t offset;      /* offset actual dentro del archivo */
+    uint32_t size;        /* tamaño actual del archivo */
+    uint32_t mode;        /* flags de apertura */
+    char     filename[32];
+} McFileHandle;
+
+static McFileHandle s_mc_handles[MAX_MC_HANDLES];
+
+static int mc_alloc_handle(void) {
+    for (int i = 0; i < MAX_MC_HANDLES; i++) {
+        if (!s_mc_handles[i].in_use) {
+            s_mc_handles[i].in_use = 1;
+            return MC_FD_FIRST + i;
+        }
+    }
+    return -1;
+}
+
+static McFileHandle* mc_get_handle(int fd) {
+    if (fd < MC_FD_FIRST || fd >= MC_FD_FIRST + MAX_MC_HANDLES)
+        return NULL;
+    if (!s_mc_handles[fd - MC_FD_FIRST].in_use)
+        return NULL;
+    return &s_mc_handles[fd - MC_FD_FIRST];
+}
+
+static void mc_free_handle(int fd) {
+    if (fd >= MC_FD_FIRST && fd < MC_FD_FIRST + MAX_MC_HANDLES) {
+        memset(&s_mc_handles[fd - MC_FD_FIRST], 0, sizeof(McFileHandle));
+    }
+}
+
+static int mc_open(CPUState* cpu, const char* path, uint32_t mode)
+{
+    int slot = -1;
+    const char* fname = NULL;
+    if (strncmp(path, "bu00:", 5) == 0) {
+        slot = 0;
+        fname = path + 5;
+    } else if (strncmp(path, "bu10:", 5) == 0) {
+        slot = 1;
+        fname = path + 5;
+    } else {
+        return -2; /* Not a memory card device -> fall through to LLE */
+    }
+
+    if (!memcard_is_present(slot)) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return -1;
+    }
+
+    uint8_t* data = memcard_get_data(slot);
+    if (!data) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return -1;
+    }
+
+    /* Buscar archivo existente en los directory frames 1..15 */
+    int found_block = -1;
+    uint32_t file_size = 0;
+    for (int s = 1; s <= 15; s++) {
+        int off = s * 128;
+        if (data[off] == 0x51) { /* Primer bloque en uso */
+            char name[21] = {0};
+            memcpy(name, &data[off + 0x0A], 20);
+            name[20] = '\0';
+            if (strncmp(name, fname, 20) == 0) {
+                found_block = s;
+                file_size = *(uint32_t*)&data[off + 0x04];
+                break;
+            }
+        }
+    }
+
+    if (found_block != -1) {
+        int fd = mc_alloc_handle();
+        if (fd < 0) {
+            hle_deliver_card_event(cpu, 0x8000u);
+            return -1;
+        }
+        McFileHandle* h = mc_get_handle(fd);
+        h->slot = slot;
+        h->block = found_block;
+        h->offset = 0;
+        h->size = file_size;
+        h->mode = mode;
+        strncpy(h->filename, fname, sizeof(h->filename) - 1);
+        hle_deliver_card_event(cpu, 0x0004u);
+        printf("[MemcardHLE] open(\"%s\", mode=0x%X) existente en bloque %d (size=%u) -> fd=0x%X\n",
+               path, mode, found_block, file_size, fd);
+        fflush(stdout);
+        return fd;
+    }
+
+    /* No existe. ¿O_CREAT? (mode & 0x0200) */
+    if (mode & 0x0200u) {
+        /* Buscar primer bloque libre */
+        int free_block = -1;
+        for (int s = 1; s <= 15; s++) {
+            int off = s * 128;
+            if (data[off] == 0xA0) {
+                free_block = s;
+                break;
+            }
+        }
+        if (free_block == -1) {
+            hle_deliver_card_event(cpu, 0x8000u);
+            printf("[MemcardHLE] open(\"%s\", mode=0x%X) ERROR: Tarjeta llena\n", path, mode);
+            fflush(stdout);
+            return -1;
+        }
+
+        /* Configurar directory frame */
+        int off = free_block * 128;
+        memset(&data[off], 0, 128);
+        data[off + 0] = 0x51; /* primer bloque en uso */
+        *(uint32_t*)&data[off + 0x04] = 0; /* tamaño inicial 0 */
+        data[off + 8] = 0xFF; /* siguiente bloque = ninguno */
+        data[off + 9] = 0xFF;
+        strncpy((char*)&data[off + 0x0A], fname, 20);
+        data[off + 0x7F] = memcard_calc_checksum(&data[off]);
+
+        memcard_mark_dirty(slot);
+
+        int fd = mc_alloc_handle();
+        if (fd < 0) {
+            hle_deliver_card_event(cpu, 0x8000u);
+            return -1;
+        }
+        McFileHandle* h = mc_get_handle(fd);
+        h->slot = slot;
+        h->block = free_block;
+        h->offset = 0;
+        h->size = 0;
+        h->mode = mode;
+        strncpy(h->filename, fname, sizeof(h->filename) - 1);
+        hle_deliver_card_event(cpu, 0x0004u);
+        printf("[MemcardHLE] open(\"%s\", mode=0x%X) CREADO en bloque %d -> fd=0x%X\n",
+               path, mode, free_block, fd);
+        fflush(stdout);
+        return fd;
+    }
+
+    /* No existe y no es O_CREAT */
+    hle_deliver_card_event(cpu, 0x8000u);
+    printf("[MemcardHLE] open(\"%s\", mode=0x%X) archivo no encontrado -> -1\n", path, mode);
+    fflush(stdout);
+    return -1;
+}
+
+static int mc_read(CPUState* cpu, int fd, uint32_t guest_buf, uint32_t count)
+{
+    McFileHandle* h = mc_get_handle(fd);
+    if (!h) return -2; /* Not our handle -> LLE */
+
+    uint8_t* data = memcard_get_data(h->slot);
+    if (!data) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return -1;
+    }
+
+    if (h->offset >= h->size) {
+        hle_deliver_card_event(cpu, 0x0004u);
+        return 0; /* EOF */
+    }
+
+    if (h->offset + count > h->size) {
+        count = h->size - h->offset;
+    }
+
+    uint32_t block_data_offset = (uint32_t)h->block * 8192u + h->offset;
+    for (uint32_t i = 0; i < count; i++) {
+        cpu->write_byte(guest_buf + i, data[block_data_offset + i]);
+    }
+    h->offset += count;
+
+    hle_deliver_card_event(cpu, 0x0004u);
+    printf("[MemcardHLE] read(fd=0x%X, count=%u) -> leidos=%u (offset=%u/%u)\n",
+           fd, count, count, h->offset, h->size);
+    fflush(stdout);
+    return (int)count;
+}
+
+static int mc_write(CPUState* cpu, int fd, uint32_t guest_buf, uint32_t count)
+{
+    McFileHandle* h = mc_get_handle(fd);
+    if (!h) return -2; /* Not our handle -> LLE (e.g. stdout fd 1) */
+
+    uint8_t* data = memcard_get_data(h->slot);
+    if (!data) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return -1;
+    }
+
+    if (h->offset + count > 8192u) {
+        if (h->offset >= 8192u) count = 0;
+        else count = 8192u - h->offset;
+    }
+
+    uint32_t block_data_offset = (uint32_t)h->block * 8192u + h->offset;
+    for (uint32_t i = 0; i < count; i++) {
+        data[block_data_offset + i] = cpu->read_byte(guest_buf + i);
+    }
+    h->offset += count;
+
+    if (h->offset > h->size) {
+        h->size = h->offset;
+        int off = h->block * 128;
+        *(uint32_t*)&data[off + 0x04] = h->size;
+        data[off + 0x7F] = memcard_calc_checksum(&data[off]);
+    }
+
+    memcard_mark_dirty(h->slot);
+    memcard_flush(h->slot);
+
+    hle_deliver_card_event(cpu, 0x0004u);
+    printf("[MemcardHLE] write(fd=0x%X, count=%u) -> escritos=%u (nuevo tamano=%u)\n",
+           fd, count, count, h->size);
+    fflush(stdout);
+    return (int)count;
+}
+
+static int mc_close(CPUState* cpu, int fd)
+{
+    McFileHandle* h = mc_get_handle(fd);
+    if (!h) return -2; /* Not our handle -> LLE */
+
+    memcard_flush(h->slot);
+    printf("[MemcardHLE] close(fd=0x%X, archivo=%s)\n", fd, h->filename);
+    fflush(stdout);
+    mc_free_handle(fd);
+
+    hle_deliver_card_event(cpu, 0x0004u);
+    return 0;
+}
+
+static int mc_lseek(CPUState* cpu, int fd, int32_t offset, int whence)
+{
+    McFileHandle* h = mc_get_handle(fd);
+    if (!h) return -2; /* Not our handle -> LLE */
+
+    int32_t new_off = 0;
+    switch (whence) {
+        case 0: /* SEEK_SET */ new_off = offset; break;
+        case 1: /* SEEK_CUR */ new_off = (int32_t)h->offset + offset; break;
+        case 2: /* SEEK_END */ new_off = (int32_t)h->size + offset; break;
+        default: return -1;
+    }
+    if (new_off < 0) new_off = 0;
+    h->offset = (uint32_t)new_off;
+    return (int)h->offset;
+}
+
+static int mc_format(CPUState* cpu, const char* dev)
+{
+    int slot = -1;
+    if (strncmp(dev, "bu00:", 5) == 0) slot = 0;
+    else if (strncmp(dev, "bu10:", 5) == 0) slot = 1;
+    else return -2;
+
+    printf("[MemcardHLE] format(\"%s\") -> Slot %d\n", dev, slot + 1);
+    fflush(stdout);
+    memcard_format_card(slot);
+    memcard_flush(slot);
+    hle_deliver_card_event(cpu, 0x0004u);
+    return 1;
+}
+
+static int s_firstfile_slot = -1;
+static int s_firstfile_idx = 1;
+static char s_firstfile_pattern[32] = {0};
+
+static int mc_match_pattern(const char* pat, const char* name)
+{
+    if (!pat || pat[0] == '\0' || strcmp(pat, "*") == 0) return 1;
+    return (strncmp(pat, name, strlen(pat)) == 0);
+}
+
+static int mc_fill_direntry(CPUState* cpu, uint32_t dir_ptr, int slot, int block)
+{
+    uint8_t* data = memcard_get_data(slot);
+    if (!data) return 0;
+    int off = block * 128;
+    char name[21] = {0};
+    memcpy(name, &data[off + 0x0A], 20);
+    name[20] = '\0';
+    for (int i = 0; i < 20; i++) {
+        cpu->write_byte(dir_ptr + i, (uint8_t)name[i]);
+    }
+    cpu->write_word(dir_ptr + 20, 0x10u); /* attr */
+    uint32_t size = *(uint32_t*)&data[off + 0x04];
+    cpu->write_word(dir_ptr + 24, size); /* size */
+    cpu->write_word(dir_ptr + 28, 0u);   /* next */
+    cpu->write_word(dir_ptr + 32, (uint32_t)block); /* head */
+    for (int i = 0; i < 14; i++) {
+        cpu->write_byte(dir_ptr + 36 + i, 0);
+    }
+    return 1;
+}
+
+static int mc_firstfile(CPUState* cpu, const char* pattern, uint32_t dir_ptr)
+{
+    int slot = -1;
+    const char* pat = pattern;
+    if (strncmp(pattern, "bu00:", 5) == 0) {
+        slot = 0;
+        pat = pattern + 5;
+    } else if (strncmp(pattern, "bu10:", 5) == 0) {
+        slot = 1;
+        pat = pattern + 5;
+    } else {
+        return -2;
+    }
+
+    if (!memcard_is_present(slot)) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return 0;
+    }
+
+    s_firstfile_slot = slot;
+    strncpy(s_firstfile_pattern, pat, sizeof(s_firstfile_pattern) - 1);
+
+    uint8_t* data = memcard_get_data(slot);
+    for (int s = 1; s <= 15; s++) {
+        int off = s * 128;
+        if (data[off] == 0x51) {
+            char name[21] = {0};
+            memcpy(name, &data[off + 0x0A], 20);
+            name[20] = '\0';
+            if (mc_match_pattern(s_firstfile_pattern, name)) {
+                s_firstfile_idx = s + 1;
+                mc_fill_direntry(cpu, dir_ptr, slot, s);
+                hle_deliver_card_event(cpu, 0x0004u);
+                printf("[MemcardHLE] firstfile(\"%s\") -> encontrado \"%s\" en bloque %d\n",
+                       pattern, name, s);
+                fflush(stdout);
+                return (int)dir_ptr;
+            }
+        }
+    }
+
+    hle_deliver_card_event(cpu, 0x0004u);
+    return 0;
+}
+
+static int mc_nextfile(CPUState* cpu, uint32_t dir_ptr)
+{
+    if (s_firstfile_slot < 0) return -2;
+    int slot = s_firstfile_slot;
+    if (!memcard_is_present(slot)) {
+        hle_deliver_card_event(cpu, 0x8000u);
+        return 0;
+    }
+
+    uint8_t* data = memcard_get_data(slot);
+    for (int s = s_firstfile_idx; s <= 15; s++) {
+        int off = s * 128;
+        if (data[off] == 0x51) {
+            char name[21] = {0};
+            memcpy(name, &data[off + 0x0A], 20);
+            name[20] = '\0';
+            if (mc_match_pattern(s_firstfile_pattern, name)) {
+                s_firstfile_idx = s + 1;
+                mc_fill_direntry(cpu, dir_ptr, slot, s);
+                hle_deliver_card_event(cpu, 0x0004u);
+                printf("[MemcardHLE] nextfile() -> encontrado \"%s\" en bloque %d\n", name, s);
+                fflush(stdout);
+                return (int)dir_ptr;
+            }
+        }
+    }
+
+    hle_deliver_card_event(cpu, 0x0004u);
+    return 0;
+}
+
+static int hle_service_memcard_b0(CPUState* cpu, uint32_t fn)
+{
+    if (!fntrace_is_game_started()) return 0;
+
+    switch (fn) {
+    case 0x15u: { /* _card_load(chan) */
+        int chan = (int)cpu->gpr[4];
+        int slot = (chan == 0x10 || chan == 1) ? 1 : 0;
+        int pres = memcard_is_present(slot);
+        static uint32_t s_log_load_b0 = 0;
+        if (s_log_load_b0++ < 5) {
+            printf("[MemcardHLE] B0:0x15 _card_load(chan=%d, slot=%d) -> pres=%d\n", chan, slot, pres);
+            fflush(stdout);
+        }
+        if (pres) {
+            hle_deliver_card_event(cpu, 0x0004u);
+            cpu->gpr[2] = 1u;
+        } else {
+            hle_deliver_card_event(cpu, 0x8000u);
+            cpu->gpr[2] = 0u;
+        }
+        return 1;
+    }
+    case 0x16u: { /* _card_auto */
+        cpu->gpr[2] = 0u;
+        return 1;
+    }
+    case 0x32u: { /* open */
+        char path[128] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], path, sizeof(path));
+        int fd = mc_open(cpu, path, cpu->gpr[5]);
+        if (fd == -2) return 0; /* Fall through to LLE */
+        cpu->gpr[2] = (uint32_t)fd;
+        return 1;
+    }
+    case 0x33u: { /* lseek */
+        int res = mc_lseek(cpu, (int)cpu->gpr[4], (int32_t)cpu->gpr[5], (int)cpu->gpr[6]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x34u: { /* read */
+        int res = mc_read(cpu, (int)cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x35u: { /* write */
+        int res = mc_write(cpu, (int)cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x36u: { /* close */
+        int res = mc_close(cpu, (int)cpu->gpr[4]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x41u: { /* format */
+        char dev[64] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], dev, sizeof(dev));
+        int res = mc_format(cpu, dev);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x42u: { /* firstfile */
+        char pat[64] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], pat, sizeof(pat));
+        int res = mc_firstfile(cpu, pat, cpu->gpr[5]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x43u: { /* nextfile */
+        int res = mc_nextfile(cpu, cpu->gpr[4]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x49u: { /* _bu_init */
+        cpu->gpr[2] = 0u;
+        return 1;
+    }
+    case 0x4Fu: { /* _new_card */
+        cpu->gpr[2] = 0u;
+        return 1;
+    }
+    case 0x50u: { /* _card_status */
+        int chan = (int)cpu->gpr[4];
+        int slot = (chan == 0x10 || chan == 1) ? 1 : 0;
+        cpu->gpr[2] = memcard_is_present(slot) ? 1u : 0u;
+        return 1;
+    }
+    case 0x58u: { /* _card_chan */
+        cpu->gpr[2] = 0u;
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
+static int hle_service_memcard_a0(CPUState* cpu, uint32_t fn)
+{
+    if (!fntrace_is_game_started()) return 0;
+
+    switch (fn) {
+    case 0x32u: { /* open */
+        char path[128] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], path, sizeof(path));
+        int fd = mc_open(cpu, path, cpu->gpr[5]);
+        if (fd == -2) return 0;
+        cpu->gpr[2] = (uint32_t)fd;
+        return 1;
+    }
+    case 0x33u: { /* lseek */
+        int res = mc_lseek(cpu, (int)cpu->gpr[4], (int32_t)cpu->gpr[5], (int)cpu->gpr[6]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x34u: { /* read */
+        int res = mc_read(cpu, (int)cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x35u: { /* write */
+        int res = mc_write(cpu, (int)cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x36u: { /* close */
+        int res = mc_close(cpu, (int)cpu->gpr[4]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x41u: { /* format */
+        char dev[64] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], dev, sizeof(dev));
+        int res = mc_format(cpu, dev);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x42u: { /* firstfile */
+        char pat[64] = {0};
+        try_print_guest_str(cpu, cpu->gpr[4], pat, sizeof(pat));
+        int res = mc_firstfile(cpu, pat, cpu->gpr[5]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x43u: { /* nextfile */
+        int res = mc_nextfile(cpu, cpu->gpr[4]);
+        if (res == -2) return 0;
+        cpu->gpr[2] = (uint32_t)res;
+        return 1;
+    }
+    case 0x70u: { /* _bu_init */
+        cpu->gpr[2] = 0u;
+        return 1;
+    }
+    case 0xABu: { /* _card_info */
+        int chan = (int)cpu->gpr[4];
+        int slot = (chan == 0x10 || chan == 1) ? 1 : 0;
+        int pres = memcard_is_present(slot);
+        static uint32_t s_log_info_a0 = 0;
+        if (s_log_info_a0++ < 5) {
+            printf("[MemcardHLE] A0:0xAB _card_info(chan=%d, slot=%d) -> pres=%d\n", chan, slot, pres);
+            fflush(stdout);
+        }
+        if (pres) {
+            hle_deliver_card_event(cpu, 0x0004u);
+            cpu->gpr[2] = 1u;
+        } else {
+            hle_deliver_card_event(cpu, 0x8000u);
+            cpu->gpr[2] = 0u;
+        }
+        return 1;
+    }
+    case 0xACu: { /* _card_load(chan) */
+        int chan = (int)cpu->gpr[4];
+        int slot = (chan == 0x10 || chan == 1) ? 1 : 0;
+        int pres = memcard_is_present(slot);
+        static uint32_t s_log_load_a0 = 0;
+        if (s_log_load_a0++ < 5) {
+            printf("[MemcardHLE] A0:0xAC _card_load(chan=%d, slot=%d) -> pres=%d\n", chan, slot, pres);
+            fflush(stdout);
+        }
+        if (pres) {
+            hle_deliver_card_event(cpu, 0x0004u);
+            cpu->gpr[2] = 1u;
+        } else {
+            hle_deliver_card_event(cpu, 0x8000u);
+            cpu->gpr[2] = 0u;
+        }
+        return 1;
+    }
+    case 0xADu: { /* _card_auto */
+        cpu->gpr[2] = 0u;
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
 /* ── the hook ────────────────────────────────────────────────────────────── */
 
 static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
 {
     if (phys == 0xB0u) {
         uint32_t fn = cpu->gpr[9]; /* $t1 — the PSY-Q thunk's function number */
+
+        int mc_handled = hle_service_memcard_b0(cpu, fn);
+        if (mc_handled) {
+            hle_record(0xB0u, fn, cpu, cpu->gpr[2], PSX_HLE_ROUTE_HLE);
+            return 1;
+        }
+
+        if (fntrace_is_game_started()) {
+            static uint32_t s_b0_log_count = 0;
+            if (s_b0_log_count < 30) {
+                char str_a0[64] = {0};
+                try_print_guest_str(cpu, cpu->gpr[4], str_a0, sizeof(str_a0));
+                int is_card_ev = (fn == 0x08 && (cpu->gpr[4] == 0xF4000001u || cpu->gpr[4] == 0xF0000011u));
+                int is_card_fn = (fn >= 0x11 && fn <= 0x16) || (fn >= 0x32 && fn <= 0x5B);
+                if (is_card_fn || is_card_ev || str_a0[0] != '\0' || s_b0_log_count < 10) {
+                    s_b0_log_count++;
+                    printf("[BIOS_B0] fn=0x%02X (%s) ra=0x%08X a0=0x%08X %s%s%s a1=0x%08X a2=0x%08X a3=0x%08X\n",
+                           fn, b0_fn_name(fn), cpu->gpr[31], cpu->gpr[4],
+                           str_a0[0] ? "(\"" : "", str_a0[0] ? str_a0 : "", str_a0[0] ? "\")" : "",
+                           cpu->gpr[5], cpu->gpr[6], cpu->gpr[7]);
+                    fflush(stdout);
+                }
+            }
+        }
+
         int handled = 0;
         if (__builtin_expect(s_call_hle_on != 0, 0))
             handled = hle_service_b0(cpu, fn);
@@ -322,6 +1041,27 @@ static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
         return handled;
     }
     if (phys == 0xA0u || phys == 0xC0u) {
+        if (phys == 0xA0u) {
+            uint32_t fn = cpu->gpr[9];
+            int mc_handled = hle_service_memcard_a0(cpu, fn);
+            if (mc_handled) {
+                hle_record(0xA0u, fn, cpu, cpu->gpr[2], PSX_HLE_ROUTE_HLE);
+                return 1;
+            }
+        }
+
+        if (fntrace_is_game_started()) {
+            static uint32_t s_a0_log_count = 0;
+            if (s_a0_log_count < 20) {
+                uint32_t fn = cpu->gpr[9];
+                if (fn == 0x19 || fn == 0xAC || fn == 0x70) {
+                    s_a0_log_count++;
+                    printf("[BIOS_%c0] fn=0x%02X ra=0x%08X a0=0x%08X a1=0x%08X\n",
+                           phys == 0xA0u ? 'A' : 'C', fn, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5]);
+                    fflush(stdout);
+                }
+            }
+        }
         /* No A0/C0 services implemented in v1 — observe + fall through. */
         hle_record(phys, cpu->gpr[9], cpu, 0u, PSX_HLE_ROUTE_LLE);
         return 0;
@@ -351,8 +1091,7 @@ void psx_bios_hle_configure(int call_hle, int boot_skip)
      * shell-skip latch must arm again or peers run the interactive shell and
      * appear hung after netplay lockstep. */
     s_shell_skipped = 0;
-    g_psx_bios_hle_hook =
-        (s_call_hle_on || s_boot_skip_on) ? &bios_hle_dispatch : NULL;
+    g_psx_bios_hle_hook = &bios_hle_dispatch;
 }
 
 int psx_bios_hle_enabled(void)           { return s_call_hle_on; }
