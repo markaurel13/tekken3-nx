@@ -17,6 +17,7 @@
 #include "platform/switch_audio.h"
 #include "platform/switch_input.h"
 #include "iso_reader.h"
+#include "tek_block_prof.h"
 
 // Referencias a los componentes de psxrecomp
 extern "C" {
@@ -268,11 +269,14 @@ static FILE* s_sd_log = NULL;
 static int s_nxlink_sock = -1;
 static uint64_t s_last_main_loop_tick = 0;
 static uint64_t s_last_main_loop_frame = 0;
-static uint64_t s_total_loop_ns = 0;
-static uint64_t s_total_audio_ns = 0;
-static uint64_t s_total_input_ns = 0;
-static uint64_t s_total_render_ns = 0;
-static uint64_t s_main_loop_samples = 0;
+static uint64_t s_win_loop_ns = 0;
+static uint64_t s_win_input_ns = 0;
+static uint64_t s_win_audio_ns = 0;
+static uint64_t s_win_render_ns = 0;
+static uint64_t s_win_other_ns = 0;
+static uint64_t s_win_guest_ns = 0;
+static uint64_t s_win_samples = 0;
+static uint64_t s_last_cb_exit_tick = 0;
 static uint64_t s_last_hot_pc_frame = 0;
 static uint32_t s_last_hot_pc = 0;
 
@@ -732,6 +736,9 @@ static void check_combat_stall_diagnostic(uint32_t frame) {
 
 static void switch_vblank_callback(void) {
     u64 frame_start_tick = armGetSystemTick();
+    if (s_last_cb_exit_tick != 0) {
+        s_win_guest_ns += armTicksToNs(frame_start_tick - s_last_cb_exit_tick);
+    }
     if (s_prof_last_cb_end) s_prof_guest_ticks += frame_start_tick - s_prof_last_cb_end;
     int prof_prev_phase = g_exec_phase;
     g_exec_phase = 7;
@@ -911,35 +918,62 @@ static void switch_vblank_callback(void) {
     u64 input_start = armGetSystemTick();
     switch_input_update();
     u64 input_end = armGetSystemTick();
-    s_total_input_ns += armTicksToNs(input_end - input_start);
+    u64 input_ns = armTicksToNs(input_end - input_start);
+    s_win_input_ns += input_ns;
 
     // 3. Bombeo de audio hacia el subsistema nativo audren
     u64 audio_start = armGetSystemTick();
     switch_audio_update();
     u64 audio_end = armGetSystemTick();
-    s_total_audio_ns += armTicksToNs(audio_end - audio_start);
+    u64 audio_ns = armTicksToNs(audio_end - audio_start);
+    s_win_audio_ns += audio_ns;
 
     // 4. Renderizar y presentar frame con Deko3D
     u64 render_start = armGetSystemTick();
     Deko3DRenderer::Instance().RenderDisplay(nullptr, 1280, 0, 0, 1280, 720);
     u64 render_end = armGetSystemTick();
-    s_total_render_ns += armTicksToNs(render_end - render_start);
+    u64 render_ns = armTicksToNs(render_end - render_start);
+    s_win_render_ns += render_ns;
 
     u64 frame_end_tick = armGetSystemTick();
-    s_total_loop_ns += armTicksToNs(frame_end_tick - frame_start_tick);
-    s_main_loop_samples++;
+    u64 total_cb_ns = armTicksToNs(frame_end_tick - frame_start_tick);
+    s_win_loop_ns += total_cb_ns;
+
+    u64 active_work_ns = input_ns + audio_ns + render_ns;
+    u64 other_ns = (total_cb_ns > active_work_ns) ? (total_cb_ns - active_work_ns) : 0;
+    s_win_other_ns += other_ns;
+    s_win_samples++;
+    s_last_cb_exit_tick = frame_end_tick;
 
     if (s_frame_count <= 5 || (s_frame_count % 120) == 0) {
-        double denom = s_main_loop_samples ? (double)s_main_loop_samples : 1.0;
-        printf("[PerfAvg] frame=%llu loop=%.3fms input=%.3fms audio=%.3fms render=%.3fms samples=%llu\n",
+        double denom = s_win_samples ? (double)s_win_samples : 1.0;
+        auto rt = Deko3DRenderer::Instance().GetAndResetRenderTimings();
+        double rt_denom = rt.samples ? (double)rt.samples : 1.0;
+        printf("[PerfAvg] frame=%llu win120: loop=%.3fms (input=%.3fms audio=%.3fms render=%.3fms other=%.3fms) guest_between=%.3fms | render_detail(prep=%.3fms submit=%.3fms pres=%.3fms wait=%.3fms)\n",
                (unsigned long long)s_frame_count,
-               (double)s_total_loop_ns / denom / 1e6,
-               (double)s_total_input_ns / denom / 1e6,
-               (double)s_total_audio_ns / denom / 1e6,
-               (double)s_total_render_ns / denom / 1e6,
-               (unsigned long long)s_main_loop_samples);
+               (double)s_win_loop_ns / denom / 1e6,
+               (double)s_win_input_ns / denom / 1e6,
+               (double)s_win_audio_ns / denom / 1e6,
+               (double)s_win_render_ns / denom / 1e6,
+               (double)s_win_other_ns / denom / 1e6,
+               (double)s_win_guest_ns / denom / 1e6,
+               (double)rt.vram_prep_ns / rt_denom / 1e6,
+               (double)rt.submit_ns / rt_denom / 1e6,
+               (double)rt.present_ns / rt_denom / 1e6,
+               (double)rt.fence_wait_ns / rt_denom / 1e6);
+
+        s_win_loop_ns = 0;
+        s_win_input_ns = 0;
+        s_win_audio_ns = 0;
+        s_win_render_ns = 0;
+        s_win_other_ns = 0;
+        s_win_guest_ns = 0;
+        s_win_samples = 0;
     }
-    if ((s_frame_count % 120) == 0) prof_report(s_frame_count);
+    if ((s_frame_count % 120) == 0) {
+        prof_report(s_frame_count);
+        tek_block_prof_report_and_reset(s_frame_count);
+    }
 }
 
 int main(int argc, char* argv[]) {

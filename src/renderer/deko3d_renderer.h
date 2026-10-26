@@ -98,6 +98,15 @@ public:
     // Obtener número de vértices presentados en el último frame
     uint32_t GetLastFrameVtx() const { return m_lastFrameVtx; }
 
+    struct RenderTimings {
+        uint64_t vram_prep_ns = 0;
+        uint64_t submit_ns = 0;
+        uint64_t present_ns = 0;
+        uint64_t fence_wait_ns = 0;
+        uint64_t samples = 0;
+    };
+    RenderTimings GetAndResetRenderTimings();
+
 private:
     Deko3DRenderer() = default;
     ~Deko3DRenderer() = default;
@@ -158,6 +167,7 @@ private:
 
     bool m_vramDirty = true;
     bool m_initialized = false;
+    RenderTimings m_timings{};
 };
 
 #endif

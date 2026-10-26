@@ -94,6 +94,7 @@ set(PSX_RUNTIME_SOURCES
 # Definir ejecutable principal ELF
 add_executable(tekken3_nx
     src/main.cpp
+    src/tek_block_prof.c
     src/renderer/deko3d_renderer.cpp
     src/platform/switch_audio.cpp
     src/platform/switch_input.cpp

@@ -908,6 +908,8 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         return 0;
     }
 
+    u64 t_prep_start = armGetSystemTick();
+
     if (m_vtxAllocated > m_vtxBatchStart) {
         FlushBatch();
     }
@@ -983,9 +985,13 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     }
 
     DkCmdList finalCmdList = m_cmdBuf.finishList();
+    u64 t_submit_start = armGetSystemTick();
     m_queue.submitCommands(finalCmdList);
 
+    u64 t_present_start = armGetSystemTick();
     m_queue.presentImage(m_swapchain, m_curSlot);
+    u64 t_present_end = armGetSystemTick();
+
     if (s_present_count <= 10 || (s_present_count % 120) == 0) {
         printf("[Deko3D] Present #%llu disp=(%u,%u,%ux%u) d24=%d dis=%d vtx=%u\n",
                (unsigned long long)s_present_count,
@@ -1027,9 +1033,23 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     }
 
     m_lastFrameVtx = m_vtxAllocated;
+    u64 t_fence_start = armGetSystemTick();
     BeginFrame();
+    u64 t_fence_end = armGetSystemTick();
+
+    m_timings.vram_prep_ns += armTicksToNs(t_submit_start - t_prep_start);
+    m_timings.submit_ns += armTicksToNs(t_present_start - t_submit_start);
+    m_timings.present_ns += armTicksToNs(t_present_end - t_present_start);
+    m_timings.fence_wait_ns += armTicksToNs(t_fence_end - t_fence_start);
+    m_timings.samples++;
 
     return (int)(w * h);
+}
+
+Deko3DRenderer::RenderTimings Deko3DRenderer::GetAndResetRenderTimings() {
+    RenderTimings t = m_timings;
+    m_timings = {};
+    return t;
 }
 
 // =============================================================================
