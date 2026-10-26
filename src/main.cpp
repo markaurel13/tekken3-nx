@@ -612,7 +612,94 @@ static void prof_report(uint64_t frame) {
     s_prof_last_irq = g_prof_irq_calls; s_prof_last_svc = g_prof_svc_calls;
 }
 
-extern "C" void memory_log_frame_prim_diag(uint32_t frame);
+extern "C" {
+extern void memory_log_frame_prim_diag(uint32_t frame);
+extern uint32_t g_mesh_3d_calls_frame;
+extern uint32_t g_mesh_3d_prim_calls_frame;
+extern uint32_t g_mesh_3d_prim_emitted_frame;
+}
+
+static void check_combat_stall_diagnostic(uint32_t frame) {
+    static bool s_combat_ever_seen = false;
+    static uint32_t s_stall_frames = 0;
+    uint32_t vtx = Deko3DRenderer::Instance().GetLastFrameVtx();
+
+    static uint32_t s_prev_vtx = 0;
+    static uint32_t s_vtx_same_frames = 0;
+
+    if (vtx > 3000) {
+        s_combat_ever_seen = true;
+    }
+
+    bool is_stalled = false;
+    if (s_combat_ever_seen) {
+        if (vtx <= 50) {
+            is_stalled = true;
+        } else if (vtx == s_prev_vtx && g_mesh_3d_prim_calls_frame == 0) {
+            s_vtx_same_frames++;
+            if (s_vtx_same_frames >= 60) {
+                is_stalled = true;
+            }
+        } else {
+            s_vtx_same_frames = 0;
+        }
+    }
+    s_prev_vtx = vtx;
+
+    if (is_stalled) {
+        s_stall_frames++;
+        if (s_stall_frames == 1 || s_stall_frames == 60 || (s_stall_frames % 300) == 0) {
+            printf("[CombatStallDiag] frame=%u stall_duration=%u vtx=%u mesh_calls=%u prim_calls=%u prim_emitted=%u\n",
+                   frame, s_stall_frames, vtx,
+                   g_mesh_3d_calls_frame, g_mesh_3d_prim_calls_frame, g_mesh_3d_prim_emitted_frame);
+            printf("  [DMA2] total_nodes=%u empty_nodes=%u packets=%u words=%u start_addr=0x%08X chcr=0x%08X madr=0x%08X gpustat=0x%08X\n",
+                   g_dma2_last_total_nodes, g_dma2_last_empty_nodes, g_dma2_last_packet_count, g_dma2_last_actual_words,
+                   g_dma2_last_start_addr, dma_read(0x1F8010A8), dma_read(0x1F8010A0), gpu_read_gpustat());
+            if (debug_cpu_ptr) {
+                printf("  [CPU] pc=0x%08X ra=0x%08X sp=0x%08X fp=0x%08X v0=0x%08X a0=0x%08X a1=0x%08X\n",
+                       debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29], debug_cpu_ptr->gpr[30],
+                       debug_cpu_ptr->gpr[2], debug_cpu_ptr->gpr[4], debug_cpu_ptr->gpr[5]);
+            }
+            uint32_t p1_ptr = psx_read_word(0x800ADC20);
+            uint32_t p2_ptr = psx_read_word(0x800ADC24);
+            printf("  [P1 Actor 0x%08X] ", p1_ptr);
+            if (p1_ptr >= 0x80000000 && p1_ptr < 0x80200000) {
+                printf("anim=0x%08X f=%u hp=%d pos=(%d,%d,%d) facing=%d\n",
+                       psx_read_word(p1_ptr + 0x54), (uint32_t)psx_read_half(p1_ptr + 0x58),
+                       (int16_t)psx_read_half(p1_ptr + 0x3F4),
+                       (int32_t)psx_read_word(p1_ptr + 0x908), (int32_t)psx_read_word(p1_ptr + 0x90C), (int32_t)psx_read_word(p1_ptr + 0x910),
+                       (int16_t)psx_read_half(p1_ptr + 0x2A));
+            } else {
+                printf("invalid\n");
+            }
+            printf("  [P2 Actor 0x%08X] ", p2_ptr);
+            if (p2_ptr >= 0x80000000 && p2_ptr < 0x80200000) {
+                printf("anim=0x%08X f=%u hp=%d pos=(%d,%d,%d) facing=%d\n",
+                       psx_read_word(p2_ptr + 0x54), (uint32_t)psx_read_half(p2_ptr + 0x58),
+                       (int16_t)psx_read_half(p2_ptr + 0x3F4),
+                       (int32_t)psx_read_word(p2_ptr + 0x908), (int32_t)psx_read_word(p2_ptr + 0x90C), (int32_t)psx_read_word(p2_ptr + 0x910),
+                       (int16_t)psx_read_half(p2_ptr + 0x2A));
+            } else {
+                printf("invalid\n");
+            }
+            printf("  [Recent Dispatches (last 10)]:\n");
+            uint64_t seq = g_fntrace_seq;
+            uint32_t count = (seq > 10) ? 10 : (uint32_t)seq;
+            for (uint32_t i = count; i > 0; --i) {
+                uint64_t idx = (seq - i) % FNTRACE_RING_CAP;
+                const FntraceEntry& e = g_fntrace_ring[idx];
+                printf("    #%llu f=%u tgt=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
+                       (unsigned long long)(seq - i), e.frame, e.target, e.ra, e.a0, e.a1, e.sp);
+            }
+        }
+    } else {
+        s_stall_frames = 0;
+    }
+
+    g_mesh_3d_calls_frame = 0;
+    g_mesh_3d_prim_calls_frame = 0;
+    g_mesh_3d_prim_emitted_frame = 0;
+}
 
 static void switch_vblank_callback(void) {
     u64 frame_start_tick = armGetSystemTick();
@@ -626,6 +713,7 @@ static void switch_vblank_callback(void) {
     } } prof_guard{frame_start_tick, prof_prev_phase};
     s_frame_count++;
     memory_log_frame_prim_diag((uint32_t)s_frame_count);
+    check_combat_stall_diagnostic((uint32_t)s_frame_count);
     u64 now_tick = armGetSystemTick();
     if (s_last_vblank_tick == 0) {
         s_last_vblank_tick = now_tick;

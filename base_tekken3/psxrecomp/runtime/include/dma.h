@@ -124,6 +124,12 @@ void dma_debug_get_state(DMADebugState* out);
 uint64_t dma_debug_get_cdrom_history(const DMACDROMHistoryEntry** out_entries);
 void dma_debug_clear_cdrom_history(void);
 
+extern uint32_t g_dma2_last_total_nodes;
+extern uint32_t g_dma2_last_empty_nodes;
+extern uint32_t g_dma2_last_packet_count;
+extern uint32_t g_dma2_last_actual_words;
+extern uint32_t g_dma2_last_start_addr;
+
 #ifdef __cplusplus
 }
 #endif

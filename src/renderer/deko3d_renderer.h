@@ -96,6 +96,9 @@ public:
     // Callback dinámico de adición de memoria para el command buffer
     void OnCmdBufAddMem(DkCmdBuf cmdbuf, size_t minReqSize);
 
+    // Obtener número de vértices presentados en el último frame
+    uint32_t GetLastFrameVtx() const { return m_lastFrameVtx; }
+
 private:
     Deko3DRenderer() = default;
     ~Deko3DRenderer() = default;
@@ -139,6 +142,7 @@ private:
     DkGpuAddr m_vtxRingGpu = 0;
     uint32_t m_vtxAllocated = 0;
     uint32_t m_vtxBatchStart = 0;
+    uint32_t m_lastFrameVtx = 0;
 
     void* m_imgDescCpu = nullptr;
     DkGpuAddr m_imgDescGpu = 0;

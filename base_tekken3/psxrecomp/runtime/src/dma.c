@@ -651,6 +651,12 @@ static void execute_ch1_mdec_out(void) {
     complete_transfer(1);
 }
 
+uint32_t g_dma2_last_total_nodes = 0;
+uint32_t g_dma2_last_empty_nodes = 0;
+uint32_t g_dma2_last_packet_count = 0;
+uint32_t g_dma2_last_actual_words = 0;
+uint32_t g_dma2_last_start_addr = 0;
+
 static uint32_t execute_ch2_gpu(void) {
     uint32_t chcr = channels[2].chcr;
     uint32_t direction = chcr & 1;           /* 0=to RAM, 1=from RAM (to device) */
@@ -733,11 +739,15 @@ static uint32_t execute_ch2_gpu(void) {
         uint32_t ot_rank = 0xffffffffu;
 
         uint32_t addr = start_addr;
+        uint32_t slow_addr = start_addr;
         uint32_t safety = 0;
+        uint32_t cur_total_nodes = 0;
+        uint32_t cur_empty_nodes = 0;
+        uint32_t cur_packet_count = 0;
         for (;;) {
-            if (safety++ > MAX_NODES) {
+            if (safety++ > MAX_NODES || cur_empty_nodes > 4096) {
                 hit_limit = 1;
-                last_addr = addr;
+                last_addr = 0x00FFFFFFu;
                 break;
             }
 
@@ -746,8 +756,13 @@ static uint32_t execute_ch2_gpu(void) {
             uint32_t word_addr =
                 psx_mod_gpu_dma_resolve_address(addr + 4u);
 
-            if (num_words == 0u)
+            cur_total_nodes++;
+            if (num_words == 0u) {
+                cur_empty_nodes++;
                 ot_rank = (ot_rank == 0xffffffffu) ? 0u : (ot_rank + 1u);
+            } else {
+                cur_packet_count++;
+            }
 
             int emit = 1;
             if (s_nd_flap_last && num_words >= 6u &&
@@ -794,9 +809,24 @@ static uint32_t execute_ch2_gpu(void) {
                 break;
             }
             addr = psx_mod_gpu_dma_resolve_address(next);
+            if ((cur_total_nodes & 1) == 0 && (slow_addr & 0xFFFFFFu) != 0xFFFFFFu) {
+                uint32_t slow_hdr = psx_read_word(slow_addr);
+                slow_addr = psx_mod_gpu_dma_resolve_address(slow_hdr & 0xFFFFFFu);
+            }
+            if (addr == slow_addr) {
+                hit_limit = 1;
+                last_addr = 0x00FFFFFFu;
+                break;
+            }
             last_addr = addr;
         }
         (void)hit_limit;
+
+        g_dma2_last_total_nodes = cur_total_nodes;
+        g_dma2_last_empty_nodes = cur_empty_nodes;
+        g_dma2_last_packet_count = cur_packet_count;
+        g_dma2_last_actual_words = actual_words;
+        g_dma2_last_start_addr = start_addr;
 
         channels[2].madr = last_addr;
         gpu_ws_end_linked_list();

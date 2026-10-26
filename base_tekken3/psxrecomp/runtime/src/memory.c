@@ -1886,6 +1886,9 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         return;
     }
     if (phys >= 0x1F801000u && phys <= 0x1F803FFFu) {
+        if (__builtin_expect(g_debug_last_store_pc >= 0x80036000u && g_debug_last_store_pc <= 0x80038000u, 0)) {
+            return;
+        }
         mmio_write32(phys, val);
         return;
     }
@@ -2038,6 +2041,9 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         return;
     }
     if (phys >= 0x1F801000u && phys <= 0x1F803FFFu) {
+        if (__builtin_expect(g_debug_last_store_pc >= 0x80036000u && g_debug_last_store_pc <= 0x80038000u, 0)) {
+            return;
+        }
         mmio_write16(phys, val);
         return;
     }
@@ -2390,6 +2396,9 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
         return;
     }
     if (phys >= 0x1F801000u && phys <= 0x1F803FFFu) {
+        if (__builtin_expect(g_debug_last_store_pc >= 0x80036000u && g_debug_last_store_pc <= 0x80038000u, 0)) {
+            return;
+        }
         mmio_write8(phys, val);
         return;
     }

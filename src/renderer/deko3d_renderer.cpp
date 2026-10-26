@@ -874,6 +874,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         fflush(stdout);
     }
 
+    m_lastFrameVtx = m_vtxAllocated;
     BeginFrame();
 
     return (int)(w * h);
