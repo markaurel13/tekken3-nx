@@ -998,7 +998,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v17 - Step 1A Robust GP0/GP1 NOPs & Hardware Behavior Fix)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v18 - Step 4A CPU Core 0 Affinity & Optimized Flags)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {
@@ -1011,6 +1011,21 @@ int main(int argc, char* argv[]) {
     } else {
         printf("[Main] [-] Error: no se pudo abrir 'sdmc:/switch/tekken3/tekken3.log'\n");
     }
+
+    // 0. Fijar afinidad del hilo principal de emulación a Core 0 (Paso 4a)
+    // En Nintendo Switch los cores 0, 1 y 2 están disponibles para apps de usuario.
+    // Fijar el bucle principal de ejecución de PS1 a Core 0 garantiza que nunca sea migrado por
+    // el kernel entre núcleos (evitando invalidaciones de L1I/L1D y context switches costosos),
+    // reservando Core 1 y Core 2 para los hilos de audio (audren), renderizado y E/S del sistema.
+    s32 prev_core = -1;
+    u64 prev_mask = 0;
+    svcGetThreadCoreMask(&prev_core, &prev_mask, CUR_THREAD_HANDLE);
+    Result rc_affinity = svcSetThreadCoreMask(CUR_THREAD_HANDLE, 0, (1u << 0));
+    s32 cur_core = -1;
+    u64 cur_mask = 0;
+    svcGetThreadCoreMask(&cur_core, &cur_mask, CUR_THREAD_HANDLE);
+    printf("[Main] [CPU Affinity] Core fijado a 0: prev(core=%d, mask=0x%llX) -> set(core=0, mask=0x1) rc=0x%08X -> cur(core=%d, mask=0x%llX)\n",
+           prev_core, (unsigned long long)prev_mask, rc_affinity, cur_core, (unsigned long long)cur_mask);
 
     // 1. Montar RomFS (recursos y shaders empaquetados)
     printf("[Main] [1/7] Montando RomFS...\n");

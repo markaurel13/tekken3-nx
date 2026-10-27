@@ -11,9 +11,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
 # Opciones de compilación para ARM Cortex-A57 de Nintendo Switch
+# Nota: devkitA64 Switch.cmake define -march=armv8-a+crc+crypto, por lo que usamos -mtune=cortex-a57
+# para evitar el conflicto/warning de cc1 con -mcpu=cortex-a57.
 add_compile_options(
     -O3
-    -mcpu=cortex-a57
     -mtune=cortex-a57
     -ffunction-sections
     -fdata-sections
@@ -32,10 +33,25 @@ add_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
 )
 
+# Opción para Link-Time Optimization (LTO)
+option(ENABLE_LTO "Habilitar Link-Time Optimization (-flto)" OFF)
+if(ENABLE_LTO)
+    message(STATUS "Link-Time Optimization (LTO) ACTIVADO")
+    add_compile_options(-flto)
+    add_link_options(-flto)
+endif()
+
 set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/base_tekken3/psxrecomp")
 
 # Recopilar todos los shards de código C generados de Tekken 3
 file(GLOB TEKKEN3_SHARDS "${CMAKE_CURRENT_SOURCE_DIR}/base_tekken3/generated/SLUS_004.02_full_*.c")
+
+# Opción para compilar shards con -O2 en vez de -O3 (evita 'I-cache thrashing' en los 48 KB de L1I del Cortex-A57)
+option(TEKKEN3_SHARDS_O2 "Compilar shards generados con -O2 para optimizar L1I cache" ON)
+if(TEKKEN3_SHARDS_O2)
+    message(STATUS "Optimizando shards generados (TEKKEN3_SHARDS) con -O2 (L1I cache friendly)")
+    set_source_files_properties(${TEKKEN3_SHARDS} PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
 
 # Fuentes del Runtime de psxrecomp
 set(PSX_RUNTIME_SOURCES
