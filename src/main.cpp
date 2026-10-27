@@ -506,6 +506,10 @@ extern uint64_t g_prof_iso_prefetch_hits;
 extern uint64_t g_prof_iso_prefetch_miss;
 extern uint64_t g_prof_iso_raw_seek_ns;
 extern uint64_t g_prof_iso_raw_read_ns;
+
+extern uint64_t g_prof_audio_spu_ns;
+extern uint64_t g_prof_audio_audren_ns;
+extern uint64_t g_prof_audio_underruns;
 }
 
 #define PROF_PHASES 14
@@ -538,6 +542,10 @@ static uint64_t s_prof_last_prefetch_hits = 0;
 static uint64_t s_prof_last_prefetch_miss = 0;
 static uint64_t s_prof_last_iso_raw_seek_ns = 0;
 static uint64_t s_prof_last_iso_raw_read_ns = 0;
+
+static uint64_t s_prof_last_audio_spu = 0;
+static uint64_t s_prof_last_audio_audren = 0;
+static uint64_t s_prof_last_audio_underrun = 0;
 
 static void prof_thread_fn(void*) {
     while (s_prof_run) {
@@ -629,6 +637,14 @@ static void prof_report(uint64_t frame) {
            (unsigned long long)delta_prefetch_hits, (unsigned long long)delta_prefetch_miss,
            avg_seek_ms, avg_read_ms, avg_raw_ms, max_raw_ms);
 
+    uint64_t delta_spu_ns = g_prof_audio_spu_ns - s_prof_last_audio_spu;
+    uint64_t delta_audren_ns = g_prof_audio_audren_ns - s_prof_last_audio_audren;
+    uint64_t delta_underrun = g_prof_audio_underruns - s_prof_last_audio_underrun;
+    double d_spu_ms = (double)delta_spu_ns / 1e6 / fr;
+    double d_audren_ms = (double)delta_audren_ns / 1e6 / fr;
+    printf("[AudioBreakdown] per-frame: spu_mix=%.3fms (Core 0) audren_dsp=%.3fms (Core 2) ring_underrun=%llu\n",
+           d_spu_ms, d_audren_ms, (unsigned long long)delta_underrun);
+
     s_prof_last_dev_sio = g_prof_dev_sio_ns;
     s_prof_last_dev_cdrom = g_prof_dev_cdrom_ns;
     s_prof_last_dev_dma = g_prof_dev_dma_ns;
@@ -648,6 +664,9 @@ static void prof_report(uint64_t frame) {
     s_prof_last_prefetch_miss = g_prof_iso_prefetch_miss;
     s_prof_last_iso_raw_seek_ns = g_prof_iso_raw_seek_ns;
     s_prof_last_iso_raw_read_ns = g_prof_iso_raw_read_ns;
+    s_prof_last_audio_spu = g_prof_audio_spu_ns;
+    s_prof_last_audio_audren = g_prof_audio_audren_ns;
+    s_prof_last_audio_underrun = g_prof_audio_underruns;
     g_prof_iso_raw_max_ns = 0;
     g_prof_iso_cook_max_ns = 0;
 
@@ -1024,7 +1043,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v19 - Step 2 Async CD Prefetching Ring Buffer & Seek/Read Profiling)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v20 - Step 1A Async Audio Thread on Core 2 & SPU/Audren Profiling)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {

@@ -1674,7 +1674,7 @@ void memory_track_prim_store(uint32_t addr) {
 
 void memory_log_frame_prim_diag(uint32_t frame) {
     if (s_prim_stores > 0) {
-        if ((frame % 120 == 0) || (s_prim_max_addr >= 0x801F0000u)) {
+        if (frame % 120 == 0) {
             printf("[PrimDiag] f=%u stores=%u range=[0x%08X..0x%08X] span=%u KB\n",
                    frame, s_prim_stores, s_prim_min_addr, s_prim_max_addr,
                    (s_prim_max_addr >= s_prim_min_addr) ? (s_prim_max_addr - s_prim_min_addr) / 1024u : 0u);
