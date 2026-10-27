@@ -2030,7 +2030,7 @@ void psx_check_interrupts_at_slow(CPUState* cpu, uint32_t resume_pc) {
 
 #undef psx_check_interrupts_at
 void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
-    psx_check_interrupts_at_slow(cpu, resume_pc);
+    psx_check_interrupts_at_inline(cpu, resume_pc);
 }
 
 int psx_interrupts_checked_at_current_cycle(uint32_t resume_pc) {

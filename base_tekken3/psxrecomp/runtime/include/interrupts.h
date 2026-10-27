@@ -75,18 +75,17 @@ static inline void psx_check_interrupts_at_inline(struct CPUState* cpu, uint32_t
     s_last_interrupt_check_pc = resume_pc;
 
 #if defined(PSX_ENABLE_BLOCK_CYCLES)
-    if (__builtin_expect(g_psx_cyc_batch != 0, 0)) {
+    if (g_psx_cyc_batch != 0) {
         psx_cyc_batch_flush();
     }
 #endif
 
     if (__builtin_expect(
-        ((++s_fast_maintenance & 0x3FFFu) == 0) ||
         ((i_stat & i_mask) != 0) ||
+        ((++s_fast_maintenance & 0x3FFFu) == 0) ||
         (s_defer_switch_pending != 0) ||
         (in_exception != 0) ||
-        ((cpu->cop0[13] & cpu->cop0[12] & 0x0300u) != 0) ||
-        (psx_next_service_cycle == 0 || psx_cycle_count >= psx_next_service_cycle),
+        ((cpu->cop0[13] & cpu->cop0[12] & 0x0300u) != 0),
         0)) {
         psx_check_interrupts_at_slow(cpu, resume_pc);
     }
