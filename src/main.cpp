@@ -21,6 +21,7 @@
 
 // Referencias a los componentes de psxrecomp
 extern "C" {
+extern void cd_prefetch_shutdown(void);
 extern uint32_t g_game_entry_hits[];
 extern uint32_t psx_game_entry_addr(uint32_t);
 extern uint32_t psx_game_entry_count(void);
@@ -500,6 +501,11 @@ extern uint64_t g_prof_iso_cook_calls;
 extern uint64_t g_prof_iso_cook_bytes;
 extern uint64_t g_prof_iso_cook_ns;
 extern uint64_t g_prof_iso_cook_max_ns;
+
+extern uint64_t g_prof_iso_prefetch_hits;
+extern uint64_t g_prof_iso_prefetch_miss;
+extern uint64_t g_prof_iso_raw_seek_ns;
+extern uint64_t g_prof_iso_raw_read_ns;
 }
 
 #define PROF_PHASES 14
@@ -527,6 +533,11 @@ static uint64_t s_prof_last_iso_raw_ns = 0;
 static uint64_t s_prof_last_iso_cook_calls = 0;
 static uint64_t s_prof_last_iso_cook_bytes = 0;
 static uint64_t s_prof_last_iso_cook_ns = 0;
+
+static uint64_t s_prof_last_prefetch_hits = 0;
+static uint64_t s_prof_last_prefetch_miss = 0;
+static uint64_t s_prof_last_iso_raw_seek_ns = 0;
+static uint64_t s_prof_last_iso_raw_read_ns = 0;
 
 static void prof_thread_fn(void*) {
     while (s_prof_run) {
@@ -597,15 +608,26 @@ static void prof_report(uint64_t frame) {
     uint64_t delta_cook_bytes = g_prof_iso_cook_bytes - s_prof_last_iso_cook_bytes;
     uint64_t delta_cook_ns = g_prof_iso_cook_ns - s_prof_last_iso_cook_ns;
 
+    uint64_t delta_prefetch_hits = g_prof_iso_prefetch_hits - s_prof_last_prefetch_hits;
+    uint64_t delta_prefetch_miss = g_prof_iso_prefetch_miss - s_prof_last_prefetch_miss;
+    uint64_t delta_raw_seek_ns = g_prof_iso_raw_seek_ns - s_prof_last_iso_raw_seek_ns;
+    uint64_t delta_raw_read_ns = g_prof_iso_raw_read_ns - s_prof_last_iso_raw_read_ns;
+
     double d_iso_ms = (double)(delta_raw_ns + delta_cook_ns) / 1e6 / fr;
+    double d_seek_ms = (double)delta_raw_seek_ns / 1e6 / fr;
+    double d_read_ms = (double)delta_raw_read_ns / 1e6 / fr;
     double d_raw_calls = (double)delta_raw_calls / fr;
     double d_cook_calls = (double)delta_cook_calls / fr;
     double d_kb = (double)(delta_raw_bytes + delta_cook_bytes) / 1024.0 / fr;
     double avg_raw_ms = delta_raw_calls ? ((double)delta_raw_ns / 1e6 / (double)delta_raw_calls) : 0.0;
     double max_raw_ms = (double)g_prof_iso_raw_max_ns / 1e6;
+    double avg_seek_ms = delta_raw_calls ? ((double)delta_raw_seek_ns / 1e6 / (double)delta_raw_calls) : 0.0;
+    double avg_read_ms = delta_raw_calls ? ((double)delta_raw_read_ns / 1e6 / (double)delta_raw_calls) : 0.0;
 
-    printf("[PROF_ISO_IO] per-frame: io_time=%.2fms sectors=%.1f (raw=%.1f, cook=%.1f) data=%.1fKB avg_raw_read=%.3fms max_raw_read=%.2fms\n",
-           d_iso_ms, d_raw_calls + d_cook_calls, d_raw_calls, d_cook_calls, d_kb, avg_raw_ms, max_raw_ms);
+    printf("[PROF_ISO_IO] per-frame: io_time=%.2fms (seek=%.2fms read=%.2fms) sectors=%.1f (raw=%.1f cook=%.1f) data=%.1fKB prefetch(hit=%llu miss=%llu) avg_raw(seek=%.3fms read=%.3fms tot=%.3fms) max_raw=%.2fms\n",
+           d_iso_ms, d_seek_ms, d_read_ms, d_raw_calls + d_cook_calls, d_raw_calls, d_cook_calls, d_kb,
+           (unsigned long long)delta_prefetch_hits, (unsigned long long)delta_prefetch_miss,
+           avg_seek_ms, avg_read_ms, avg_raw_ms, max_raw_ms);
 
     s_prof_last_dev_sio = g_prof_dev_sio_ns;
     s_prof_last_dev_cdrom = g_prof_dev_cdrom_ns;
@@ -622,6 +644,10 @@ static void prof_report(uint64_t frame) {
     s_prof_last_iso_cook_calls = g_prof_iso_cook_calls;
     s_prof_last_iso_cook_bytes = g_prof_iso_cook_bytes;
     s_prof_last_iso_cook_ns = g_prof_iso_cook_ns;
+    s_prof_last_prefetch_hits = g_prof_iso_prefetch_hits;
+    s_prof_last_prefetch_miss = g_prof_iso_prefetch_miss;
+    s_prof_last_iso_raw_seek_ns = g_prof_iso_raw_seek_ns;
+    s_prof_last_iso_raw_read_ns = g_prof_iso_raw_read_ns;
     g_prof_iso_raw_max_ns = 0;
     g_prof_iso_cook_max_ns = 0;
 
@@ -998,7 +1024,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v18 - Step 4A CPU Core 0 Affinity & Optimized Flags)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v19 - Step 2 Async CD Prefetching Ring Buffer & Seek/Read Profiling)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {
@@ -1305,6 +1331,7 @@ int main(int argc, char* argv[]) {
 
     // 10. Limpieza ordenada si el juego termina
     printf("[Main] Finalizando subsistemas...\n");
+    cd_prefetch_shutdown();
     memcard_flush_all();
     switch_overlay_capture_write_json();
     if (s_sd_log) {

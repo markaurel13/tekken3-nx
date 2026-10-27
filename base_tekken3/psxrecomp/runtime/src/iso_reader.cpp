@@ -366,6 +366,27 @@ BinSegment* ISOReader::SegmentForLBA(uint32_t lba) {
     return nullptr;
 }
 
+extern "C" {
+extern uint64_t g_prof_iso_raw_seek_ns;
+extern uint64_t g_prof_iso_raw_read_ns;
+extern uint64_t g_prof_iso_cook_seek_ns;
+extern uint64_t g_prof_iso_cook_read_ns;
+}
+
+#if defined(__aarch64__) || defined(__SWITCH__)
+static inline uint64_t iso_prof_ticks_sub(void) {
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return cnt;
+}
+static inline uint64_t iso_prof_ticks_to_ns_sub(uint64_t tick) {
+    return (tick * 625) / 12;
+}
+#else
+static inline uint64_t iso_prof_ticks_sub(void) { return 0; }
+static inline uint64_t iso_prof_ticks_to_ns_sub(uint64_t tick) { return tick; }
+#endif
+
 bool ISOReader::ReadSector(uint32_t lba, uint8_t* buffer) {
     if (!is_open_ || !buffer) {
         return false;
@@ -395,14 +416,18 @@ bool ISOReader::ReadSector(uint32_t lba, uint8_t* buffer) {
         // Raw BIN format - read full sector, extract user data
         std::streampos offset =
             static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE + RAW_DATA_OFFSET;
+        uint64_t t_s0 = iso_prof_ticks_sub();
         seg->file.seekg(offset, std::ios::beg);
+        g_prof_iso_cook_seek_ns += iso_prof_ticks_to_ns_sub(iso_prof_ticks_sub() - t_s0);
 
         if (!seg->file.good()) {
             seg->file.clear();
             return false;
         }
 
+        uint64_t t_r0 = iso_prof_ticks_sub();
         seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
+        g_prof_iso_cook_read_ns += iso_prof_ticks_to_ns_sub(iso_prof_ticks_sub() - t_r0);
         std::streamsize bytes_read = seg->file.gcount();
         bool success = (bytes_read == SECTOR_SIZE);
         seg->file.clear();
@@ -410,14 +435,18 @@ bool ISOReader::ReadSector(uint32_t lba, uint8_t* buffer) {
     } else {
         // ISO format - sectors are already 2048 bytes
         std::streampos offset = static_cast<std::streampos>(local_lba) * SECTOR_SIZE;
+        uint64_t t_s0 = iso_prof_ticks_sub();
         seg->file.seekg(offset, std::ios::beg);
+        g_prof_iso_cook_seek_ns += iso_prof_ticks_to_ns_sub(iso_prof_ticks_sub() - t_s0);
 
         if (!seg->file.good()) {
             seg->file.clear();
             return false;
         }
 
+        uint64_t t_r0 = iso_prof_ticks_sub();
         seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
+        g_prof_iso_cook_read_ns += iso_prof_ticks_to_ns_sub(iso_prof_ticks_sub() - t_r0);
         std::streamsize bytes_read = seg->file.gcount();
         bool success = (bytes_read == SECTOR_SIZE);
         seg->file.clear();
@@ -440,13 +469,17 @@ bool ISOReader::ReadRawSector(uint32_t lba, uint8_t* buffer) {
 
     seg->file.clear();
     std::streampos offset = static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE;
+    uint64_t t_s0 = iso_prof_ticks_sub();
     seg->file.seekg(offset, std::ios::beg);
+    g_prof_iso_raw_seek_ns += iso_prof_ticks_to_ns_sub(iso_prof_ticks_sub() - t_s0);
     if (!seg->file.good()) {
         seg->file.clear();
         return false;
     }
 
+    uint64_t t_r0 = iso_prof_ticks_sub();
     seg->file.read(reinterpret_cast<char*>(buffer), RAW_SECTOR_SIZE);
+    g_prof_iso_raw_read_ns += iso_prof_ticks_to_ns_sub(iso_prof_ticks_sub() - t_r0);
     std::streamsize bytes_read = seg->file.gcount();
     bool success = (bytes_read == RAW_SECTOR_SIZE);
     seg->file.clear();
