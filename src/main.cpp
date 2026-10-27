@@ -1279,6 +1279,10 @@ int main(int argc, char* argv[]) {
     printf("[Main] [7/7] Montando CD-ROM desde: %s...\n", chosen_disc_path);
     cdrom_init(chosen_disc_path);
     cdrom_set_disc_scex("SCEA");
+    // Paso D3: Aceleracion de lectura de CD-ROM en el arranque (4x en boot, 1x autentico en gameplay)
+    cdrom_set_speed(4);
+    cdrom_set_game_speed(1);
+    printf("[CDROM] Velocidad de arranque configurada a 4x (juego a 1x)\n");
 
     if (cdrom_has_disc()) {
         printf("[Main] Disco montado con exito en la unidad de CD-ROM (region=SCEA).\n");
@@ -1291,6 +1295,8 @@ int main(int argc, char* argv[]) {
             fclose(bf);
             chosen_disc_path = bin_fallback;
             cdrom_init(bin_fallback);
+            cdrom_set_speed(4);
+            cdrom_set_game_speed(1);
             if (cdrom_has_disc()) {
                 printf("[Main] ¡Disco montado con exito usando fallback BIN!\n");
             }

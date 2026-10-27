@@ -277,7 +277,10 @@ void cdrom_set_game_speed(int divisor) {
 
 /* Called by fntrace_record on first game-range dispatch. */
 void cdrom_notify_game_started(void) {
+    int prev = g_disc_speed_divisor;
     g_disc_speed_divisor = g_game_divisor;
+    printf("[CDROM] Boot completado -> cambiando velocidad de lectura de %dx a %dx para gameplay\n", prev, g_game_divisor);
+    fflush(stdout);
 }
 
 int cdrom_get_setloc_lba(void) { return s_setloc_lba; }
