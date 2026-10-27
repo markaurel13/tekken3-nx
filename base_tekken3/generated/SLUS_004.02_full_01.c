@@ -10536,14 +10536,26 @@ block_80029720:
     TEK_BLOCK_PROF_ENTER(TEK_BLOCK_80029720, cpu->gpr[31]);
 #endif
     /* Fast-path nativo: bucle de espera VSync / LCG RNG (Knuth 69069 + LCG 5).
-     * Si los registros no coinciden con la entrada esperada, se ejecuta el camino original. */
+     * En MIPS original cada vuelta consume ~32 ciclos. Avanzamos en lotes de 64 vueltas
+     * (2048 ciclos ~= 1 scanline) para reducir las comprobaciones de interrupción de 300.000 a ~150. */
     if (cpu->gpr[16] == 0x800B0000u && cpu->gpr[17] == 0x800A0000u) {
         uint32_t seed = psx_cyc_load_word(cpu, 0x8009F2A8u, 3, 0);
         uint32_t val = psx_cyc_load_word(cpu, 0x800A912Cu, 3, 0);
+        uint32_t flag = psx_cyc_load_word(cpu, 0x8009BC5Cu, 4, 0);
+        if (flag != 0u) {
+            cpu->gpr[4] = flag;
+            cpu->gpr[2] = val;
+#ifdef TEK_BLOCK_PROF
+            TEK_BLOCK_PROF_EXIT(TEK_BLOCK_80029720);
+#endif
+            goto block_80029764;
+        }
         while (1) {
-            seed = seed * 5u + 1u;
-            val = (val + 1u) * 69069u;
-            psx_cyc_step(cpu, 200u);
+            for (int i = 0; i < 64; ++i) {
+                seed = seed * 5u + 1u;
+                val = (val + 1u) * 69069u;
+            }
+            psx_advance_cycles(64 * 32u);
             psx_check_interrupts_at(cpu, 0x80029720u);
             if (cpu->pc != 0u) {
                 cpu->write_word(0x8009F2A8u, seed);
@@ -10553,7 +10565,7 @@ block_80029720:
 #endif
                 return;
             }
-            uint32_t flag = psx_cyc_load_word(cpu, 0x8009BC5Cu, 4, 0);
+            flag = psx_cyc_load_word(cpu, 0x8009BC5Cu, 4, 0);
             if (flag != 0u) {
                 cpu->write_word(0x8009F2A8u, seed);
                 cpu->write_word(0x800A912Cu, val);
