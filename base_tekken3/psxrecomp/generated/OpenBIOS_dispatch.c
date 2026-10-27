@@ -9113,6 +9113,16 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
         }
 #endif
         uint32_t phys = normalize(addr);
+        if (!found && phys >= 0x00010000u && phys < 0x1FC00000u) {
+            /* Direcciones de RAM fuera de la ventana de OpenBIOS kernel [0x500..0x4BA0) y ROM [0x1FC00000..0x1FC80000):
+             * Despachar directamente a dirty RAM sin iterar la tabla de 3989 entradas de OpenBIOS. */
+            if (dirty_ram_dispatch(cpu, addr, stop_addr)) {
+                found = 1;
+            } else {
+                psx_unknown_dispatch(cpu, addr, phys);
+                found = 1;
+            }
+        }
         if (!found) {
         while (lo <= hi) {
             int mid = (lo + hi) / 2;

@@ -43,6 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #if defined(__SWITCH__)
 #include <switch.h>
 #endif
@@ -1356,6 +1357,15 @@ int dirty_ram_xprobe_json(char *out, int cap) {
  * two callers below are themselves gated behind the same macro. */
 #ifdef PSX_HAS_GAME_DISPATCH
 static int interp_enter_compiled(CPUState *cpu, uint32_t target) {
+    /* Fast-path para getter de estado de vídeo en FMV (555,831 llamadas por 600 frames).
+     * func_8008F74C simplemente carga el byte de 0x8009B748 en v0 ($2) y retorna.
+     * Al resolverlo inline directamente aquí sin escape CPS, evitamos romper el intérprete
+     * y eliminamos 2.2 millones de trampolines por segundo durante las cinemáticas. */
+    if (target == 0x8008F74Cu) {
+        cpu->gpr[2] = (uint32_t)cpu->read_byte(0x8009B748u) & 0xFFu;
+        cpu->pc = 0;
+        return 1;
+    }
     if (target == 0x8001A954u) site_note(&g_site_interp);
     /* Decline when the target page no longer matches the static game image.
      * Returning 0 lets the JAL/JALR handler fall through to local-flow interp
@@ -2340,6 +2350,24 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     fntrace_maybe_mark_game_started(cpu, addr);
     if (addr == 0x8001A954u)      site_note(&g_site_dd954);   /* loop head re-dispatch */
     else if (addr == 0x80046264u) site_note(&g_site_dd264);   /* loop tail re-dispatch */
+
+    static int s_fmv_ram_dumped = 0;
+    if (!s_fmv_ram_dumped && (addr >= 0x800FD000u && addr <= 0x800FE500u)) {
+        s_fmv_ram_dumped = 1;
+        uint8_t *ram = memory_get_ram_ptr();
+        if (ram) {
+            FILE *f = fopen("sdmc:/switch/tekken3/fmv_ram_dump.bin", "wb");
+            if (!f) f = fopen("fmv_ram_dump.bin", "wb");
+            if (f) {
+                fwrite(ram + 0x000F0000u, 1, 0x10000u, f);
+                fflush(f);
+                fsync(fileno(f));
+                fclose(f);
+                printf("[FMV_DUMP] Successfully dumped 64KB RAM window (0xF0000-0x100000) to fmv_ram_dump.bin!\n");
+                fflush(stdout);
+            }
+        }
+    }
     int prev = g_dirty_interp_active;
     g_dirty_interp_active = 1;
     int prev_phase = g_exec_phase;

@@ -393,12 +393,17 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
 }
 }
 
+extern "C" {
+int g_post_fmv_sync_active = 0;
+}
+
 static ssize_t log_devoptab_write(struct _reent *r, void *fd, const char *ptr, size_t len) {
     (void)r; (void)fd;
     if (s_sd_log) {
         fwrite(ptr, 1, len, s_sd_log);
-        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
+        if (g_post_fmv_sync_active > 0 || memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
             fflush(s_sd_log);
+            fsync(fileno(s_sd_log));
         }
     }
     if (s_nxlink_sock >= 0) {
@@ -614,6 +619,13 @@ static void prof_thread_fn(void*) {
         // Watchdog activo cada ~200 ms (1000 iteraciones x 0.2 ms)
         if (++watchdog_counter >= 1000) {
             watchdog_counter = 0;
+
+            // Salida de emergencia inmediata incondicional con Plus + Minus desde el hilo Watchdog (Core 2)
+            // Invocamos svcExitProcess() a nivel de kernel para salir instantáneamente a hbmenu sin deadlocks de libc.
+            if (switch_input_check_immediate_exit()) {
+                svcExitProcess();
+            }
+
             u64 now_tick = armGetSystemTick();
             uint64_t cur_frame = s_frame_count;
 
@@ -643,14 +655,6 @@ static void prof_thread_fn(void*) {
                             }
                         }
                         if (s_sd_log) fflush(s_sd_log);
-                    }
-
-                    // Salida de emergencia si el usuario pulsa Plus + Minus durante un stall prolongado
-                    if (switch_input_is_exit_requested()) {
-                        printf("[WATCHDOG] Salida solicitada via Plus+Minus durante stall! Saliendo limpiamente...\n");
-                        if (s_sd_log) fflush(s_sd_log);
-                        memcard_flush_all();
-                        exit(0);
                     }
                 }
             }
@@ -1089,7 +1093,14 @@ static void switch_vblank_callback(void) {
         if (s_sd_log) fflush(s_sd_log);
     }
 
-    // 1. Manejo de bucle principal y salida rápida con botones (Plus + Minus)
+    // 1. Actualizar mandos y estados de botones siempre primero
+    u64 input_start = armGetSystemTick();
+    switch_input_update();
+    u64 input_end = armGetSystemTick();
+    u64 input_ns = armTicksToNs(input_end - input_start);
+    s_win_input_ns += input_ns;
+
+    // 2. Manejo de bucle principal y salida rápida con botones (Plus + Minus)
     if (!appletMainLoop() || switch_input_is_exit_requested()) {
         printf("[VBlank] Solicitud de salida detectada en frame %llu. Saliendo...\n",
                (unsigned long long)s_frame_count);
@@ -1098,27 +1109,42 @@ static void switch_vblank_callback(void) {
         exit(0);
     }
 
-    // Si la aplicación pierde el foco (menú HOME o suspensión), ceder CPU y no intentar presentar a la GPU
+    // 3. Si la aplicación pierde el foco (menú HOME o suspensión), ceder CPU y no intentar presentar a la GPU
     if (appletGetFocusState() != AppletFocusState_InFocus) {
         svcSleepThread(16000000ULL); // ~16 ms
         return;
     }
 
-    // 2. Actualizar mandos y estados de botones para la PS1
-    u64 input_start = armGetSystemTick();
-    switch_input_update();
-    u64 input_end = armGetSystemTick();
-    u64 input_ns = armTicksToNs(input_end - input_start);
-    s_win_input_ns += input_ns;
+    // 4. Detección de salida de FMV y latido de sincronización post-FMV
+    GpuDisplayInfo cur_di{};
+    gpu_get_display_info(&cur_di);
+    static int s_prev_depth24 = -1;
+    if (s_prev_depth24 == 1 && cur_di.depth24 == 0) {
+        printf("[PostFMV] Fin de FMV detectado en frame %llu! Activando diagnostico sincronico fsync por 600 frames...\n",
+               (unsigned long long)s_frame_count);
+        g_post_fmv_sync_active = 600;
+        fflush(stdout);
+    }
+    s_prev_depth24 = cur_di.depth24;
 
-    // 3. Bombeo de audio hacia el subsistema nativo audren
+    if (g_post_fmv_sync_active > 0) {
+        g_post_fmv_sync_active--;
+        printf("[PostFMV_Tick] frame=%llu vtx=%u disp=(%u,%u %ux%u) cd_read=%d\n",
+               (unsigned long long)s_frame_count,
+               Deko3DRenderer::Instance().GetLastFrameVtx(),
+               cur_di.display_x, cur_di.display_y, cur_di.width, cur_di.height,
+               cdrom_is_reading());
+        fflush(stdout);
+    }
+
+    // 5. Bombeo de audio hacia el subsistema nativo audren
     u64 audio_start = armGetSystemTick();
     switch_audio_update();
     u64 audio_end = armGetSystemTick();
     u64 audio_ns = armTicksToNs(audio_end - audio_start);
     s_win_audio_ns += audio_ns;
 
-    // 4. Renderizar y presentar frame con Deko3D
+    // 6. Renderizar y presentar frame con Deko3D
     u64 render_start = armGetSystemTick();
     Deko3DRenderer::Instance().RenderDisplay(nullptr, 1280, 0, 0, 1280, 720);
     u64 render_end = armGetSystemTick();

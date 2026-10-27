@@ -844,6 +844,11 @@ static void response_push(uint8_t val) {
 }
 
 static void set_irq(int type) {
+    extern int g_post_fmv_sync_active;
+    if (g_post_fmv_sync_active) {
+        printf("[PostFMV_CD_IRQ] set_irq type=0x%02X stat=0x%02X\n", type, stat_reg);
+        fflush(stdout);
+    }
     irq_flag = (uint8_t)type;
     /* New visible CD INT generation: it has not yet been presented to INTC,
      * so re-arm the latch (the delayed present below raises it once). */
@@ -1580,7 +1585,8 @@ static void process_cdda_stream(uint32_t cycles) {
     while (cdda_playing && cdda_delay <= 0 && delivered < 16) {
         uint8_t raw[RAW_SECTOR_SIZE];
         int16_t pcm[CDDA_SECTOR_FRAMES * 2];
-        if (!iso_read_raw_sector(iso_handle, cdda_lba, raw, sizeof(raw))) {
+        int read_ok = iso_read_raw_sector(iso_handle, cdda_lba, raw, sizeof(raw));
+        if (!read_ok) {
             memset(pcm, 0, sizeof(pcm));
         } else {
             /* BIN/CUE CD-DA sectors store signed 16-bit interleaved stereo in
@@ -1591,6 +1597,15 @@ static void process_cdda_stream(uint32_t cycles) {
                 pcm[i] = (int16_t)u;
             }
         }
+
+        static uint64_t s_cdda_diag_sectors = 0;
+        extern int g_post_fmv_sync_active;
+        if (s_cdda_diag_sectors < 5 || (g_post_fmv_sync_active && (s_cdda_diag_sectors % 75) == 0)) {
+            printf("[CDDA_Sector] count=%llu track=%d lba=%u read_ok=%d\n",
+                   (unsigned long long)s_cdda_diag_sectors, cdda_track, cdda_lba, read_ok);
+            fflush(stdout);
+        }
+        s_cdda_diag_sectors++;
 
         if (cd_muted) memset(pcm, 0, sizeof(pcm));
         cd_apply_decode_volume(pcm, CDDA_SECTOR_FRAMES);
@@ -1823,6 +1838,17 @@ static void exec_command(uint8_t cmd) {
     if (cmd_param_count > PARAM_FIFO_SIZE) cmd_param_count = PARAM_FIFO_SIZE;
     memcpy(cmd_params, param_fifo, (size_t)cmd_param_count);
     response_clear();
+
+    extern int g_post_fmv_sync_active;
+    if (g_post_fmv_sync_active || cmd == 0x08 || cmd == 0x09 || cmd == 0x03 || cmd == 0x06 || cmd == 0x1B || cmd == 0x15 || cmd == 0x16) {
+        printf("[CDROM_CMD] cmd=0x%02X (params=%d: %02X %02X %02X) stat=0x%02X reading=%d\n",
+               cmd, param_count,
+               param_count > 0 ? param_fifo[0] : 0,
+               param_count > 1 ? param_fifo[1] : 0,
+               param_count > 2 ? param_fifo[2] : 0,
+               stat_reg, reading);
+        fflush(stdout);
+    }
 
     switch (cmd) {
     case 0x01: /* GetStat */

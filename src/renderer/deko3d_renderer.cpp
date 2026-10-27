@@ -795,6 +795,13 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
     }
 
     FlushBatch();
+
+    extern int g_post_fmv_sync_active;
+    if (g_post_fmv_sync_active) {
+        printf("[PostFMV_VRAM] CopyRect sx=%d sy=%d dx=%d dy=%d w=%d h=%d\n", sx, sy, dx, dy, w, h);
+        fflush(stdout);
+    }
+
     sw_copy_rect(sx, sy, dx, dy, w, h);
     if (!m_initialized) return;
 
@@ -822,6 +829,12 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
 void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* data) {
     if (!m_initialized || !data || w <= 0 || h <= 0) return;
 
+    extern int g_post_fmv_sync_active;
+    if (g_post_fmv_sync_active) {
+        printf("[PostFMV_VRAM] VramTransferIn x=%d y=%d w=%d h=%d\n", x, y, w, h);
+        fflush(stdout);
+    }
+
     u64 t_up_start = armGetSystemTick();
 
     FlushBatch();
@@ -833,6 +846,9 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     int base_x = x & (VramWidth - 1);
     int base_y = y & (VramHeight - 1);
 
+    if (orig_w > (int)VramWidth) orig_w = (int)VramWidth;
+    if (orig_h > (int)VramHeight) orig_h = (int)VramHeight;
+
     // Desglosar la transferencia en sub-rectángulos no envolventes (máx 4 rebanadas si cruza bordes de VRAM)
     int w_parts[2] = { orig_w, 0 };
     int src_x[2]   = { 0, 0 };
@@ -841,6 +857,7 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     if (base_x + orig_w > (int)VramWidth) {
         w_parts[0] = (int)VramWidth - base_x;
         w_parts[1] = orig_w - w_parts[0];
+        if (w_parts[1] > (int)VramWidth) w_parts[1] = (int)VramWidth;
         src_x[1]   = w_parts[0];
         dst_x[1]   = 0;
         num_x = 2;
@@ -853,6 +870,7 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     if (base_y + orig_h > (int)VramHeight) {
         h_parts[0] = (int)VramHeight - base_y;
         h_parts[1] = orig_h - h_parts[0];
+        if (h_parts[1] > (int)VramHeight) h_parts[1] = (int)VramHeight;
         src_y[1]   = h_parts[0];
         dst_y[1]   = 0;
         num_y = 2;
@@ -865,12 +883,14 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
         int sub_h = h_parts[vy];
         int sy = src_y[vy];
         int dy = dst_y[vy];
+        if (dy + sub_h > (int)VramHeight) sub_h = (int)VramHeight - dy;
         if (sub_h <= 0) continue;
 
         for (int vx = 0; vx < num_x; vx++) {
             int sub_w = w_parts[vx];
             int sx = src_x[vx];
             int dx = dst_x[vx];
+            if (dx + sub_w > (int)VramWidth) sub_w = (int)VramWidth - dx;
             if (sub_w <= 0) continue;
 
             // Pitch alineado estrictamente a 32 bytes para el Maxwell 2D Copy Engine de Tegra X1

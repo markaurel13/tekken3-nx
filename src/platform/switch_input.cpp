@@ -195,4 +195,16 @@ bool switch_input_is_exit_requested(void) {
     return SwitchInput::Instance().IsExitRequested();
 }
 
+bool switch_input_check_immediate_exit(void) {
+    static PadState s_exit_pad;
+    static bool s_exit_pad_inited = false;
+    if (!s_exit_pad_inited) {
+        padInitializeDefault(&s_exit_pad);
+        s_exit_pad_inited = true;
+    }
+    padUpdate(&s_exit_pad);
+    u64 held = padGetButtons(&s_exit_pad);
+    return ((held & HidNpadButton_Plus) && (held & HidNpadButton_Minus));
+}
+
 }

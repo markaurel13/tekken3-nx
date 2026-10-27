@@ -21,6 +21,7 @@ static Thread s_prefetch_thread;
 static bool s_prefetch_thread_active = false;
 static volatile bool s_prefetch_stop = false;
 static volatile uint32_t s_prefetch_expected_lba = 0xFFFFFFFF;
+static uint32_t s_prefetch_max_lba = 0;
 static FILE* s_prefetch_fp = nullptr;
 static uint8_t s_prefetch_vbuf[256 * 1024];
 
@@ -61,15 +62,17 @@ static inline uint64_t iso_prof_ticks_to_ns(uint64_t tick) { return tick; }
 
 static void prefetch_worker(void* arg) {
     (void)arg;
+    uint32_t consecutive_failures = 0;
     while (!s_prefetch_stop) {
         uint32_t target_lba = 0xFFFFFFFF;
 
         mutexLock(&s_prefetch_mutex);
         while (!s_prefetch_stop) {
             uint32_t base_lba = s_prefetch_expected_lba;
-            if (base_lba != 0xFFFFFFFF) {
+            if (base_lba != 0xFFFFFFFF && base_lba < s_prefetch_max_lba) {
                 for (uint32_t i = 0; i < PREFETCH_AHEAD; ++i) {
                     uint32_t candidate = base_lba + i;
+                    if (candidate >= s_prefetch_max_lba) break;
                     uint32_t idx = candidate % PREFETCH_RING_SIZE;
                     if (!s_prefetch_ring[idx].valid || s_prefetch_ring[idx].lba != candidate) {
                         target_lba = candidate;
@@ -88,7 +91,7 @@ static void prefetch_worker(void* arg) {
             break;
         }
 
-        if (s_prefetch_fp) {
+        if (s_prefetch_fp && target_lba < s_prefetch_max_lba) {
             off_t offset = (off_t)target_lba * 2352;
             uint8_t temp[2352];
             bool ok = false;
@@ -99,13 +102,27 @@ static void prefetch_worker(void* arg) {
             }
 
             mutexLock(&s_prefetch_mutex);
-            if (!s_prefetch_stop && ok) {
-                uint32_t base_lba = s_prefetch_expected_lba;
-                if (base_lba != 0xFFFFFFFF && target_lba >= base_lba && target_lba < base_lba + PREFETCH_AHEAD) {
-                    uint32_t idx = target_lba % PREFETCH_RING_SIZE;
+            if (!s_prefetch_stop) {
+                uint32_t idx = target_lba % PREFETCH_RING_SIZE;
+                if (ok) {
+                    consecutive_failures = 0;
+                    uint32_t base_lba = s_prefetch_expected_lba;
+                    if (base_lba != 0xFFFFFFFF && target_lba >= base_lba && target_lba < base_lba + PREFETCH_AHEAD) {
+                        s_prefetch_ring[idx].lba = target_lba;
+                        memcpy(s_prefetch_ring[idx].data, temp, 2352);
+                        s_prefetch_ring[idx].valid = true;
+                    }
+                } else {
+                    // Si falla la lectura, marcar el slot para no entrar en bucle infinito
                     s_prefetch_ring[idx].lba = target_lba;
-                    memcpy(s_prefetch_ring[idx].data, temp, 2352);
                     s_prefetch_ring[idx].valid = true;
+                    consecutive_failures++;
+                    if (consecutive_failures >= 3) {
+                        printf("[CDPrefetch] AVISO: %u fallos consecutivos de lectura en LBA %u. Pausando prefetch.\n",
+                               consecutive_failures, target_lba);
+                        fflush(stdout);
+                        s_prefetch_expected_lba = 0xFFFFFFFF;
+                    }
                 }
             }
             mutexUnlock(&s_prefetch_mutex);
@@ -131,6 +148,13 @@ static void cd_prefetch_init(const char* bin_path) {
         printf("[CDPrefetch] No se pudo abrir descriptor propio para '%s' (fallback síncrono activo)\n", bin_path);
         return;
     }
+
+    fseek(s_prefetch_fp, 0, SEEK_END);
+    off_t fsz = ftello(s_prefetch_fp);
+    fseek(s_prefetch_fp, 0, SEEK_SET);
+    s_prefetch_max_lba = (fsz > 0) ? (uint32_t)(fsz / 2352) : 0;
+    printf("[CDPrefetch] Archivo '%s' tamano: %lld bytes (%u sectores maximos para prefetch)\n",
+           bin_path, (long long)fsz, s_prefetch_max_lba);
 
     setvbuf(s_prefetch_fp, (char*)s_prefetch_vbuf, _IOFBF, sizeof(s_prefetch_vbuf));
 
@@ -173,15 +197,19 @@ void cd_prefetch_shutdown() {
 }
 
 static bool cd_prefetch_get(uint32_t lba, uint8_t* out_buffer) {
-    if (!s_prefetch_thread_active) return false;
+    if (!s_prefetch_thread_active || lba >= s_prefetch_max_lba) return false;
 
     mutexLock(&s_prefetch_mutex);
     uint32_t idx = lba % PREFETCH_RING_SIZE;
     if (s_prefetch_ring[idx].valid && s_prefetch_ring[idx].lba == lba) {
         memcpy(out_buffer, s_prefetch_ring[idx].data, 2352);
         s_prefetch_ring[idx].valid = false;
-        s_prefetch_expected_lba = lba + 1;
-        condvarWakeOne(&s_prefetch_cv);
+        if (lba + 1 < s_prefetch_max_lba) {
+            s_prefetch_expected_lba = lba + 1;
+            condvarWakeOne(&s_prefetch_cv);
+        } else {
+            s_prefetch_expected_lba = 0xFFFFFFFF;
+        }
         mutexUnlock(&s_prefetch_mutex);
         return true;
     }
@@ -228,7 +256,8 @@ int iso_read_raw_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
     uint64_t t0 = iso_prof_ticks();
 
     bool ok = false;
-    if (cd_prefetch_get(lba, buffer)) {
+    bool in_prefetch_range = (lba < s_prefetch_max_lba);
+    if (in_prefetch_range && cd_prefetch_get(lba, buffer)) {
         ok = true;
         g_prof_iso_prefetch_hits++;
     } else {
@@ -236,14 +265,19 @@ int iso_read_raw_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
         ok = reader->ReadRawSector(lba, buffer);
         if (ok && s_prefetch_thread_active) {
             mutexLock(&s_prefetch_mutex);
-            if (s_prefetch_expected_lba != lba) {
-                for (int i = 0; i < PREFETCH_RING_SIZE; ++i) {
-                    s_prefetch_ring[i].valid = false;
-                    s_prefetch_ring[i].lba = 0xFFFFFFFF;
+            if (in_prefetch_range && (lba + 1 < s_prefetch_max_lba)) {
+                if (s_prefetch_expected_lba != lba) {
+                    for (int i = 0; i < PREFETCH_RING_SIZE; ++i) {
+                        s_prefetch_ring[i].valid = false;
+                        s_prefetch_ring[i].lba = 0xFFFFFFFF;
+                    }
                 }
+                s_prefetch_expected_lba = lba + 1;
+                condvarWakeOne(&s_prefetch_cv);
+            } else {
+                // Sectores en pistas multi-bin (CD-DA Track 2/3): desarmar prefetch para no ciclar en Track 1
+                s_prefetch_expected_lba = 0xFFFFFFFF;
             }
-            s_prefetch_expected_lba = lba + 1;
-            condvarWakeOne(&s_prefetch_cv);
             mutexUnlock(&s_prefetch_mutex);
         }
     }
@@ -255,6 +289,13 @@ int iso_read_raw_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
     g_prof_iso_raw_bytes += 2352;
     g_prof_iso_raw_ns += dt;
     if (dt > g_prof_iso_raw_max_ns) g_prof_iso_raw_max_ns = dt;
+
+    extern int g_post_fmv_sync_active;
+    if (g_post_fmv_sync_active && (!in_prefetch_range || g_prof_iso_raw_calls <= 10)) {
+        printf("[ISO_RawRead] lba=%u ok=%d time_us=%llu (in_prefetch=%d)\n",
+               lba, ok ? 1 : 0, (unsigned long long)(dt / 1000), in_prefetch_range ? 1 : 0);
+        fflush(stdout);
+    }
 
     if (!ok) return 0;
     mod_runtime_patch_disc_sector(lba, 1, buffer, 2352);

@@ -13,6 +13,7 @@ bool switch_input_init(void);
 void switch_input_update(void);
 void switch_input_show_controller_applet(void);
 bool switch_input_is_exit_requested(void);
+bool switch_input_check_immediate_exit(void);
 
 #ifdef __cplusplus
 }
