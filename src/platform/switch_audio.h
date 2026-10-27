@@ -28,7 +28,7 @@ public:
     static constexpr int Channels = 2;
     static constexpr int FramesPerStep = 735; // 44100 / 60 fps
     static constexpr int NumBuffers = 5;     // 5 buffers para hardware audren
-    static constexpr int RingSlots = 8;      // 8 buffers para colchón elástico (~133 ms)
+    static constexpr int RingSlots = 16;     // 16 buffers para colchón elástico (~266 ms)
     static constexpr size_t BufferSamples = FramesPerStep * Channels;
     static constexpr size_t BufferSizeBytes = BufferSamples * sizeof(int16_t);
 

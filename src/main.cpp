@@ -397,7 +397,7 @@ static ssize_t log_devoptab_write(struct _reent *r, void *fd, const char *ptr, s
     (void)r; (void)fd;
     if (s_sd_log) {
         fwrite(ptr, 1, len, s_sd_log);
-        if (memchr(ptr, '\n', len) || memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
+        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
             fflush(s_sd_log);
         }
     }
@@ -858,7 +858,9 @@ static void switch_vblank_callback(void) {
         s_last_vblank_frame = s_frame_count;
     }
 
-    if (s_frame_count <= 5 || s_frame_count == 60 || (s_frame_count % 120) == 0) {
+    const uint64_t report_interval = (s_frame_count <= 360) ? 120 : 600;
+
+    if (s_frame_count <= 5 || s_frame_count == 60 || (s_frame_count % report_interval) == 0) {
         extern uint64_t g_dirty_dispatch_calls;
         extern uint64_t g_dirty_dispatch_handled;
         extern uint64_t g_dirty_dispatch_rejected;
@@ -915,7 +917,7 @@ static void switch_vblank_callback(void) {
                    mism_info[0], mism_info[1], mism_info[2], mism_info[3], mism_info[4]);
             memcpy(s_last_mismatch_info, mism_info, sizeof(mism_info));
         }
-        if ((s_frame_count % 120) == 0) {
+        if ((s_frame_count % report_interval) == 0) {
             uint32_t n = psx_game_entry_count(), t[5] = {0,0,0,0,0}, c[5] = {0,0,0,0,0};
             for (uint32_t i = 0; i < n; i++) {
                 uint32_t h = g_game_entry_hits[i];
@@ -944,7 +946,7 @@ static void switch_vblank_callback(void) {
                 openbios_clear_entry_hits();
             }
         }
-        if (d_native_game_misses > 0 && (s_frame_count % 120) == 0) {
+        if (d_native_game_misses > 0 && (s_frame_count % report_interval) == 0) {
             uint32_t miss_pc[3] = {0, 0, 0};
             uint64_t miss_hits[3] = {0, 0, 0};
             uint32_t miss_range[3] = {0, 0, 0};
@@ -981,7 +983,7 @@ static void switch_vblank_callback(void) {
             memset(g_dirty_native_game_miss_reason_window, 0, sizeof(uint64_t) * DIRTY_NATIVE_MISS_COUNT);
             memset(g_dirty_native_game_miss_reason_pc_window_table, 0, sizeof(DirtyRamPcEntry) * DIRTY_NATIVE_MISS_COUNT * DIRTY_RAM_PC_TABLE_SIZE);
         }
-        if (d_insns > 0 && (s_frame_count % 120) == 0 && s_frame_count != s_last_hot_pc_frame) {
+        if (d_insns > 0 && (s_frame_count % report_interval) == 0 && s_frame_count != s_last_hot_pc_frame) {
             uint32_t top_pc[8] = {0};
             uint64_t top_in[8] = {0};
             uint64_t top_hits[8] = {0};
@@ -1002,7 +1004,7 @@ static void switch_vblank_callback(void) {
             memset(g_dirty_ram_pc_window_table, 0, sizeof(g_dirty_ram_pc_window_table));
             s_last_hot_pc_frame = s_frame_count;
         }
-        if ((s_frame_count % 120) == 0) {
+        if ((s_frame_count % report_interval) == 0) {
             uint64_t kb[6] = {0};
             psx_kernel_bless_stats(kb);
             printf("  [KBless] total=%llu clean=%llu mism=%llu hits=%llu verif=%llu invals=%llu\n",
@@ -1033,6 +1035,7 @@ static void switch_vblank_callback(void) {
     if (!appletMainLoop() || switch_input_is_exit_requested()) {
         printf("[VBlank] Solicitud de salida detectada en frame %llu. Saliendo...\n",
                (unsigned long long)s_frame_count);
+        if (s_sd_log) fflush(s_sd_log);
         memcard_flush_all();
         exit(0);
     }
@@ -1068,12 +1071,13 @@ static void switch_vblank_callback(void) {
     s_win_samples++;
     s_last_cb_exit_tick = frame_end_tick;
 
-    if (s_frame_count <= 5 || (s_frame_count % 120) == 0) {
+    if (s_frame_count <= 5 || (s_frame_count % report_interval) == 0) {
         double denom = s_win_samples ? (double)s_win_samples : 1.0;
         auto rt = Deko3DRenderer::Instance().GetAndResetRenderTimings();
         double rt_denom = rt.samples ? (double)rt.samples : 1.0;
-        printf("[PerfAvg] frame=%llu win120: loop=%.3fms (input=%.3fms audio=%.3fms render=%.3fms other=%.3fms) guest_between=%.3fms | render_detail(prep=%.3fms submit=%.3fms pres=%.3fms wait=%.3fms [gpu_fence=%.3fms acq_wait=%.3fms vram_fence=%.3fms vram_up=%.3fms %uKB])\n",
+        printf("[PerfAvg] frame=%llu win%llu: loop=%.3fms (input=%.3fms audio=%.3fms render=%.3fms other=%.3fms) guest_between=%.3fms | render_detail(prep=%.3fms submit=%.3fms pres=%.3fms wait=%.3fms [gpu_fence=%.3fms acq_wait=%.3fms vram_fence=%.3fms vram_up=%.3fms %uKB])\n",
                (unsigned long long)s_frame_count,
+               (unsigned long long)report_interval,
                (double)s_win_loop_ns / denom / 1e6,
                (double)s_win_input_ns / denom / 1e6,
                (double)s_win_audio_ns / denom / 1e6,
@@ -1098,7 +1102,7 @@ static void switch_vblank_callback(void) {
         s_win_guest_ns = 0;
         s_win_samples = 0;
     }
-    if ((s_frame_count % 120) == 0) {
+    if ((s_frame_count % report_interval) == 0) {
         prof_report(s_frame_count);
         tek_block_prof_report_and_reset(s_frame_count);
     }
@@ -1112,6 +1116,10 @@ int main(int argc, char* argv[]) {
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/tekken3", 0777);
     s_sd_log = fopen("sdmc:/switch/tekken3/tekken3.log", "w");
+    if (s_sd_log) {
+        static char s_sd_log_buf[64 * 1024];
+        setvbuf(s_sd_log, s_sd_log_buf, _IOFBF, sizeof(s_sd_log_buf));
+    }
 
     // 2. Intentar inicializar soporte de red y conectar con nxlink en la PC
     Result sock_rc = socketInitializeDefault();

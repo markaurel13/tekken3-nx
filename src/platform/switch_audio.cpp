@@ -283,6 +283,8 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
     SwitchAudio* self = static_cast<SwitchAudio*>(arg);
     alignas(64) int16_t last_block[BufferSamples] = {0};
     bool has_last_block = false;
+    bool primed = false;
+    float current_pitch = 1.0f;
 
     while (self->m_threadRunning) {
         // audrenWaitFrame espera el tick de 5ms del DSP de audio de Switch
@@ -302,6 +304,36 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             }
         }
 
+        uint32_t r = self->m_ringReadIdx.load(std::memory_order_relaxed);
+        uint32_t w = self->m_ringWriteIdx.load(std::memory_order_acquire);
+        uint32_t occupancy = (w >= r) ? (w - r) : 0;
+
+        // 1. Priming inicial: acumular al menos 6 bloques (~100 ms) antes de comenzar a alimentar audren.
+        // Al entregar 3 a audren, quedan 3 buffers completos de colchón elástico (~50 ms).
+        if (!primed) {
+            if (occupancy >= 6) {
+                primed = true;
+            } else {
+                continue;
+            }
+        }
+
+        // 2. Control Dinámico de Tasa (Dynamic Rate Control):
+        // Ajusta el pitch sutilmente (±0.15%) para mantener el colchón elástico centrado en 4-6 slots
+        float target_pitch = 1.0f;
+        if (occupancy < 3) {
+            target_pitch = 0.9985f; // Ralentizar consumo para recuperar colchón
+        } else if (occupancy > 8) {
+            target_pitch = 1.0015f; // Acelerar consumo para evitar saturación
+        } else {
+            target_pitch = 1.0f;    // Nivel óptimo
+        }
+
+        if (target_pitch != current_pitch) {
+            current_pitch = target_pitch;
+            audrvVoiceSetPitch(&self->m_drv, 0, current_pitch);
+        }
+
         bool queuedAny = false;
         while (activeBuffers < 3) {
             AudioDriverWaveBuf* curWb = &self->m_waveBufs[self->m_currentBuffer];
@@ -310,8 +342,8 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
                 break;
             }
 
-            uint32_t r = self->m_ringReadIdx.load(std::memory_order_relaxed);
-            uint32_t w = self->m_ringWriteIdx.load(std::memory_order_acquire);
+            r = self->m_ringReadIdx.load(std::memory_order_relaxed);
+            w = self->m_ringWriteIdx.load(std::memory_order_acquire);
 
             if (r < w) {
                 uint32_t slot = r % RingSlots;
