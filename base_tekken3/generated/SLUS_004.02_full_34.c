@@ -16582,51 +16582,6 @@ void func_8007E078(CPUState* cpu)
             default: break;
         }
     }
-    /* Fast-path nativo para func_8007E078 (envío de palabras a GP0)
-     * Reemplaza el bucle palabra a palabra por transferencia directa a GP0.
-     * Si cpu->pc != 0 (reanudación CPS), cae al camino generado existente. */
-    {
-        extern uint8_t *g_psx_ram;
-        uint32_t src = cpu->gpr[4];
-        uint32_t count = cpu->gpr[5];
-        uint32_t ra = cpu->gpr[31];
-        /* GP1(04h) = 0x04000000: reset FIFO / DMA direction */
-        cpu->write_word(0x1F801814u, 0x04000000u);
-        if (count == 0u) {
-            cpu->gpr[6] = 0xFFFFFFFFu;
-            cpu->gpr[2] = 0u;
-            psx_check_interrupts_at(cpu, ra);
-            cpu->pc = ra;
-            return;
-        }
-        uint32_t last_word = 0;
-        uint32_t phys = src & 0x1FFFFFu;
-        if ((phys & 3) == 0 && (phys + count * 4 <= 0x200000u) && g_psx_ram) {
-            const uint32_t* p = (const uint32_t*)(g_psx_ram + phys);
-            for (uint32_t i = 0; i < count; i++) {
-                uint32_t w = p[i];
-                cpu->write_word(0x1F801810u, w);
-            }
-            last_word = p[count - 1];
-        } else {
-            for (uint32_t i = 0; i < count; i++) {
-                uint32_t w = cpu->read_word(src + i * 4);
-                cpu->write_word(0x1F801810u, w);
-                last_word = w;
-            }
-        }
-        cpu->gpr[3] = last_word;
-        cpu->gpr[4] = src + count * 4;
-        cpu->gpr[5] = 0xFFFFFFFFu;
-        cpu->gpr[6] = 0xFFFFFFFFu;
-        cpu->gpr[2] = 0u;
-#ifdef PSX_ENABLE_BLOCK_CYCLES
-        psx_cyc_step(cpu, count * 20u);
-#endif
-        psx_check_interrupts_at(cpu, ra);
-        cpu->pc = ra;
-        return;
-    }
     debug_server_log_call_entry(0x8007E078u);
     /* Address: 0x8007E078, Size: 64 bytes, Blocks: 4 */
 
