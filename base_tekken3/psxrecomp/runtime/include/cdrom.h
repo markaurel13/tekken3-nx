@@ -123,6 +123,7 @@ void cdrom_tick(void);
 
 /* DMA channel 3 interface */
 uint32_t cdrom_dma_read(void);
+uint32_t cdrom_dma_read_block(uint32_t *dest, uint32_t max_words);
 int cdrom_dma_ready(void);
 uint32_t cdrom_dma_sector_word_count(void);
 

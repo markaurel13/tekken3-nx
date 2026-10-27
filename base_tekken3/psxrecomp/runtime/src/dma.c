@@ -1154,6 +1154,25 @@ void dma_advance(uint32_t cycles) {
                 if (bytes > 0x200000u - addr) bytes = 0x200000u - addr;
                 overlay_capture_before_dma(addr, bytes);
             }
+            if (a->remaining_words > 0 && cdrom_dma_ready()) {
+                extern uint8_t *g_psx_ram;
+                uint32_t phys = addr & 0x1FFFFCu;
+                if (!step && g_psx_ram && (phys + a->remaining_words * 4u <= 0x200000u)) {
+                    while (a->remaining_words > 0 && cdrom_dma_ready()) {
+                        uint32_t *dst = (uint32_t*)(g_psx_ram + phys);
+                        uint32_t words = cdrom_dma_read_block(dst, a->remaining_words);
+                        if (words == 0) break;
+                        for (uint32_t i = 0; i < words && i < 4; i++) {
+                            record_cdrom_dma_word(dst[i]);
+                        }
+                        dirty_ram_mark_executable_range(phys, words * 4u);
+                        phys += words * 4u;
+                        a->remaining_words -= words;
+                        moved += words;
+                    }
+                    addr = phys;
+                }
+            }
             while (a->remaining_words > 0 && cdrom_dma_ready()) {
                 uint32_t word = cdrom_dma_read();
                 g_dma_cur_madr = addr;

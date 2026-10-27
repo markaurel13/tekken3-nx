@@ -2702,6 +2702,22 @@ uint32_t cdrom_dma_read(void) {
     return val;
 }
 
+uint32_t cdrom_dma_read_block(uint32_t *dest, uint32_t max_words) {
+    if (!dest || max_words == 0) return 0;
+    if (!((request_reg & CDROM_REQUEST_BFRD) && sector_available)) return 0;
+    int bytes_avail = sector_size - sector_read_pos;
+    if (bytes_avail < 4) return 0;
+    uint32_t words_avail = (uint32_t)bytes_avail / 4u;
+    uint32_t words = (max_words < words_avail) ? max_words : words_avail;
+    if (words == 0) return 0;
+    memcpy(dest, sector_buffer + sector_read_pos, words * 4u);
+    sector_read_pos += (int)(words * 4u);
+    if (sector_read_pos >= sector_size) {
+        sector_available = 0;
+    }
+    return words;
+}
+
 int cdrom_dma_ready(void) {
     return (request_reg & CDROM_REQUEST_BFRD) &&
            sector_available &&
