@@ -144,6 +144,10 @@ void psx_get_freeze_diag(uint64_t *out_total_checks,
                          uint64_t *out_exc_entries,
                          uint64_t *out_exc_reentry_blocks);
 
+void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
+                                   uint64_t *fast_none, uint64_t *mid,
+                                   uint64_t *eval, uint64_t *irq_deliv);
+
 /* longjmp back to psx_check_interrupts, unwinding the exception handler.
  * Called by ReturnFromException (B0:0x17 or SYSCALL(3)) when inside
  * the exception handler to model real hardware's RFE+JR $k0 unwind. */

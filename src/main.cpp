@@ -446,6 +446,13 @@ extern "C" {
     extern uint64_t g_dirty_native_game_miss_reason_window[DIRTY_NATIVE_MISS_COUNT];
     extern DirtyRamPcEntry g_dirty_native_game_miss_reason_pc_window_table[DIRTY_NATIVE_MISS_COUNT][DIRTY_RAM_PC_TABLE_SIZE];
     const char *dirty_native_game_miss_reason_name(uint32_t reason);
+    uint32_t openbios_entry_count(void);
+    uint32_t openbios_entry_addr(uint32_t idx);
+    uint32_t openbios_entry_hits(uint32_t idx);
+    void openbios_clear_entry_hits(void);
+    void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
+                                       uint64_t *fast_none, uint64_t *mid,
+                                       uint64_t *eval, uint64_t *irq_deliv);
 }
 
 static bool is_bios_vector_noise(uint32_t pc) {
@@ -475,6 +482,41 @@ static void collect_top_window_entries(const DirtyRamPcEntry* table,
             }
         }
     }
+}
+
+static void collect_top_dirty_window_entries(const DirtyRamPcEntry* table,
+                                             int max_entries,
+                                             uint32_t* top_pc,
+                                             uint64_t* top_insns,
+                                             uint64_t* top_hits,
+                                             uint64_t* out_total_insns,
+                                             uint32_t* out_active_pcs) {
+    uint64_t total_insns = 0;
+    uint32_t active = 0;
+    for (uint32_t i = 0; i < DIRTY_RAM_PC_TABLE_SIZE; i++) {
+        uint32_t pc = table[i].pc;
+        uint64_t insns = table[i].insns;
+        uint64_t hits = table[i].hits;
+        if (!pc || (!insns && !hits)) continue;
+        if (is_bios_vector_noise(pc)) continue;
+        total_insns += insns;
+        active++;
+        for (int slot = 0; slot < max_entries; ++slot) {
+            if (insns > top_insns[slot]) {
+                for (int move = max_entries - 1; move > slot; --move) {
+                    top_insns[move] = top_insns[move - 1];
+                    top_hits[move]  = top_hits[move - 1];
+                    top_pc[move]    = top_pc[move - 1];
+                }
+                top_insns[slot] = insns;
+                top_hits[slot]  = hits;
+                top_pc[slot]    = pc;
+                break;
+            }
+        }
+    }
+    if (out_total_insns) *out_total_insns = total_insns;
+    if (out_active_pcs) *out_active_pcs = active;
 }
 
 /* ===== PROFILER: wall-time sampler (phase + guest PC histogram) ===== */
@@ -606,6 +648,21 @@ static void prof_report(uint64_t frame) {
 
     printf("[PROF_DEVSVC] per-frame: total=%.2fms (cdrom=%.2fms dma=%.2fms timers=%.2fms sio=%.2fms irq_adv=%.2fms sched=%.2fms other=%.2fms) adv_calls=%.0f\n",
            d_tot, d_cdrom, d_dma, d_timers, d_sio, d_irq, d_sched, d_other, d_adv);
+
+    // Exact IRQ check vs delivery diagnostic
+    static uint64_t s_prof_last_irq_entry = 0, s_prof_last_irq_sr = 0, s_prof_last_irq_none = 0, s_prof_last_irq_mid = 0, s_prof_last_irq_deliv = 0;
+    uint64_t irq_entry = 0, irq_sr = 0, irq_none = 0, irq_mid = 0, irq_eval = 0, irq_deliv = 0;
+    psx_interrupt_check_path_diag(&irq_entry, &irq_sr, &irq_none, &irq_mid, &irq_eval, &irq_deliv);
+    double d_irq_entry = (double)(irq_entry - s_prof_last_irq_entry) / fr;
+    double d_irq_none  = (double)(irq_none - s_prof_last_irq_none) / fr;
+    double d_irq_sr    = (double)(irq_sr - s_prof_last_irq_sr) / fr;
+    double d_irq_mid   = (double)(irq_mid - s_prof_last_irq_mid) / fr;
+    double d_irq_deliv = (double)(irq_deliv - s_prof_last_irq_deliv) / fr;
+    printf("[IrqChkDiag] per-frame: checks=%.0f (none_pending=%.0f sr_masked=%.0f mid=%.0f) delivered=%.2f/f (%.2f%% actual work)\n",
+           d_irq_entry, d_irq_none, d_irq_sr, d_irq_mid, d_irq_deliv,
+           d_irq_entry > 0.0 ? (100.0 * d_irq_deliv / d_irq_entry) : 0.0);
+    s_prof_last_irq_entry = irq_entry; s_prof_last_irq_sr = irq_sr; s_prof_last_irq_none = irq_none;
+    s_prof_last_irq_mid = irq_mid; s_prof_last_irq_deliv = irq_deliv;
 
     // Exact CDROM ISO I/O breakdown
     uint64_t delta_raw_calls = g_prof_iso_raw_calls - s_prof_last_iso_raw_calls;
@@ -870,6 +927,22 @@ static void switch_vblank_callback(void) {
             }
             printf("  [HotFn] %08X:%u %08X:%u %08X:%u %08X:%u %08X:%u\n", t[0],c[0],t[1],c[1],t[2],c[2],t[3],c[3],t[4],c[4]);
             memset(g_game_entry_hits, 0, n * sizeof(uint32_t));
+
+            // Hot functions in OpenBIOS (measures the 3M static calls during boot/BIOS)
+            uint32_t ob_n = openbios_entry_count(), ob_t[5] = {0,0,0,0,0}, ob_c[5] = {0,0,0,0,0};
+            for (uint32_t i = 0; i < ob_n; i++) {
+                uint32_t h = openbios_entry_hits(i);
+                if (!h) continue;
+                for (int k = 0; k < 5; k++) if (h > ob_c[k]) {
+                    for (int m = 4; m > k; m--) { ob_c[m] = ob_c[m-1]; ob_t[m] = ob_t[m-1]; }
+                    ob_c[k] = h; ob_t[k] = openbios_entry_addr(i); break;
+                }
+            }
+            if (ob_c[0] > 0) {
+                printf("  [OpenBiosHotFn] %08X:%u %08X:%u %08X:%u %08X:%u %08X:%u\n",
+                       ob_t[0], ob_c[0], ob_t[1], ob_c[1], ob_t[2], ob_c[2], ob_t[3], ob_c[3], ob_t[4], ob_c[4]);
+                openbios_clear_entry_hits();
+            }
         }
         if (d_native_game_misses > 0 && (s_frame_count % 120) == 0) {
             uint32_t miss_pc[3] = {0, 0, 0};
@@ -908,14 +981,19 @@ static void switch_vblank_callback(void) {
             memset(g_dirty_native_game_miss_reason_window, 0, sizeof(uint64_t) * DIRTY_NATIVE_MISS_COUNT);
             memset(g_dirty_native_game_miss_reason_pc_window_table, 0, sizeof(DirtyRamPcEntry) * DIRTY_NATIVE_MISS_COUNT * DIRTY_RAM_PC_TABLE_SIZE);
         }
-        if (d_insns > 10000 && (s_frame_count % 120) == 0 && s_frame_count != s_last_hot_pc_frame) {
-            uint32_t top_pc[3] = {0, 0, 0};
-            uint64_t top_in[3] = {0, 0, 0};
-            collect_top_window_entries(g_dirty_ram_pc_window_table, true, top_pc, top_in);
-            printf("  [DirtyTop] win pc1=0x%08X insns1=%llu pc2=0x%08X insns2=%llu pc3=0x%08X insns3=%llu\n",
-                   top_pc[0], (unsigned long long)top_in[0],
-                   top_pc[1], (unsigned long long)top_in[1],
-                   top_pc[2], (unsigned long long)top_in[2]);
+        if (d_insns > 0 && (s_frame_count % 120) == 0 && s_frame_count != s_last_hot_pc_frame) {
+            uint32_t top_pc[8] = {0};
+            uint64_t top_in[8] = {0};
+            uint64_t top_hits[8] = {0};
+            uint64_t win_insns_tot = 0;
+            uint32_t win_active_pcs = 0;
+            collect_top_dirty_window_entries(g_dirty_ram_pc_window_table, 8, top_pc, top_in, top_hits, &win_insns_tot, &win_active_pcs);
+            printf("  [DirtyTop] win (tot_insns=%llu in %u PCs):\n", (unsigned long long)win_insns_tot, win_active_pcs);
+            for (int k = 0; k < 8 && top_pc[k] != 0; ++k) {
+                double pct = win_insns_tot ? (100.0 * (double)top_in[k] / (double)win_insns_tot) : 0.0;
+                printf("    #%d pc=0x%08X insns=%llu (%.1f%%) calls=%llu\n",
+                       k + 1, top_pc[k], (unsigned long long)top_in[k], pct, (unsigned long long)top_hits[k]);
+            }
             if (top_pc[0] != 0 && top_pc[0] != s_last_hot_pc) {
                 printf("[HotPC] current=0x%08X insns=%llu frame=%llu\n",
                        top_pc[0], (unsigned long long)top_in[0], (unsigned long long)s_frame_count);
@@ -994,7 +1072,7 @@ static void switch_vblank_callback(void) {
         double denom = s_win_samples ? (double)s_win_samples : 1.0;
         auto rt = Deko3DRenderer::Instance().GetAndResetRenderTimings();
         double rt_denom = rt.samples ? (double)rt.samples : 1.0;
-        printf("[PerfAvg] frame=%llu win120: loop=%.3fms (input=%.3fms audio=%.3fms render=%.3fms other=%.3fms) guest_between=%.3fms | render_detail(prep=%.3fms submit=%.3fms pres=%.3fms wait=%.3fms)\n",
+        printf("[PerfAvg] frame=%llu win120: loop=%.3fms (input=%.3fms audio=%.3fms render=%.3fms other=%.3fms) guest_between=%.3fms | render_detail(prep=%.3fms submit=%.3fms pres=%.3fms wait=%.3fms [gpu_fence=%.3fms acq_wait=%.3fms vram_fence=%.3fms vram_up=%.3fms %uKB])\n",
                (unsigned long long)s_frame_count,
                (double)s_win_loop_ns / denom / 1e6,
                (double)s_win_input_ns / denom / 1e6,
@@ -1005,7 +1083,12 @@ static void switch_vblank_callback(void) {
                (double)rt.vram_prep_ns / rt_denom / 1e6,
                (double)rt.submit_ns / rt_denom / 1e6,
                (double)rt.present_ns / rt_denom / 1e6,
-               (double)rt.fence_wait_ns / rt_denom / 1e6);
+               (double)rt.fence_wait_ns / rt_denom / 1e6,
+               (double)rt.gpu_fence_wait_ns / rt_denom / 1e6,
+               (double)rt.acq_wait_ns / rt_denom / 1e6,
+               (double)rt.vram_fence_wait_ns / rt_denom / 1e6,
+               (double)rt.vram_upload_ns / rt_denom / 1e6,
+               (unsigned)((double)rt.vram_upload_bytes / rt_denom / 1024.0));
 
         s_win_loop_ns = 0;
         s_win_input_ns = 0;
@@ -1043,7 +1126,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v21 - Step 1B Double-Buffered Deko3D GPU Fences & Zero-Wait RenderDisplay)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v22 - Step A Detailed Diagnostics: irq_adv breakdown, OpenBiosHotFn, 8-way DirtyTop, IrqChkDiag)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {

@@ -9005,6 +9005,7 @@ extern int dirty_ram_is_dirty(uint32_t phys);
 extern int psx_kernel_bless_dispatchable(uint32_t phys);
 extern void fntrace_record(CPUState* cpu, uint32_t target);
 extern uint64_t g_dispatch_static_hits;
+extern uint32_t g_openbios_entry_hits[3989];
 
 extern int g_psx_dispatch_depth;  /* runtime-owned: shared dispatch state, not per-image */
 
@@ -9133,6 +9134,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
                 g_debug_current_func_addr = phys;
                 debug_server_trace_dispatch(phys);
                 dispatch_table[mid].func(cpu);
+                g_openbios_entry_hits[mid]++;
                 g_dispatch_static_hits++;
                 found = 1;
                 break;
@@ -9260,3 +9262,21 @@ const PsxBiosBackend OpenBIOS_psx_bios_backend = {
     OpenBIOS_psx_bios_kernel_bodies,
     OpenBIOS_psx_bios_kernel_body_count,
 };
+
+uint32_t g_openbios_entry_hits[3989] = {0};
+
+uint32_t openbios_entry_count(void) {
+    return (uint32_t)(sizeof(dispatch_table) / sizeof(dispatch_table[0]));
+}
+
+uint32_t openbios_entry_addr(uint32_t idx) {
+    return (idx < 3989) ? dispatch_table[idx].addr : 0;
+}
+
+uint32_t openbios_entry_hits(uint32_t idx) {
+    return (idx < 3989) ? g_openbios_entry_hits[idx] : 0;
+}
+
+void openbios_clear_entry_hits(void) {
+    memset(g_openbios_entry_hits, 0, sizeof(g_openbios_entry_hits));
+}

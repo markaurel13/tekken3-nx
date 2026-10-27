@@ -110,6 +110,11 @@ public:
         uint64_t submit_ns = 0;
         uint64_t present_ns = 0;
         uint64_t fence_wait_ns = 0;
+        uint64_t gpu_fence_wait_ns = 0;
+        uint64_t acq_wait_ns = 0;
+        uint64_t vram_fence_wait_ns = 0;
+        uint64_t vram_upload_ns = 0;
+        uint64_t vram_upload_bytes = 0;
         uint64_t samples = 0;
     };
     RenderTimings GetAndResetRenderTimings();

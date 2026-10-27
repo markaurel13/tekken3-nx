@@ -300,20 +300,30 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
 }
 
 void Deko3DRenderer::WaitPendingFences() {
+    u64 t0 = armGetSystemTick();
+    bool waited = false;
     for (unsigned i = 0; i < NumFrameResources; i++) {
         if (m_fenceInFlight[i]) {
             dkFenceWait(&m_frameFences[i], -1);
             m_fenceInFlight[i] = false;
+            waited = true;
         }
+    }
+    if (waited) {
+        u64 t1 = armGetSystemTick();
+        m_timings.vram_fence_wait_ns += armTicksToNs(t1 - t0);
     }
 }
 
 void Deko3DRenderer::BeginFrame() {
     // Si la fence del buffer de este frame aún no ha terminado, esperar (generalmente 0 ms)
+    u64 t0 = armGetSystemTick();
     if (m_fenceInFlight[m_frameResIdx]) {
         dkFenceWait(&m_frameFences[m_frameResIdx], -1);
         m_fenceInFlight[m_frameResIdx] = false;
     }
+    u64 t1 = armGetSystemTick();
+    m_timings.gpu_fence_wait_ns += armTicksToNs(t1 - t0);
 
     m_cmdBuf = m_cmdBufPool[m_frameResIdx];
     m_vtxRingCpu = m_vtxRingCpuPool[m_frameResIdx];
@@ -323,7 +333,10 @@ void Deko3DRenderer::BeginFrame() {
     m_cmdPoolOffset[m_frameResIdx] = m_cmdPoolBase[m_frameResIdx] + CmdBufferSize;
     m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[m_frameResIdx], CmdBufferSize);
 
+    u64 t2 = armGetSystemTick();
     m_curSlot = m_queue.acquireImage(m_swapchain);
+    u64 t3 = armGetSystemTick();
+    m_timings.acq_wait_ns += armTicksToNs(t3 - t2);
 
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
@@ -803,6 +816,8 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
 void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* data) {
     if (!m_initialized || !data || w <= 0 || h <= 0) return;
 
+    u64 t_up_start = armGetSystemTick();
+
     FlushBatch();
 
     sw_vram_transfer_in(x, y, w, h, data);
@@ -922,6 +937,9 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     }
 
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+    u64 t_up_end = armGetSystemTick();
+    m_timings.vram_upload_ns += armTicksToNs(t_up_end - t_up_start);
+    m_timings.vram_upload_bytes += (size_t)orig_w * orig_h * sizeof(uint16_t);
 }
 
 int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh) {
