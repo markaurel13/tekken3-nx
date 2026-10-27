@@ -140,7 +140,7 @@ target_link_libraries(tekken3_nx PRIVATE
 # Generar metadata NACP para Horizon OS
 nx_generate_nacp(tekken3_nx.nacp
     NAME "Tekken 3"
-    AUTHOR "Namco / Ported by Community"
+    AUTHOR "markaurel13"
     VERSION "1.0.0"
 )
 
