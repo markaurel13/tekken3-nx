@@ -907,6 +907,14 @@ static void switch_vblank_callback(void) {
     s_frame_count++;
     memory_log_frame_prim_diag((uint32_t)s_frame_count);
     check_combat_stall_diagnostic((uint32_t)s_frame_count);
+    static bool s_game_started_logged = false;
+    if (!s_game_started_logged && fntrace_is_game_started()) {
+        s_game_started_logged = true;
+        printf("[Display] Juego iniciado (entry_pc alcanzado) frame %llu! Modo 4:3 HD 2x Supersampling activo\n",
+               (unsigned long long)s_frame_count);
+        fflush(stdout);
+    }
+
     u64 now_tick = armGetSystemTick();
     if (s_last_vblank_tick == 0) {
         s_last_vblank_tick = now_tick;
@@ -1302,6 +1310,12 @@ int main(int argc, char* argv[]) {
     sio_set_pad_connected(1, 0);
     spu_init();
     gpu_init();
+
+    // Configurar aspecto 4:3 nativo con 2x Supersampling para máxima nitidez y proporciones perfectas
+    gpu_ws_set_gte_game_mode(0);
+    gte_set_display_aspect(4, 3);
+    gpu_ws_configure(4, 3, 0, 0, 0);
+    printf("[Main] Renderizado 4:3 HD con 2x Supersampling (Internal Resolution 2048x1024)\n");
 
     // Configurar región de overlays estáticos de Tekken 3 (load_address 0x00010000 + text_size 0x00121000)
     g_overlay_region_floor = 0x00131000u;

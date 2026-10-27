@@ -131,8 +131,8 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
         .create();
 
     // 2. Asignar Memoria GPU
-    // Bloque para Framebuffers y Texturas de VRAM (32 MB)
-    m_memImages = dk::MemBlockMaker{m_device, 32 * 1024 * 1024}
+    // Bloque para Framebuffers y Texturas de VRAM (64 MB para acomodar Framebuffers + VRAM Render Target 2048x1024)
+    m_memImages = dk::MemBlockMaker{m_device, 64 * 1024 * 1024}
         .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
         .create();
 
@@ -182,12 +182,12 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
         fbPointers[i] = &m_framebuffers[i];
     }
 
-    // 5. Configurar Textura Render Target VRAM (1024x512 RGBA8)
+    // 5. Configurar Textura Render Target VRAM (2048x1024 RGBA8 con InternalScale = 2)
     dk::ImageLayout vramLayout;
     dk::ImageLayoutMaker{m_device}
         .setFlags(DkImageFlags_BlockLinear | DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine)
         .setFormat(DkImageFormat_RGBA8_Unorm)
-        .setDimensions(VramWidth, VramHeight)
+        .setDimensions(HrVramWidth, HrVramHeight)
         .initialize(vramLayout);
 
     curImgOffset = (curImgOffset + vramLayout.getAlignment() - 1) & ~(vramLayout.getAlignment() - 1);
@@ -513,33 +513,33 @@ void Deko3DRenderer::FlushBatch() {
 
     m_cmdBuf.pushConstants(m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), m_viewportUboCpu);
 
-    // 2. Vincular Render Target (m_vramTexture RGBA8 1024x512)
+    // 2. Vincular Render Target (m_vramTexture RGBA8 2048x1024)
     dk::ImageView vramTarget{ m_vramTexture };
     m_cmdBuf.bindRenderTargets(&vramTarget);
 
-    DkViewport viewport{ 0.0f, 0.0f, (float)VramWidth, (float)VramHeight, 0.0f, 1.0f };
+    DkViewport viewport{ 0.0f, 0.0f, (float)HrVramWidth, (float)HrVramHeight, 0.0f, 1.0f };
     m_cmdBuf.setViewports(0, { viewport });
 
     // 3. Configurar Scissor (primitivos absolutos como FillRect ignoran el clip de dibujo en PS1)
     bool isAbsolute = ((m_vtxRingCpu[m_vtxBatchStart].flags & 0x80000000u) != 0);
     if (isAbsolute) {
-        DkScissor scissor{ 0, 0, VramWidth, VramHeight };
+        DkScissor scissor{ 0, 0, HrVramWidth, HrVramHeight };
         m_cmdBuf.setScissors(0, { scissor });
     } else {
-        int scX = m_clipX1;
-        int scY = m_clipY1;
-        int scX2 = m_clipX2;
-        int scY2 = m_clipY2;
+        int scX = m_clipX1 * (int)InternalScale;
+        int scY = m_clipY1 * (int)InternalScale;
+        int scX2 = (m_clipX2 + 1) * (int)InternalScale - 1;
+        int scY2 = (m_clipY2 + 1) * (int)InternalScale - 1;
 
         if (scX < 0) scX = 0;
         if (scY < 0) scY = 0;
-        if (scX2 >= (int)VramWidth) scX2 = (int)VramWidth - 1;
-        if (scY2 >= (int)VramHeight) scY2 = (int)VramHeight - 1;
+        if (scX2 >= (int)HrVramWidth) scX2 = (int)HrVramWidth - 1;
+        if (scY2 >= (int)HrVramHeight) scY2 = (int)HrVramHeight - 1;
 
         int scW = scX2 - scX + 1;
         int scH = scY2 - scY + 1;
 
-        if (scW <= 0 || scH <= 0 || scX >= (int)VramWidth || scY >= (int)VramHeight) {
+        if (scW <= 0 || scH <= 0 || scX >= (int)HrVramWidth || scY >= (int)HrVramHeight) {
             scX = 0; scY = 0; scW = 0; scH = 0;
         }
         DkScissor scissor{ (uint32_t)scX, (uint32_t)scY, (uint32_t)scW, (uint32_t)scH };
@@ -816,8 +816,8 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
     if (w <= 0 || h <= 0) return;
 
     dk::ImageView vramTexView{ m_vramTexture };
-    m_cmdBuf.copyImage(vramTexView, { (uint32_t)sx, (uint32_t)sy, 0, (uint32_t)w, (uint32_t)h, 1 },
-                       vramTexView, { (uint32_t)dx, (uint32_t)dy, 0, (uint32_t)w, (uint32_t)h, 1 });
+    m_cmdBuf.copyImage(vramTexView, { (uint32_t)(sx * InternalScale), (uint32_t)(sy * InternalScale), 0, (uint32_t)(w * InternalScale), (uint32_t)(h * InternalScale), 1 },
+                       vramTexView, { (uint32_t)(dx * InternalScale), (uint32_t)(dy * InternalScale), 0, (uint32_t)(w * InternalScale), (uint32_t)(h * InternalScale), 1 });
 
     dk::ImageView rawView{ m_rawVramImage };
     m_cmdBuf.copyImage(rawView, { (uint32_t)sx, (uint32_t)sy, 0, (uint32_t)w, (uint32_t)h, 1 },
@@ -894,8 +894,10 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
             if (sub_w <= 0) continue;
 
             // Pitch alineado estrictamente a 32 bytes para el Maxwell 2D Copy Engine de Tegra X1
-            uint32_t pitch32 = (sub_w * sizeof(uint32_t) + 31u) & ~31u;
-            size_t uploadBytes32 = (size_t)pitch32 * sub_h;
+            uint32_t sub_w_hr = (uint32_t)sub_w * InternalScale;
+            uint32_t sub_h_hr = (uint32_t)sub_h * InternalScale;
+            uint32_t pitch32 = (sub_w_hr * sizeof(uint32_t) + 31u) & ~31u;
+            size_t uploadBytes32 = (size_t)pitch32 * sub_h_hr;
             uint32_t align32 = (uint32_t)((uploadBytes32 + 511u) & ~511u);
 
             uint32_t pitch16 = (sub_w * sizeof(uint16_t) + 31u) & ~31u;
@@ -924,11 +926,12 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
             uint32_t uploadOffset16 = m_stagingUploadOffset;
             m_stagingUploadOffset += align16;
 
-            // 1. Convertir a RGBA8 para m_vramTexture (render target / display)
+            // 1. Convertir a RGBA8 para m_vramTexture (duplicación 2x2 para coincidir con la resolución HR 2048x1024)
             uint8_t* dst32Base = (uint8_t*)m_memStaging.getCpuAddr() + uploadOffset32;
             for (int row = 0; row < sub_h; row++) {
                 const uint16_t* srcRow = data + (size_t)(sy + row) * orig_w + sx;
-                uint32_t* dRow32 = (uint32_t*)(dst32Base + (size_t)row * pitch32);
+                uint32_t* dRow0 = (uint32_t*)(dst32Base + (size_t)(row * 2 + 0) * pitch32);
+                uint32_t* dRow1 = (uint32_t*)(dst32Base + (size_t)(row * 2 + 1) * pitch32);
                 for (int col = 0; col < sub_w; col++) {
                     uint16_t c = srcRow[col];
                     uint32_t r5 = c & 0x1Fu;
@@ -937,12 +940,16 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
                     uint32_t r8 = (r5 << 3) | (r5 >> 2);
                     uint32_t g8 = (g5 << 3) | (g5 >> 2);
                     uint32_t b8 = (b5 << 3) | (b5 >> 2);
-                    dRow32[col] = r8 | (g8 << 8) | (b8 << 16) | 0xFF000000u;
+                    uint32_t px = r8 | (g8 << 8) | (b8 << 16) | 0xFF000000u;
+                    dRow0[col * 2 + 0] = px;
+                    dRow0[col * 2 + 1] = px;
+                    dRow1[col * 2 + 0] = px;
+                    dRow1[col * 2 + 1] = px;
                 }
             }
             m_memStaging.flushCpuCache(uploadOffset32, uploadBytes32);
 
-            // 2. Copiar 16-bit directos para m_rawVramImage (texturas y CLUTs de psx_fsh)
+            // 2. Copiar 16-bit directos para m_rawVramImage (texturas y CLUTs de psx_fsh en resolución nativa 1x)
             uint8_t* dst16Base = (uint8_t*)m_memStaging.getCpuAddr() + uploadOffset16;
             for (int row = 0; row < sub_h; row++) {
                 const uint16_t* srcRow = data + (size_t)(sy + row) * orig_w + sx;
@@ -954,6 +961,10 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
             // Copias directas sincrónicas en el command buffer
             m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset32, pitch32, 0 },
                                        vramTexView,
+                                       { (uint32_t)(dx * InternalScale), (uint32_t)(dy * InternalScale), 0, sub_w_hr, sub_h_hr, 1 });
+
+            m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset16, pitch16, 0 },
+                                       rawView,
                                        { (uint32_t)dx, (uint32_t)dy, 0, (uint32_t)sub_w, (uint32_t)sub_h, 1 });
 
             m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset16, pitch16, 0 },
@@ -1014,23 +1025,40 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 
     dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
 
+    // Aspecto 4:3 HD auténtico: píxeles sin estirar ni encoger, centrado en pantalla 720p
+    const uint32_t dstW = TargetHeight * 4 / 3; // 960
+    const uint32_t dstX = (TargetWidth - dstW) / 2; // 160
+    const uint32_t dstY = 0;
+    const uint32_t dstH = TargetHeight; // 720
+
+    static bool s_first_hd_present_logged = false;
+    if (!s_first_hd_present_logged) {
+        s_first_hd_present_logged = true;
+        printf("[Deko3D] 4:3 HD Present activo: src=(%u,%u %ux%u) hr_src=(%u,%u %ux%u) -> dst=(%u,%u %ux%u) [SSAA=%ux]\n",
+               dispX, dispY, w, h, dispX * InternalScale, dispY * InternalScale, w * InternalScale, h * InternalScale,
+               dstX, dstY, dstW, dstH, InternalScale);
+        fflush(stdout);
+    }
+
     if (di.disabled) {
         m_cmdBuf.bindRenderTargets(&colorTarget);
         m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
         m_cmdBuf.bindRenderTargets({});
     } else {
         m_cmdBuf.bindRenderTargets({});
+        // Limpiar bandas laterales a negro puro (pillarboxing 4:3)
+        m_cmdBuf.bindRenderTargets(&colorTarget);
+        m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+        m_cmdBuf.bindRenderTargets({});
+
         if (di.depth24 && m_vram && m_vramStagingCpu) {
             // Ruta para FMVs de 24-bit
             static uint32_t s_fmv_log_cnt = 0;
             if (s_fmv_log_cnt++ < 10 || (s_fmv_log_cnt % 60) == 0) {
-                printf("[FMV_Diag] 24-bit FMV Present #%llu: disp=(%u,%u %ux%u)\n",
-                       (unsigned long long)s_present_count, dispX, dispY, w, h);
+                printf("[FMV_Diag] 24-bit FMV Present #%llu: disp=(%u,%u %ux%u) dst=(%u,%u %ux%u)\n",
+                       (unsigned long long)s_present_count, dispX, dispY, w, h, dstX, dstY, dstW, dstH);
                 fflush(stdout);
             }
-            m_cmdBuf.bindRenderTargets(&colorTarget);
-            m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
-            m_cmdBuf.bindRenderTargets({});
 
             uint32_t* slotStagingCpu = m_vramStagingCpu + (size_t)m_curSlot * (VramWidth * VramHeight);
             DkGpuAddr slotStagingGpu = m_vramStagingGpu + (size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t));
@@ -1051,14 +1079,14 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             m_cmdBuf.copyBufferToImage({ slotStagingGpu, 0, 0 }, vramTexView, { 0, 0, 0, w, h, 1 });
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
             m_cmdBuf.blitImage(vramTexView, { 0, 0, 0, w, h, 1 },
-                               colorTarget, { 0, 0, 0, TargetWidth, TargetHeight, 1 },
+                               colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
         } else {
-            // Presentación directa por hardware GPU Maxwell (0 ms de conversión CPU)
+            // Presentación directa por hardware GPU Maxwell (0 ms de conversión CPU) con 2x SSAA
             dk::ImageView vramTexView{ m_vramTexture };
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
-            m_cmdBuf.blitImage(vramTexView, { dispX, dispY, 0, w, h, 1 },
-                               colorTarget, { 0, 0, 0, TargetWidth, TargetHeight, 1 },
+            m_cmdBuf.blitImage(vramTexView, { dispX * InternalScale, dispY * InternalScale, 0, w * InternalScale, h * InternalScale, 1 },
+                               colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
         }
@@ -1269,21 +1297,21 @@ static const GpuRenderBackend DEKO3D_BACKEND = {
     .set_draw_area                  = dk_set_draw_area,
     .get_draw_area                  = sw_get_draw_area,
     .set_draw_offset                = dk_set_draw_offset,
-    .wide_configure                 = sw_wide_configure,
-    .wide_set_target                = sw_wide_set_target,
-    .wide_disable_target            = sw_wide_disable_target,
-    .wide_set_primitive_delta       = sw_wide_set_primitive_delta,
-    .wide_set_primitive_clip_bottom = sw_wide_set_primitive_clip_bottom,
-    .wide_fade_white                = sw_wide_fade_white,
-    .wide_set_primitive_suppressed  = sw_wide_set_primitive_suppressed,
-    .wide_set_primitive_unclipped   = sw_wide_set_primitive_unclipped,
-    .wide_set_primitive_expanded    = sw_wide_set_primitive_expanded,
-    .wide_clear                     = sw_wide_clear,
-    .wide_clear_margins             = sw_wide_clear_margins,
-    .wide_set_mirror_authoritative  = sw_wide_set_mirror_authoritative,
-    .wide_set_sidecar_complete      = sw_wide_set_sidecar_complete,
-    .render_wide_display            = sw_render_wide_display,
-    .wide_dump_full                 = sw_wide_dump_full,
+    .wide_configure                 = nullptr,
+    .wide_set_target                = nullptr,
+    .wide_disable_target            = nullptr,
+    .wide_set_primitive_delta       = nullptr,
+    .wide_set_primitive_clip_bottom = nullptr,
+    .wide_fade_white                = nullptr,
+    .wide_set_primitive_suppressed  = nullptr,
+    .wide_set_primitive_unclipped   = nullptr,
+    .wide_set_primitive_expanded    = nullptr,
+    .wide_clear                     = nullptr,
+    .wide_clear_margins             = nullptr,
+    .wide_set_mirror_authoritative  = nullptr,
+    .wide_set_sidecar_complete      = nullptr,
+    .render_wide_display            = nullptr,
+    .wide_dump_full                 = nullptr,
 };
 
 const GpuRenderBackend* deko3d_backend_get(void) {

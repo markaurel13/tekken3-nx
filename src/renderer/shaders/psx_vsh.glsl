@@ -26,7 +26,7 @@ void main()
     // Mapeo a NDC para Deko3D (VRAM 1024x512, origen en esquina superior izquierda):
     // NDC X: [0..1024] -> [-1.0..+1.0]
     // NDC Y: [0..512]  -> [-1.0..+1.0] (Y=0 es -1.0 [fila 0], Y=512 es +1.0 [fila 512])
-    const float shift = 0.484375; // 0.5 - 1.0/64.0 (alineación de píxeles enteros PS1)
+    const float shift = 0.25; // 0.5 / Scale (alineación de subpíxeles para render target 2048x1024)
     vec2 ndc;
     ndc.x = (inPos.x + shift) / 512.0 - 1.0;
     ndc.y = 1.0 - (inPos.y + shift) / 256.0;
