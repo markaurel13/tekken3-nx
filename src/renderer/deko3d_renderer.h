@@ -98,6 +98,13 @@ public:
     // Obtener número de vértices presentados en el último frame
     uint32_t GetLastFrameVtx() const { return m_lastFrameVtx; }
 
+    static constexpr unsigned NumFrameResources = 2;
+    static constexpr unsigned CmdPoolSliceSize = 8 * 1024 * 1024;   // 8 MB pool por frame
+    static constexpr unsigned VertexRingSliceSize = 4 * 1024 * 1024;// 4 MB vertices por frame (131072 vertices)
+
+    // Sincronización de seguridad con fences GPU antes de lecturas de VRAM
+    void WaitPendingFences();
+
     struct RenderTimings {
         uint64_t vram_prep_ns = 0;
         uint64_t submit_ns = 0;
@@ -128,8 +135,14 @@ private:
     // Recursos Deko3D
     dk::UniqueDevice m_device;
     dk::UniqueQueue m_queue;
-    dk::UniqueCmdBuf m_cmdBuf;
     dk::UniqueSwapchain m_swapchain;
+
+    // Doble buffer de recursos GPU para paralelismo completo CPU/GPU
+    int m_frameResIdx = 0;
+    dk::UniqueCmdBuf m_cmdBufPool[NumFrameResources];
+    dk::CmdBuf m_cmdBuf; // Handle activo para el slot actual
+    DkFence m_frameFences[NumFrameResources]{};
+    bool m_fenceInFlight[NumFrameResources] = {false, false};
 
     dk::MemBlock m_memImages;
     dk::MemBlock m_memCode;
@@ -146,6 +159,8 @@ private:
     int m_curSlot = 0;
 
     // Buffers de vértices, descriptores, uniformes y staging
+    PS1Vertex* m_vtxRingCpuPool[NumFrameResources] = {nullptr, nullptr};
+    DkGpuAddr m_vtxRingGpuPool[NumFrameResources] = {0, 0};
     PS1Vertex* m_vtxRingCpu = nullptr;
     DkGpuAddr m_vtxRingGpu = 0;
     uint32_t m_vtxAllocated = 0;
@@ -163,7 +178,8 @@ private:
     uint32_t* m_vramStagingCpu = nullptr;
     DkGpuAddr m_vramStagingGpu = 0;
     uint32_t m_stagingUploadOffset = StagingRingStart;
-    uint32_t m_cmdPoolOffset = CmdBufferSize;
+    uint32_t m_cmdPoolBase[NumFrameResources] = {0, 8 * 1024 * 1024};
+    uint32_t m_cmdPoolOffset[NumFrameResources] = {CmdBufferSize, 8 * 1024 * 1024 + CmdBufferSize};
 
     bool m_vramDirty = true;
     bool m_initialized = false;
