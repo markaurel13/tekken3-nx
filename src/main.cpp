@@ -590,6 +590,11 @@ static uint64_t s_prof_last_audio_audren = 0;
 static uint64_t s_prof_last_audio_underrun = 0;
 
 static void prof_thread_fn(void*) {
+    uint64_t last_seen_frame = 0;
+    u64 last_frame_change_tick = armGetSystemTick();
+    uint32_t watchdog_counter = 0;
+    uint32_t stall_alert_count = 0;
+
     while (s_prof_run) {
         int ph = g_exec_phase;
         if (ph < 0 || ph >= PROF_PHASES) ph = 0;
@@ -605,6 +610,52 @@ static void prof_thread_fn(void*) {
                 }
             }
         }
+
+        // Watchdog activo cada ~200 ms (1000 iteraciones x 0.2 ms)
+        if (++watchdog_counter >= 1000) {
+            watchdog_counter = 0;
+            u64 now_tick = armGetSystemTick();
+            uint64_t cur_frame = s_frame_count;
+
+            if (cur_frame != last_seen_frame) {
+                last_seen_frame = cur_frame;
+                last_frame_change_tick = now_tick;
+                stall_alert_count = 0;
+            } else if (cur_frame > 100) { // Evaluar unicamente tras el arranque
+                u64 stall_ms = armTicksToNs(now_tick - last_frame_change_tick) / 1000000ULL;
+                if (stall_ms >= 1500) { // Main thread bloqueado por mas de 1.5 segundos
+                    stall_alert_count++;
+                    if (stall_alert_count <= 10 || (stall_alert_count % 10) == 0) {
+                        printf("\n[WATCHDOG_ALERT #%u] Main thread STALL! stall=%llu ms at frame=%llu (phase=%d g_prof_pc=0x%08X)\n",
+                               stall_alert_count, (unsigned long long)stall_ms, (unsigned long long)cur_frame, ph, g_prof_pc);
+                        if (debug_cpu_ptr) {
+                            printf("  [CPU] pc=0x%08X ra=0x%08X sp=0x%08X v0=0x%08X a0=0x%08X\n",
+                                   debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29],
+                                   debug_cpu_ptr->gpr[2], debug_cpu_ptr->gpr[4]);
+                        }
+                        if (g_disp_tail_seq > 0) {
+                            printf("  [Tail Dispatches]:\n");
+                            uint64_t tcount = g_disp_tail_seq < 5 ? g_disp_tail_seq : 5;
+                            for (uint64_t i = g_disp_tail_seq - tcount; i < g_disp_tail_seq; i++) {
+                                const DispTailEntry* t = &g_disp_tail[i % DISP_TAIL_CAP];
+                                printf("    [%llu] target=0x%08X ra=0x%08X sp=0x%08X cyc=%llu\n",
+                                       (unsigned long long)i, t->target, t->ra, t->sp, (unsigned long long)t->cycle);
+                            }
+                        }
+                        if (s_sd_log) fflush(s_sd_log);
+                    }
+
+                    // Salida de emergencia si el usuario pulsa Plus + Minus durante un stall prolongado
+                    if (switch_input_is_exit_requested()) {
+                        printf("[WATCHDOG] Salida solicitada via Plus+Minus durante stall! Saliendo limpiamente...\n");
+                        if (s_sd_log) fflush(s_sd_log);
+                        memcard_flush_all();
+                        exit(0);
+                    }
+                }
+            }
+        }
+
         svcSleepThread(200000);   /* ~0.2 ms */
     }
 }
@@ -1031,6 +1082,13 @@ static void switch_vblank_callback(void) {
         if (s_sd_log) fflush(s_sd_log);
     }
 
+    // Flush regular cada 60 frames (1 segundo) para no perder logs ante cualquier freeze inesperado
+    static uint32_t s_regular_flush_counter = 0;
+    if (++s_regular_flush_counter >= 60) {
+        s_regular_flush_counter = 0;
+        if (s_sd_log) fflush(s_sd_log);
+    }
+
     // 1. Manejo de bucle principal y salida rápida con botones (Plus + Minus)
     if (!appletMainLoop() || switch_input_is_exit_requested()) {
         printf("[VBlank] Solicitud de salida detectada en frame %llu. Saliendo...\n",
@@ -1038,6 +1096,12 @@ static void switch_vblank_callback(void) {
         if (s_sd_log) fflush(s_sd_log);
         memcard_flush_all();
         exit(0);
+    }
+
+    // Si la aplicación pierde el foco (menú HOME o suspensión), ceder CPU y no intentar presentar a la GPU
+    if (appletGetFocusState() != AppletFocusState_InFocus) {
+        svcSleepThread(16000000ULL); // ~16 ms
+        return;
     }
 
     // 2. Actualizar mandos y estados de botones para la PS1

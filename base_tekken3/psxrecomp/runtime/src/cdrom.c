@@ -1547,8 +1547,15 @@ static int start_cdda_playback(int requested_track) {
     }
 
     if (track <= 0 || track > iso_track_count(iso_handle) ||
-        !iso_track_is_audio(iso_handle, track))
+        !iso_track_is_audio(iso_handle, track)) {
+        printf("[CDROM] start_cdda_playback REJECTED req_track=%d -> track=%d lba=%u (tot_tracks=%d is_audio=%d)\n",
+               requested_track, track, lba, iso_handle ? iso_track_count(iso_handle) : 0,
+               (iso_handle && track > 0 && track <= iso_track_count(iso_handle)) ? iso_track_is_audio(iso_handle, track) : 0);
         return 0;
+    }
+
+    printf("[CDROM] start_cdda_playback SUCCESS req_track=%d -> track=%d lba=%u\n",
+           requested_track, track, lba);
 
     stop_read_stream();
     spu_cd_audio_reset();
@@ -1904,6 +1911,8 @@ static void exec_command(uint8_t cmd) {
             pending_arm(0x08, lat, 1);
             s_cd_probe_stop_count++;
             s_cd_probe_stop_cycles += (uint64_t)lat;
+            printf("[CDROM_CMD] Stop (0x08) lat=%d (last_lba=%d)\n", lat, reading ? msf_to_lba(read_min, read_sec, read_sect) : last_sector_lba);
+            fflush(stdout);
         }
         break;
 
@@ -1919,6 +1928,8 @@ static void exec_command(uint8_t cmd) {
         pending_arm(0x09, complete_delay, 1);
         s_cd_probe_pause_count++;
         s_cd_probe_pause_cycles += (uint64_t)complete_delay;
+        printf("[CDROM_CMD] Pause (0x09) lat=%d (reading=%d last_lba=%d)\n", complete_delay, reading, reading ? msf_to_lba(read_min, read_sec, read_sect) : last_sector_lba);
+        fflush(stdout);
         break;
     }
 
@@ -2124,6 +2135,10 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        printf("[CDROM] Seek%c target_lba=%d (setloc=%d msf=%02d:%02d:%02d)\n",
+               cmd == 0x15 ? 'L' : 'P',
+               s_setloc_lba >= 0 ? s_setloc_lba : msf_to_lba(seek_min, seek_sec, seek_sect),
+               s_setloc_lba, seek_min, seek_sec, seek_sect);
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
@@ -2249,6 +2264,8 @@ static void process_pending(uint32_t cycles) {
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
+        printf("[CDROM_EVT] Stop (0x08) complete IRQ fired\n");
+        fflush(stdout);
         break;
 
     case 0x09: /* Pause complete */
@@ -2256,6 +2273,8 @@ static void process_pending(uint32_t cycles) {
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
+        printf("[CDROM_EVT] Pause (0x09) complete IRQ fired\n");
+        fflush(stdout);
         break;
 
     case 0x0A: /* Init complete */

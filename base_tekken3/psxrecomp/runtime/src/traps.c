@@ -904,6 +904,7 @@ void psx_scheduler_run(CPUState* cpu)
         }
         printf("[Traps] psx_scheduler_run terminating: run_pc=0x%08X cpu->pc=0x%08X g_pc0_reason=%u\n",
                run_pc, cpu->pc, g_pc0_reason);
+        fflush(stdout);
         g_sched_escape.reason = PSX_RUN_GUEST_EXIT;
         g_in_scheduler_run = 0;
         return;

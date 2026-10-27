@@ -43,6 +43,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(__SWITCH__)
+#include <switch.h>
+#endif
 
 #ifndef RAM_SIZE
 #define RAM_SIZE (2u * 1024u * 1024u)
@@ -847,6 +850,8 @@ static int abort_unsupported(uint32_t pc, uint32_t insn, const char *reason) {
     g_unsupported_pc     = pc;
     g_unsupported_insn   = insn;
     g_unsupported_reason = reason;
+    printf("[DirtyRAM_Abort] pc=0x%08X insn=0x%08X reason=%s\n", pc, insn, reason ? reason : "unknown");
+    fflush(stdout);
     return 1; /* signal "control transferred" so the caller stops */
 }
 
@@ -2339,6 +2344,13 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     g_dirty_interp_active = 1;
     int prev_phase = g_exec_phase;
     g_exec_phase = 1;
+#if defined(__SWITCH__)
+    u64 t0 = armGetSystemTick();
+    g_dirty_dispatch_calls++;
+    int r = dirty_ram_dispatch_inner(cpu, addr, stop_addr);
+    u64 t1 = armGetSystemTick();
+    g_dirty_dispatch_time_ns += armTicksToNs(t1 - t0);
+#else
     struct timespec t0, t1;
     int have_timing = (clock_gettime(CLOCK_MONOTONIC, &t0) == 0);
     g_dirty_dispatch_calls++;
@@ -2348,6 +2360,7 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
         dt_ns += (uint64_t)(t1.tv_nsec - t0.tv_nsec);
         g_dirty_dispatch_time_ns += dt_ns;
     }
+#endif
     if (r == 1) g_dirty_dispatch_handled++;
     else        g_dirty_dispatch_rejected++;
 
@@ -2710,6 +2723,14 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     }
 
 #ifdef PSX_HAS_GAME_DISPATCH
+    if ((addr & 0xFFFFF000u) == 0x800FE000u || (addr & 0xFFFFF000u) == 0x800FD000u) {
+        static uint32_t s_fmv_interp_log = 0;
+        if (s_fmv_interp_log++ < 10) {
+            printf("[FMV_Interp_Entry #%u] addr=0x%08X ra=0x%08X sp=0x%08X a0=0x%08X\n",
+                   s_fmv_interp_log, addr, cpu->gpr[31], cpu->gpr[29], cpu->gpr[4]);
+            fflush(stdout);
+        }
+    }
 #ifndef PSX_NO_DEBUG_TOOLS
     xprobe_event(cpu->gpr[31], XOP_DD, XSITE_DD, addr, 0u, cpu->gpr[29], cpu->gpr[31], 0);
 #endif

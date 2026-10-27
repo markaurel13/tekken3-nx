@@ -304,7 +304,10 @@ void Deko3DRenderer::WaitPendingFences() {
     bool waited = false;
     for (unsigned i = 0; i < NumFrameResources; i++) {
         if (m_fenceInFlight[i]) {
-            dkFenceWait(&m_frameFences[i], -1);
+            DkResult res = dkFenceWait(&m_frameFences[i], 100000000ULL);
+            if (res != DkResult_Success) {
+                printf("[Deko3D] WARNING: WaitPendingFences timeout en fence %u (res=%d)!\n", i, (int)res);
+            }
             m_fenceInFlight[i] = false;
             waited = true;
         }
@@ -316,10 +319,13 @@ void Deko3DRenderer::WaitPendingFences() {
 }
 
 void Deko3DRenderer::BeginFrame() {
-    // Si la fence del buffer de este frame aún no ha terminado, esperar (generalmente 0 ms)
+    // Si la fence del buffer de este frame aún no ha terminado, esperar con timeout seguro de 100ms
     u64 t0 = armGetSystemTick();
     if (m_fenceInFlight[m_frameResIdx]) {
-        dkFenceWait(&m_frameFences[m_frameResIdx], -1);
+        DkResult res = dkFenceWait(&m_frameFences[m_frameResIdx], 100000000ULL);
+        if (res != DkResult_Success) {
+            printf("[Deko3D] WARNING: BeginFrame timeout en fence %u (res=%d)!\n", m_frameResIdx, (int)res);
+        }
         m_fenceInFlight[m_frameResIdx] = false;
     }
     u64 t1 = armGetSystemTick();
@@ -974,6 +980,17 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     if (dispY + h > VramHeight) h = VramHeight - dispY;
     if (w == 0) w = 1;
     if (h == 0) h = 1;
+
+    static int s_prev_depth24 = -1;
+    static int s_prev_disabled = -1;
+    if (di.depth24 != s_prev_depth24 || di.disabled != s_prev_disabled) {
+        printf("[DisplayTransition] Present #%llu: depth24=%d->%d disabled=%d->%d disp=(%u,%u %ux%u)\n",
+               (unsigned long long)s_present_count, s_prev_depth24, di.depth24, s_prev_disabled, di.disabled,
+               dispX, dispY, w, h);
+        s_prev_depth24 = di.depth24;
+        s_prev_disabled = di.disabled;
+        fflush(stdout);
+    }
 
     dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
 
