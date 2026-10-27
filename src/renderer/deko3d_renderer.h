@@ -25,14 +25,16 @@ struct PS1Vertex {
     uint8_t color[4];      // location 2: 4x8 Unorm (R, G, B, A modulación / Gouraud)
     uint16_t tpage_clut[2];// location 3: 2x16 Uint (x: texpage, y: clut)
     uint32_t flags;        // location 4: 1x32 Uint (depth, raw, semi, blend, textured, abs)
-    uint32_t pad;          // alineación a 32 bytes
+    float q;               // location 5: 1x32 Float (peso de perspectiva 1/Z del GTE; 0.0 = afín)
 };
+static_assert(sizeof(PS1Vertex) == 32, "PS1Vertex must be exactly 32 bytes");
 
 // Uniform buffer para proyección de Viewport y Texture Window (binding = 0 en psx_vsh.glsl y psx_fsh.glsl)
 struct ViewportUniforms {
     float screenSize[2];   // 1024.0, 512.0
     float offset[2];       // m_offsetX, m_offsetY
     int32_t texWindow[4];  // mask_x, mask_y, off_x, off_y
+    float extra[4];        // extra[0]: subpixel shift (0.5 / scale), extra[1]: scale
 };
 
 class Deko3DRenderer {
@@ -42,18 +44,20 @@ public:
     static constexpr uint32_t TargetHeight = 720;
     static constexpr uint32_t VramWidth = 1024;
     static constexpr uint32_t VramHeight = 512;
-    static constexpr uint32_t InternalScale = 2;
-    static constexpr uint32_t HrVramWidth = VramWidth * InternalScale;
-    static constexpr uint32_t HrVramHeight = VramHeight * InternalScale;
     static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
     static constexpr unsigned CmdPoolTotalSize = 16 * 1024 * 1024;   // 16 MB pool total para comandos
     static constexpr unsigned MaxVerticesPerFrame = 131072;          // 128K vértices por frame (~3.5 MB)
     static constexpr uint32_t StagingRingStart = 0x00600000;         // 6 MB offset inicial (0x0..0x600000 reservado para depth24 FMVs)
     static constexpr uint32_t StagingRingEnd = 64 * 1024 * 1024;     // 64 MB límite de staging (58 MB anillo dinámico)
 
+    uint32_t m_internalScale = 2;
+    uint32_t m_hrVramWidth = VramWidth * 2;
+    uint32_t m_hrVramHeight = VramHeight * 2;
+    bool m_widescreen = false;
+
     static Deko3DRenderer& Instance();
 
-    bool Init(uint16_t* vramPtr);
+    bool Init(uint16_t* vramPtr, uint32_t internalScale = 2, bool widescreen = false);
     void Shutdown();
 
     void BeginFrame();
@@ -63,6 +67,7 @@ public:
     void SetDrawArea(int x1, int y1, int x2, int y2);
     void SetTextureWindow(uint32_t raw);
     void SetSemiTransparency(int enabled, int mode);
+    void SetPerspectiveTriangle(int enabled, float q0, float q1, float q2);
     void SetColorModulation(int r, int g, int b, int raw);
 
     // Primitivas de PS1 aceleradas por hardware GPU Maxwell
@@ -174,6 +179,10 @@ private:
     uint32_t m_vtxAllocated = 0;
     uint32_t m_vtxBatchStart = 0;
     uint32_t m_lastFrameVtx = 0;
+
+    bool m_pqValid = false;
+    float m_pq[3] = { 0.0f, 0.0f, 0.0f };
+    uint64_t m_perspTriHits = 0;
 
     void* m_imgDescCpu = nullptr;
     DkGpuAddr m_imgDescGpu = 0;

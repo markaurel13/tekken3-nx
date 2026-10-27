@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <vector>
 #include <algorithm>
 #include <utility>
@@ -72,6 +73,13 @@ extern uint64_t g_dirty_ram_insns_run;
 extern uint64_t g_dirty_ram_unsupported_midblock;
 extern uint32_t g_dirty_ram_last_unsupported_pc;
 extern uint32_t g_dirty_ram_last_unsupported_insn;
+
+// Configuración gráfica dinámica (config.txt)
+struct GameConfig {
+    int supersampling = 2; // 1 = 1x (Nativo PS1), 2 = 2x HD (Recomendado), 3 = 3x Ultra HD
+    bool widescreen_16_9 = false; // false = 4:3 con bandas negras, true = 16:9 pantalla completa
+};
+static GameConfig g_config;
 extern const char* g_dirty_ram_last_unsupported_reason;
 void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
 
@@ -910,8 +918,10 @@ static void switch_vblank_callback(void) {
     static bool s_game_started_logged = false;
     if (!s_game_started_logged && fntrace_is_game_started()) {
         s_game_started_logged = true;
-        printf("[Display] Juego iniciado (entry_pc alcanzado) frame %llu! Modo 4:3 HD 2x Supersampling activo\n",
-               (unsigned long long)s_frame_count);
+        printf("[Display] Juego iniciado (entry_pc alcanzado) frame %llu! Modo %s con %ux Supersampling activo\n",
+               (unsigned long long)s_frame_count,
+               g_config.widescreen_16_9 ? "16:9 Widescreen" : "4:3 HD",
+               g_config.supersampling);
         fflush(stdout);
     }
 
@@ -1206,10 +1216,145 @@ static void switch_vblank_callback(void) {
     }
 }
 
-int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
+// ============================================================================
+// Funciones de Configuración Gráfica Dinámica (config.txt)
+// ============================================================================
+static void trim_string(char* str) {
+    if (!str) return;
+    char* start = str;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') start++;
+    if (start != str) memmove(str, start, strlen(start) + 1);
+    size_t len = strlen(str);
+    while (len > 0 && (str[len - 1] == ' ' || str[len - 1] == '\t' || str[len - 1] == '\r' || str[len - 1] == '\n')) {
+        str[--len] = '\0';
+    }
+}
 
+static void to_lower_case(char* str) {
+    for (; *str; ++str) *str = (char)tolower((unsigned char)*str);
+}
+
+static void load_or_create_config(int argc, char* argv[]) {
+    char target_config_path[512] = {0};
+
+    // Intentar deducir la ruta al lado del .nro desde argv[0]
+    if (argc > 0 && argv && argv[0] && argv[0][0] != '\0') {
+        strncpy(target_config_path, argv[0], sizeof(target_config_path) - 1);
+        char* last_slash = strrchr(target_config_path, '/');
+        char* last_backslash = strrchr(target_config_path, '\\');
+        char* sep = (last_slash > last_backslash) ? last_slash : last_backslash;
+        if (sep) {
+            *(sep + 1) = '\0';
+            strncat(target_config_path, "config.txt", sizeof(target_config_path) - strlen(target_config_path) - 1);
+        } else {
+            snprintf(target_config_path, sizeof(target_config_path), "config.txt");
+        }
+    } else {
+        snprintf(target_config_path, sizeof(target_config_path), "sdmc:/switch/tekken3/config.txt");
+    }
+
+    const char* candidate_paths[] = {
+        target_config_path,
+        "sdmc:/switch/tekken3/config.txt",
+        "config.txt"
+    };
+
+    FILE* f = nullptr;
+    const char* found_path = nullptr;
+    for (size_t i = 0; i < sizeof(candidate_paths) / sizeof(candidate_paths[0]); i++) {
+        if (!candidate_paths[i] || candidate_paths[i][0] == '\0') continue;
+        f = fopen(candidate_paths[i], "r");
+        if (f) {
+            found_path = candidate_paths[i];
+            break;
+        }
+    }
+
+    if (!f) {
+        printf("[Config] No se encontro 'config.txt'. Creando archivo por defecto en '%s'...\n", target_config_path);
+        FILE* create_f = fopen(target_config_path, "w");
+        if (!create_f) {
+            create_f = fopen("sdmc:/switch/tekken3/config.txt", "w");
+            if (create_f) strncpy(target_config_path, "sdmc:/switch/tekken3/config.txt", sizeof(target_config_path) - 1);
+        }
+        if (create_f) {
+            fprintf(create_f,
+                "# ==============================================================================\n"
+                "# Tekken 3 (USA) - Graphics Configuration for Nintendo Switch\n"
+                "# ==============================================================================\n"
+                "# Place this file in the same directory as 'tekken3_nx.nro' on your microSD card\n"
+                "# (e.g. sdmc:/switch/tekken3/config.txt).\n"
+                "# If this file is missing, the game will automatically create it with default values.\n"
+                "#\n"
+                "# ------------------------------------------------------------------------------\n"
+                "# Internal Supersampling Anti-Aliasing (SSAA):\n"
+                "#   1 = 1x PS1 Native (1024x512)\n"
+                "#   2 = 2x HD (2048x1024) [RECOMMENDED]\n"
+                "#       -> Sharp edges, locked 60 FPS, optimal battery life, pristine on TV\n"
+                "#   3 = 3x Ultra HD (3072x1536)\n"
+                "#       -> Maximum polygon edge definition for 4K / large TV screens\n"
+                "# ------------------------------------------------------------------------------\n"
+                "supersampling = 2\n\n"
+                "# ------------------------------------------------------------------------------\n"
+                "# Screen Aspect Ratio:\n"
+                "#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]\n"
+                "#         -> Preserves authentic retro proportions for characters and stages.\n"
+                "#   ON  = 16:9 Fullscreen Widescreen\n"
+                "#         -> Fills the entire Switch screen and 16:9 TV display without bars.\n"
+                "# ------------------------------------------------------------------------------\n"
+                "widescreen_16_9 = OFF\n"
+            );
+            fclose(create_f);
+            printf("[Config] Archivo 'config.txt' creado exitosamente con valores por defecto (supersampling=2, widescreen=OFF).\n");
+        } else {
+            printf("[Config] Advertencia: No se pudo crear 'config.txt'. Usando valores predeterminados en memoria.\n");
+        }
+        g_config.supersampling = 2;
+        g_config.widescreen_16_9 = false;
+        return;
+    }
+
+    printf("[Config] Cargando configuracion grafica desde: '%s'\n", found_path);
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        trim_string(line);
+        if (line[0] == '\0' || line[0] == '#' || line[0] == ';') continue;
+
+        char* eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char* key = line;
+        char* val = eq + 1;
+        trim_string(key);
+        trim_string(val);
+        to_lower_case(key);
+        to_lower_case(val);
+
+        if (strstr(key, "supersampling") || strstr(key, "scale") || strstr(key, "ssaa")) {
+            int s = atoi(val);
+            if (s >= 1 && s <= 3) {
+                g_config.supersampling = s;
+            }
+        } else if (strstr(key, "widescreen") || strstr(key, "16:9") || strstr(key, "aspect")) {
+            if (strcmp(val, "on") == 0 || strcmp(val, "1") == 0 || strcmp(val, "true") == 0 ||
+                strcmp(val, "yes") == 0 || strcmp(val, "wide") == 0 || strcmp(val, "16:9") == 0) {
+                g_config.widescreen_16_9 = true;
+            } else if (strcmp(val, "off") == 0 || strcmp(val, "0") == 0 || strcmp(val, "false") == 0 ||
+                       strcmp(val, "no") == 0 || strcmp(val, "4:3") == 0) {
+                g_config.widescreen_16_9 = false;
+            }
+        }
+    }
+    fclose(f);
+
+    printf("[Config] Configuracion cargada con exito:\n");
+    printf("   [+] supersampling   = %d (%s)\n", g_config.supersampling,
+           g_config.supersampling == 3 ? "3x Ultra HD (3072x1536)" :
+           (g_config.supersampling == 2 ? "2x HD (2048x1024)" : "1x Nativo (1024x512)"));
+    printf("   [+] widescreen_16_9 = %s\n", g_config.widescreen_16_9 ? "ON (16:9 Panoramica)" : "OFF (4:3 Original Pillarbox)");
+}
+
+int main(int argc, char* argv[]) {
     // 1. Asegurar directorios de log en la microSD y abrir archivo persistente
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/tekken3", 0777);
@@ -1245,6 +1390,9 @@ int main(int argc, char* argv[]) {
     } else {
         printf("[Main] [-] Error: no se pudo abrir 'sdmc:/switch/tekken3/tekken3.log'\n");
     }
+
+    // Cargar o crear archivo config.txt al lado del .nro
+    load_or_create_config(argc, argv);
 
     // 0. Fijar afinidad del hilo principal de emulación a Core 0 (Paso 4a)
     // En Nintendo Switch los cores 0, 1 y 2 están disponibles para apps de usuario.
@@ -1287,9 +1435,10 @@ int main(int argc, char* argv[]) {
     }
 
     // 4. Inicializar backend gráfico de bajo nivel con Deko3D
-    printf("[Main] [4/7] Inicializando Deko3D Renderer...\n");
+    printf("[Main] [4/7] Inicializando Deko3D Renderer (SSAA=%ux, Relacion=%s)...\n",
+           g_config.supersampling, g_config.widescreen_16_9 ? "16:9 Panoramica" : "4:3 Original");
     uint16_t* vram_ptr = gpu_get_vram_ptr();
-    if (!Deko3DRenderer::Instance().Init(vram_ptr)) {
+    if (!Deko3DRenderer::Instance().Init(vram_ptr, g_config.supersampling, g_config.widescreen_16_9)) {
         printf("[Main] Error inicializando Deko3D.\n");
     } else {
         printf("[Main] Deko3D inicializado correctamente.\n");
@@ -1311,11 +1460,22 @@ int main(int argc, char* argv[]) {
     spu_init();
     gpu_init();
 
-    // Configurar aspecto 4:3 nativo con 2x Supersampling para máxima nitidez y proporciones perfectas
+    // Configurar relación de aspecto y perspectiva según config.txt
     gpu_ws_set_gte_game_mode(0);
-    gte_set_display_aspect(4, 3);
-    gpu_ws_configure(4, 3, 0, 0, 0);
-    printf("[Main] Renderizado 4:3 HD con 2x Supersampling (Internal Resolution 2048x1024)\n");
+    if (g_config.widescreen_16_9) {
+        gte_ws_set_dome_aspect(16, 9);
+        gte_set_display_aspect(16, 9);
+        gpu_ws_configure(16, 9, 0, 0, 1);
+    } else {
+        gte_ws_set_dome_aspect(4, 3);
+        gte_set_display_aspect(4, 3);
+        gpu_ws_configure(4, 3, 0, 0, 0);
+    }
+    gpu_texture_correction_set(0);
+    printf("[Main] Aspecto: %s | SSAA: %ux (Resolucion interna: %ux%u)\n",
+           g_config.widescreen_16_9 ? "16:9 Pantalla Completa" : "4:3 Original (Pillarbox)",
+           g_config.supersampling,
+           1024 * g_config.supersampling, 512 * g_config.supersampling);
 
     // Configurar región de overlays estáticos de Tekken 3 (load_address 0x00010000 + text_size 0x00121000)
     g_overlay_region_floor = 0x00131000u;

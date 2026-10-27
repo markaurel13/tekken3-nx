@@ -1,0 +1,25 @@
+# ==============================================================================
+# Tekken 3 (USA) - Graphics Configuration for Nintendo Switch
+# ==============================================================================
+# Place this file in the same directory as 'tekken3_nx.nro' on your microSD card
+# (e.g. sdmc:/switch/tekken3/config.txt).
+# If this file is missing, the game will automatically create it with default values.
+#
+# ------------------------------------------------------------------------------
+# Internal Supersampling Anti-Aliasing (SSAA):
+#   1 = 1x PS1 Native (1024x512)
+#   2 = 2x HD (2048x1024) [RECOMMENDED]
+#       -> Sharp edges, locked 60 FPS, optimal battery life, pristine on TV
+#   3 = 3x Ultra HD (3072x1536)
+#       -> Maximum polygon edge definition for 4K / large TV screens
+# ------------------------------------------------------------------------------
+supersampling = 2
+
+# ------------------------------------------------------------------------------
+# Screen Aspect Ratio:
+#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]
+#         -> Preserves authentic retro proportions for characters and stages.
+#   ON  = 16:9 Fullscreen Widescreen
+#         -> Fills the entire Switch screen and 16:9 TV display without bars.
+# ------------------------------------------------------------------------------
+widescreen_16_9 = OFF

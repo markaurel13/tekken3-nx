@@ -5,6 +5,8 @@ layout (location = 0) noperspective in vec2 inUV;
 layout (location = 1) noperspective in vec4 inColor;
 layout (location = 2) flat in uvec2 inTPageClut;
 layout (location = 3) flat in uint inFlags;
+layout (location = 4) smooth in vec2 inPerspUV;
+layout (location = 5) flat in uint inIsPersp;
 
 // Salida de color al framebuffer
 layout (location = 0) out vec4 outColor;
@@ -17,6 +19,7 @@ layout (std140, binding = 0) uniform ViewportBlock {
     vec2 u_ScreenSize;
     vec2 u_Offset;
     ivec4 u_TexWindow; // mask_x, mask_y, off_x, off_y
+    vec4 u_Extra;
 };
 
 int vram_at(int x, int y) {
@@ -81,9 +84,12 @@ void main()
     int clut_x = int(clut & 0x3Fu) * 16;
     int clut_y = int((clut >> 6u) & 0x1FFu);
 
+    // Selección entre UV con corrección de perspectiva 3D o UV afín 2D estándar
+    vec2 curUV = (inIsPersp != 0u) ? inPerspUV : inUV;
+
     // Clamping con epsilon para evitar desbordamiento por truncamiento negativo en bordes de polígonos
-    int iu = clamp(int(floor(inUV.x + 1e-4)), 0, 255);
-    int iv = clamp(int(floor(inUV.y + 1e-4)), 0, 255);
+    int iu = clamp(int(floor(curUV.x + 1e-4)), 0, 255);
+    int iv = clamp(int(floor(curUV.y + 1e-4)), 0, 255);
     int raw = fetch_texel(iu, iv, depth, base_x, base_y, clut_x, clut_y);
 
     // Transparencia estándar de PS1: Si el texel es 0, descartar fragmento

@@ -114,13 +114,23 @@ bool Deko3DRenderer::LoadShader(dk::Shader& shader, dk::MemBlock& block, uint32_
     return true;
 }
 
-bool Deko3DRenderer::Init(uint16_t* vramPtr) {
+bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widescreen) {
     if (m_initialized) {
         m_vram = vramPtr;
         return true;
     }
     m_vram = vramPtr;
-    printf("[Deko3D] Inicializando pipeline gráfico acelerado por GPU Tegra X1...\n");
+
+    if (internalScale < 1) internalScale = 1;
+    if (internalScale > 3) internalScale = 3;
+    m_internalScale = internalScale;
+    m_hrVramWidth = VramWidth * m_internalScale;
+    m_hrVramHeight = VramHeight * m_internalScale;
+    m_widescreen = widescreen;
+
+    printf("[Deko3D] Inicializando pipeline acelerado por GPU (SSAA=%ux [%ux%u], Relacion=%s)...\n",
+           m_internalScale, m_hrVramWidth, m_hrVramHeight,
+           m_widescreen ? "16:9 Widescreen" : "4:3 Original");
     fflush(stdout);
 
     // 1. Crear Device con depurador y Graphics Queue
@@ -182,12 +192,12 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr) {
         fbPointers[i] = &m_framebuffers[i];
     }
 
-    // 5. Configurar Textura Render Target VRAM (2048x1024 RGBA8 con InternalScale = 2)
+    // 5. Configurar Textura Render Target VRAM (m_hrVramWidth x m_hrVramHeight RGBA8 con m_internalScale)
     dk::ImageLayout vramLayout;
     dk::ImageLayoutMaker{m_device}
         .setFlags(DkImageFlags_BlockLinear | DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine)
         .setFormat(DkImageFormat_RGBA8_Unorm)
-        .setDimensions(HrVramWidth, HrVramHeight)
+        .setDimensions(m_hrVramWidth, m_hrVramHeight)
         .initialize(vramLayout);
 
     curImgOffset = (curImgOffset + vramLayout.getAlignment() - 1) & ~(vramLayout.getAlignment() - 1);
@@ -404,6 +414,29 @@ void Deko3DRenderer::SetSemiTransparency(int enabled, int mode) {
     }
 }
 
+void Deko3DRenderer::SetPerspectiveTriangle(int enabled, float q0, float q1, float q2) {
+    if (enabled && q0 > 0.0f && q1 > 0.0f && q2 > 0.0f) {
+        m_pqValid = true;
+        m_pq[0] = q0;
+        m_pq[1] = q1;
+        m_pq[2] = q2;
+        m_perspTriHits++;
+        static bool s_first_persp_logged = false;
+        if (!s_first_persp_logged) {
+            s_first_persp_logged = true;
+            printf("[Deko3D] Primer triangulo 3D con perspectiva de texturas activa (q0=%.4f q1=%.4f q2=%.4f)\n",
+                   q0, q1, q2);
+            fflush(stdout);
+        }
+    } else {
+        m_pqValid = false;
+        m_pq[0] = 0.0f;
+        m_pq[1] = 0.0f;
+        m_pq[2] = 0.0f;
+    }
+    sw_set_perspective_triangle(enabled, q0, q1, q2);
+}
+
 void Deko3DRenderer::SetColorModulation(int r, int g, int b, int raw) {
     m_modR = r;
     m_modG = g;
@@ -510,36 +543,40 @@ void Deko3DRenderer::FlushBatch() {
     m_viewportUboCpu->texWindow[1] = m_twMaskY;
     m_viewportUboCpu->texWindow[2] = m_twOffX;
     m_viewportUboCpu->texWindow[3] = m_twOffY;
+    m_viewportUboCpu->extra[0] = 0.5f / (float)m_internalScale;
+    m_viewportUboCpu->extra[1] = (float)m_internalScale;
+    m_viewportUboCpu->extra[2] = 0.0f;
+    m_viewportUboCpu->extra[3] = 0.0f;
 
     m_cmdBuf.pushConstants(m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), m_viewportUboCpu);
 
-    // 2. Vincular Render Target (m_vramTexture RGBA8 2048x1024)
+    // 2. Vincular Render Target (m_vramTexture RGBA8 m_hrVramWidth x m_hrVramHeight)
     dk::ImageView vramTarget{ m_vramTexture };
     m_cmdBuf.bindRenderTargets(&vramTarget);
 
-    DkViewport viewport{ 0.0f, 0.0f, (float)HrVramWidth, (float)HrVramHeight, 0.0f, 1.0f };
+    DkViewport viewport{ 0.0f, 0.0f, (float)m_hrVramWidth, (float)m_hrVramHeight, 0.0f, 1.0f };
     m_cmdBuf.setViewports(0, { viewport });
 
     // 3. Configurar Scissor (primitivos absolutos como FillRect ignoran el clip de dibujo en PS1)
     bool isAbsolute = ((m_vtxRingCpu[m_vtxBatchStart].flags & 0x80000000u) != 0);
     if (isAbsolute) {
-        DkScissor scissor{ 0, 0, HrVramWidth, HrVramHeight };
+        DkScissor scissor{ 0, 0, m_hrVramWidth, m_hrVramHeight };
         m_cmdBuf.setScissors(0, { scissor });
     } else {
-        int scX = m_clipX1 * (int)InternalScale;
-        int scY = m_clipY1 * (int)InternalScale;
-        int scX2 = (m_clipX2 + 1) * (int)InternalScale - 1;
-        int scY2 = (m_clipY2 + 1) * (int)InternalScale - 1;
+        int scX = m_clipX1 * (int)m_internalScale;
+        int scY = m_clipY1 * (int)m_internalScale;
+        int scX2 = (m_clipX2 + 1) * (int)m_internalScale - 1;
+        int scY2 = (m_clipY2 + 1) * (int)m_internalScale - 1;
 
         if (scX < 0) scX = 0;
         if (scY < 0) scY = 0;
-        if (scX2 >= (int)HrVramWidth) scX2 = (int)HrVramWidth - 1;
-        if (scY2 >= (int)HrVramHeight) scY2 = (int)HrVramHeight - 1;
+        if (scX2 >= (int)m_hrVramWidth) scX2 = (int)m_hrVramWidth - 1;
+        if (scY2 >= (int)m_hrVramHeight) scY2 = (int)m_hrVramHeight - 1;
 
         int scW = scX2 - scX + 1;
         int scH = scY2 - scY + 1;
 
-        if (scW <= 0 || scH <= 0 || scX >= (int)HrVramWidth || scY >= (int)HrVramHeight) {
+        if (scW <= 0 || scH <= 0 || scX >= (int)m_hrVramWidth || scY >= (int)m_hrVramHeight) {
             scX = 0; scY = 0; scW = 0; scH = 0;
         }
         DkScissor scissor{ (uint32_t)scX, (uint32_t)scY, (uint32_t)scW, (uint32_t)scH };
@@ -600,12 +637,13 @@ void Deko3DRenderer::FlushBatch() {
     m_cmdBuf.bindTextures(DkStage_Fragment, 0, dkMakeTextureHandle(0, 0));
 
     // 7. Configurar Formato de Vértices y Buffer
-    static const std::array<DkVtxAttribState, 5> vtxAttribState = {{
+    static const std::array<DkVtxAttribState, 6> vtxAttribState = {{
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, pos),        DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, uv),         DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, color),      DkVtxAttribSize_4x8,  DkVtxAttribType_Unorm, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, tpage_clut), DkVtxAttribSize_2x16, DkVtxAttribType_Uint,  0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, flags),      DkVtxAttribSize_1x32, DkVtxAttribType_Uint,  0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, q),          DkVtxAttribSize_1x32, DkVtxAttribType_Float, 0 },
     }};
     DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
     m_cmdBuf.bindVtxAttribState(vtxAttribState);
@@ -685,9 +723,14 @@ void Deko3DRenderer::DrawTexturedTriangle(int x0, int y0, int u0, int v0,
     uint32_t flags = (uint32_t)depth | (m_rawTex ? 4u : 0u) | (m_semiEnabled ? 8u : 0u) | ((uint32_t)m_semiMode << 4u) | 0x40u;
     uint8_t rgba[4] = { (uint8_t)m_modR, (uint8_t)m_modG, (uint8_t)m_modB, 255 };
 
-    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
+    float q0 = m_pqValid ? m_pq[0] : 0.0f;
+    float q1 = m_pqValid ? m_pq[1] : 0.0f;
+    float q2 = m_pqValid ? m_pq[2] : 0.0f;
+    m_pqValid = false;
+
+    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q0 };
+    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q1 };
+    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q2 };
 
     PushTriangle(vert0, vert1, vert2);
 }
@@ -705,9 +748,14 @@ void Deko3DRenderer::DrawShadedTexturedTriangle(int x0, int y0, int u0, int v0, 
     PS1Color24ToRGBA8(col1, rgba1);
     PS1Color24ToRGBA8(col2, rgba2);
 
-    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba0[0], rgba0[1], rgba0[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba1[0], rgba1[1], rgba1[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba2[0], rgba2[1], rgba2[2], 255}, {texpage, clut}, flags, 0 };
+    float q0 = m_pqValid ? m_pq[0] : 0.0f;
+    float q1 = m_pqValid ? m_pq[1] : 0.0f;
+    float q2 = m_pqValid ? m_pq[2] : 0.0f;
+    m_pqValid = false;
+
+    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba0[0], rgba0[1], rgba0[2], 255}, {texpage, clut}, flags, q0 };
+    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba1[0], rgba1[1], rgba1[2], 255}, {texpage, clut}, flags, q1 };
+    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba2[0], rgba2[1], rgba2[2], 255}, {texpage, clut}, flags, q2 };
 
     PushTriangle(vert0, vert1, vert2);
 }
@@ -816,8 +864,8 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
     if (w <= 0 || h <= 0) return;
 
     dk::ImageView vramTexView{ m_vramTexture };
-    m_cmdBuf.copyImage(vramTexView, { (uint32_t)(sx * InternalScale), (uint32_t)(sy * InternalScale), 0, (uint32_t)(w * InternalScale), (uint32_t)(h * InternalScale), 1 },
-                       vramTexView, { (uint32_t)(dx * InternalScale), (uint32_t)(dy * InternalScale), 0, (uint32_t)(w * InternalScale), (uint32_t)(h * InternalScale), 1 });
+    m_cmdBuf.copyImage(vramTexView, { (uint32_t)(sx * m_internalScale), (uint32_t)(sy * m_internalScale), 0, (uint32_t)(w * m_internalScale), (uint32_t)(h * m_internalScale), 1 },
+                       vramTexView, { (uint32_t)(dx * m_internalScale), (uint32_t)(dy * m_internalScale), 0, (uint32_t)(w * m_internalScale), (uint32_t)(h * m_internalScale), 1 });
 
     dk::ImageView rawView{ m_rawVramImage };
     m_cmdBuf.copyImage(rawView, { (uint32_t)sx, (uint32_t)sy, 0, (uint32_t)w, (uint32_t)h, 1 },
@@ -894,8 +942,8 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
             if (sub_w <= 0) continue;
 
             // Pitch alineado estrictamente a 32 bytes para el Maxwell 2D Copy Engine de Tegra X1
-            uint32_t sub_w_hr = (uint32_t)sub_w * InternalScale;
-            uint32_t sub_h_hr = (uint32_t)sub_h * InternalScale;
+            uint32_t sub_w_hr = (uint32_t)sub_w * m_internalScale;
+            uint32_t sub_h_hr = (uint32_t)sub_h * m_internalScale;
             uint32_t pitch32 = (sub_w_hr * sizeof(uint32_t) + 31u) & ~31u;
             size_t uploadBytes32 = (size_t)pitch32 * sub_h_hr;
             uint32_t align32 = (uint32_t)((uploadBytes32 + 511u) & ~511u);
@@ -926,12 +974,14 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
             uint32_t uploadOffset16 = m_stagingUploadOffset;
             m_stagingUploadOffset += align16;
 
-            // 1. Convertir a RGBA8 para m_vramTexture (duplicación 2x2 para coincidir con la resolución HR 2048x1024)
+            // 1. Convertir a RGBA8 para m_vramTexture (duplicación NxN para coincidir con la resolución HR)
             uint8_t* dst32Base = (uint8_t*)m_memStaging.getCpuAddr() + uploadOffset32;
             for (int row = 0; row < sub_h; row++) {
                 const uint16_t* srcRow = data + (size_t)(sy + row) * orig_w + sx;
-                uint32_t* dRow0 = (uint32_t*)(dst32Base + (size_t)(row * 2 + 0) * pitch32);
-                uint32_t* dRow1 = (uint32_t*)(dst32Base + (size_t)(row * 2 + 1) * pitch32);
+                uint32_t* dRows[4];
+                for (uint32_t s = 0; s < m_internalScale; s++) {
+                    dRows[s] = (uint32_t*)(dst32Base + (size_t)(row * m_internalScale + s) * pitch32);
+                }
                 for (int col = 0; col < sub_w; col++) {
                     uint16_t c = srcRow[col];
                     uint32_t r5 = c & 0x1Fu;
@@ -941,10 +991,11 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
                     uint32_t g8 = (g5 << 3) | (g5 >> 2);
                     uint32_t b8 = (b5 << 3) | (b5 >> 2);
                     uint32_t px = r8 | (g8 << 8) | (b8 << 16) | 0xFF000000u;
-                    dRow0[col * 2 + 0] = px;
-                    dRow0[col * 2 + 1] = px;
-                    dRow1[col * 2 + 0] = px;
-                    dRow1[col * 2 + 1] = px;
+                    for (uint32_t s = 0; s < m_internalScale; s++) {
+                        for (uint32_t sc = 0; sc < m_internalScale; sc++) {
+                            dRows[s][col * m_internalScale + sc] = px;
+                        }
+                    }
                 }
             }
             m_memStaging.flushCpuCache(uploadOffset32, uploadBytes32);
@@ -961,7 +1012,7 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
             // Copias directas sincrónicas en el command buffer
             m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset32, pitch32, 0 },
                                        vramTexView,
-                                       { (uint32_t)(dx * InternalScale), (uint32_t)(dy * InternalScale), 0, sub_w_hr, sub_h_hr, 1 });
+                                       { (uint32_t)(dx * m_internalScale), (uint32_t)(dy * m_internalScale), 0, sub_w_hr, sub_h_hr, 1 });
 
             m_cmdBuf.copyBufferToImage({ m_memStaging.getGpuAddr() + uploadOffset16, pitch16, 0 },
                                        rawView,
@@ -1025,18 +1076,27 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 
     dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
 
-    // Aspecto 4:3 HD auténtico: píxeles sin estirar ni encoger, centrado en pantalla 720p
-    const uint32_t dstW = TargetHeight * 4 / 3; // 960
-    const uint32_t dstX = (TargetWidth - dstW) / 2; // 160
-    const uint32_t dstY = 0;
-    const uint32_t dstH = TargetHeight; // 720
+    // Aspecto de presentación configurable: 4:3 con Pillarbox o 16:9 pantalla completa
+    uint32_t dstW, dstX, dstY, dstH;
+    if (m_widescreen) {
+        dstW = TargetWidth;  // 1280
+        dstX = 0;
+        dstY = 0;
+        dstH = TargetHeight; // 720
+    } else {
+        dstW = TargetHeight * 4 / 3; // 960
+        dstX = (TargetWidth - dstW) / 2; // 160
+        dstY = 0;
+        dstH = TargetHeight; // 720
+    }
 
     static bool s_first_hd_present_logged = false;
     if (!s_first_hd_present_logged) {
         s_first_hd_present_logged = true;
-        printf("[Deko3D] 4:3 HD Present activo: src=(%u,%u %ux%u) hr_src=(%u,%u %ux%u) -> dst=(%u,%u %ux%u) [SSAA=%ux]\n",
-               dispX, dispY, w, h, dispX * InternalScale, dispY * InternalScale, w * InternalScale, h * InternalScale,
-               dstX, dstY, dstW, dstH, InternalScale);
+        printf("[Deko3D] %s Present activo: src=(%u,%u %ux%u) hr_src=(%u,%u %ux%u) -> dst=(%u,%u %ux%u) [SSAA=%ux]\n",
+               m_widescreen ? "16:9 Widescreen" : "4:3 HD",
+               dispX, dispY, w, h, dispX * m_internalScale, dispY * m_internalScale, w * m_internalScale, h * m_internalScale,
+               dstX, dstY, dstW, dstH, m_internalScale);
         fflush(stdout);
     }
 
@@ -1046,10 +1106,12 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         m_cmdBuf.bindRenderTargets({});
     } else {
         m_cmdBuf.bindRenderTargets({});
-        // Limpiar bandas laterales a negro puro (pillarboxing 4:3)
-        m_cmdBuf.bindRenderTargets(&colorTarget);
-        m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
-        m_cmdBuf.bindRenderTargets({});
+        if (!m_widescreen) {
+            // Limpiar bandas laterales a negro puro (pillarboxing 4:3)
+            m_cmdBuf.bindRenderTargets(&colorTarget);
+            m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+            m_cmdBuf.bindRenderTargets({});
+        }
 
         if (di.depth24 && m_vram && m_vramStagingCpu) {
             // Ruta para FMVs de 24-bit
@@ -1082,10 +1144,10 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
                                colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
         } else {
-            // Presentación directa por hardware GPU Maxwell (0 ms de conversión CPU) con 2x SSAA
+            // Presentación directa por hardware GPU Maxwell (0 ms de conversión CPU) con SSAA dinámico
             dk::ImageView vramTexView{ m_vramTexture };
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
-            m_cmdBuf.blitImage(vramTexView, { dispX * InternalScale, dispY * InternalScale, 0, w * InternalScale, h * InternalScale, 1 },
+            m_cmdBuf.blitImage(vramTexView, { dispX * m_internalScale, dispY * m_internalScale, 0, w * m_internalScale, h * m_internalScale, 1 },
                                colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
@@ -1198,6 +1260,10 @@ static void dk_set_color_modulation(int r, int g, int b, int raw) {
     Deko3DRenderer::Instance().SetColorModulation(r, g, b, raw);
 }
 
+static void dk_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
+    Deko3DRenderer::Instance().SetPerspectiveTriangle(enabled, q0, q1, q2);
+}
+
 static void dk_draw_flat_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color) {
     Deko3DRenderer::Instance().DrawFlatTriangle(x0, y0, x1, y1, x2, y2, color);
 }
@@ -1276,7 +1342,7 @@ static const GpuRenderBackend DEKO3D_BACKEND = {
     .set_texture_window             = dk_set_texture_window,
     .set_color_modulation           = dk_set_color_modulation,
     .set_precise_triangle           = sw_set_precise_triangle,
-    .set_perspective_triangle       = sw_set_perspective_triangle,
+    .set_perspective_triangle       = dk_set_perspective_triangle,
     .fill_rect                      = dk_fill_rect,
     .copy_rect                      = dk_copy_rect,
     .draw_flat_triangle             = dk_draw_flat_triangle,
