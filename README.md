@@ -8,22 +8,17 @@
 
 A high-performance, native static recompilation port of **Tekken 3** (NTSC-U / SLUS-00402) for the Nintendo Switch.
 
-Unlike traditional emulation, this port statically recompiles original PlayStation 1 MIPS binaries directly into native ARM64 machine instructions, coupled with a purpose-built **deko3d** graphics renderer that talks directly to the Switch's NVIDIA Tegra X1 Maxwell GPU.
+Unlike traditional emulation, this port statically recompiles original PlayStation 1 MIPS binaries directly into native ARM64 machine instructions, coupled with a purpose-built **deko3d** graphics renderer
 
 ---
 
 ## ✨ Features
 
-- **Rock-Solid 60 FPS:** Direct native execution with zero emulation overhead. Frame times consistently clock in at ~4.0 ms out of the 16.66 ms budget.
-- **Hardware-Accelerated Rendering (deko3d):** Custom graphics pipeline running natively on the GPU, featuring custom hardware shaders (`psx_vsh.dksh` and `psx_fsh.dksh`) for CLUT palette decoding, gouraud shading, and blending.
+- **Rock-Solid 60 FPS on STOCK CLOCK:** Direct native execution with zero emulation overhead and 60 solid fps.
 - **Internal Supersampling (SSAA):**
-  - **2x HD ($2048 \times 1024$ internal resolution - Default / Recommended):** Pristine anti-aliased polygon edges, maximum battery efficiency, and cool thermal profile.
-  - **3x Ultra HD ($3072 \times 1536$ internal resolution):** Pure downsampled visual sharpness for 4K / large TV screens.
-- **Configurable Aspect Ratio (`config.txt`):**
-  - **4:3 Original (Pillarbox - Default):** Authentic arcade/PS1 proportions for characters, HUD, and stages.
-  - **16:9 Fullscreen Widescreen:** Fills the full 720p/1080p display without sidebars.
-- **Dedicated Low-Latency Audio:** Built on native Nintendo Switch `audren` running on CPU Core 2, featuring authentic SPU ADPCM decoding, reverb, and full CD-DA music playback.
-- **2-Player Local Battles:** Automatic controller assignment supporting single Joy-Cons, dual Joy-Cons, and Pro Controllers out of the box.
+  - **HD Resolution: 2X anti-aliasing by default, having the option to set 3X resolution on switch/tekken3_nx/config.txt (Game will still run on 60 solid fps anyways, it's on X2 by default because the switch screen is just 1280 x 720, so 4K resolution will not be noticed that much)
+  - **16:9 Fullscreen Widescreen:** Fills the full 720p/1080p display without sidebars (THis option is deactivated by default on switch/tekken3_nx/config.txt to preserve the original experience, but you can activate it anytime by simple changing the parameter widescreen_16_9 = OFF for widescreen_16_9 = ON) 
+- **2-Player Local Battles:** Automatic controller assignment supporting any Gamepad controller
 - **Save State & Memory Card Support:** Full persistence for character unlocks, high scores, and game settings saved automatically to `sdmc:/switch/tekken3/saves/`.
 - **All Modes Supported:** Arcade, VS Battle, Team Battle, Survival, Time Attack, Practice, Tekken Force, and Tekken Ball.
 
@@ -32,21 +27,17 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 ## 📁 Installation & File Structure
 
 1. Extract the release package onto your Nintendo Switch microSD card.
-2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
+2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder. It must be NTSC-U / SLUS-00402 (USA version); otherwise it won't work).
 
-Recommended directory structure on your microSD:
+  Your initial directory structure on your microSD should look like this:
 
 ```text
 sdmc:/
 └── switch/
     └── tekken3/
         ├── tekken3_nx.nro              # The Switch executable
-        ├── config.txt                  # Graphics configuration file
-        ├── saves/                      # Memory cards directory (auto-created)
-        │   ├── card1.mcd
-        │   └── card2.mcd
         └── disc/
-            ├── Tekken 3 (USA).cue       # Disc cue sheet
+            ├── Tekken 3 (USA).cue       
             └── Tekken 3 (USA) (Track 1).bin
 ```
 
@@ -102,9 +93,6 @@ widescreen_16_9 = OFF
 | **R1 / R2** | **R / ZR** | Customizable shortcut |
 | **Start** | **+ (Plus)** | Pause Menu (Arcade / VS / Practice) |
 | **Select** | **- (Minus)** | Select / Options |
-| **Plus (+) & Minus (-)** | Simultaneously | Reset to Title Screen |
-
-*In Survival and Time Attack modes, the Pause button is intentionally disabled by design, matching the original PlayStation 1 release to preserve competitive leaderboard integrity.*
 
 ---
 
