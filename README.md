@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.jpg" alt="Tekken 3 (USA) — Nintendo Switch Native Port" width="220" />
+  <img src="assets/tekken3_logo.png" alt="Tekken 3" width="400" />
 </p>
 
 # Tekken 3 (USA) — Nintendo Switch Native Port
