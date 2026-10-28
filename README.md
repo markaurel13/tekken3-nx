@@ -18,28 +18,18 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 
 ## ✨ Features
 
-- **Rock-Solid 60 FPS on Stock Clocks:** Direct native execution with zero emulation overhead, running at a locked 60 FPS without requiring overclocking.
-- **Internal Supersampling Anti-Aliasing (SSAA):**
-  - **2x HD (Default):** Crisp polygon edges and optimal performance (2048x1024 internal framebuffer).
+- **Rock-Solid 60 FPS on Stock Clocks:** Direct native execution with zero emulation overhead, running at a locked 60 FPS.
+- **Internal Supersampling Anti-Aliasing (Game Resolution):**
+  - **2x HD (Default):** Crisp polygon edges and optimal performance (Full HD)
   - **3x Ultra HD:** Maximum polygon edge definition for 4K / large TV screens via `sdmc:/switch/tekken3/config.txt` *(Note: Since the Switch output is capped at 1080p, 3x SSAA is overkill and may cause occasional frame drops to ~55 FPS)*.
   - **1x PS1 Native:** Authentic retro 1024x512 resolution for purists.
 - **Aspect Ratio Options:**
   - **4:3 Original (Default):** Authentic retro proportions with clean black pillarbox sidebars.
   - **16:9 Fullscreen Widescreen:** Fills the full 720p handheld or 1080p docked display without sidebars (toggleable in `sdmc:/switch/tekken3/config.txt`).
-- **Studio-Quality Audio Architecture:**
-  - Dedicated hardware DSP thread running on Core 2 at 44,100 Hz stereo via native `audren`.
-  - Fixed 1.0000x pitch lock eliminating wow, flutter, and pitch distortion.
-  - Studio-clean `-1.9 dB` (`0.80f`) headroom preventing digital clipping over HDMI TV audio and handheld speakers.
-- **Intelligent CD-DA Soundtrack Streaming:**
-  - Full Redump multi-track audio support with automated waveform and track size detection.
-  - Plays the ending credits music track flawlessly, even if disc tracks are arbitrarily named.
 - **Pixel-Perfect Rendering:**
   - Custom deko3d shader pipeline with bilinear edge inset filtering to eliminate PlayStation VRAM border bleed.
 - **2-Player Local Battles:**
   - Automatic controller assignment supporting handheld mode, Pro Controllers, split Joy-Cons, and generic USB/wireless gamepads.
-- **Full Persistence & Memory Card Support:**
-  - Dedicated 128 KB PlayStation memory card emulation with automatic atomic flushing to `sdmc:/switch/tekken3/saves/card1.mcd`.
-  - Seamless auto-saving for unlocked characters, high scores, records, and game settings.
 - **All Game Modes Supported:**
   - Arcade, VS Battle, Team Battle, Survival, Time Attack, Practice, Tekken Force, and Tekken Ball.
 
@@ -50,9 +40,8 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 1. Extract the release package onto the root of your Nintendo Switch microSD card.
 2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
-   - **Audio Credits Note:** For the ending credits music to play, make sure to copy both the data track and the audio tracks (e.g. `Track 1`, `Track 2`, and `Track 3` from standard Redump cue/bin dumps).
 
-Your directory structure on the microSD card should look like this:
+Your directory structure on the microSD card should look like this (Before opening the game):
 
 ```text
 sdmc:/
@@ -65,9 +54,6 @@ sdmc:/
         │   ├── Tekken 3 (USA) (Track 1).bin
         │   ├── Tekken 3 (USA) (Track 2).bin   # CD-DA Audio (Credits music)
         │   └── Tekken 3 (USA) (Track 3).bin   # Padding track
-        └── saves/
-            ├── card1.mcd               # Memory Card Slot 1 (auto-created)
-            └── card2.mcd               # Memory Card Slot 2 (auto-created)
 ```
 
 > **Note:** The port includes an intelligent universal disc detector. While standard names like `Tekken 3 (USA).cue` are recommended, it will automatically search, match, and mount any compatible `.cue`, `.bin`, `.iso`, or `.chd` placed inside the `disc/` or `tekken3/` directory regardless of file naming.
@@ -110,7 +96,7 @@ widescreen_16_9 = OFF
 
 ## 🎮 Controls
 
-### Player 1 (Handheld or Pro Controller)
+### Player 1 (Handheld or Gamepad Controller)
 | PS1 Button | Nintendo Switch | Action |
 |:---:|:---:|:---|
 | **D-Pad / Left Stick** | **D-Pad / Left Stick** | Movement & Crouching |
