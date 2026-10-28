@@ -2,52 +2,77 @@
 
 [![Platform: Nintendo Switch](https://img.shields.io/badge/Platform-Nintendo%20Switch-E60012.svg?logo=nintendoswitch&logoColor=white)](https://github.com/markaurel13/tekken3_nx)
 [![Performance: Locked 60 FPS](https://img.shields.io/badge/Performance-Locked%2060%20FPS-brightgreen.svg)]()
-[![Graphics: deko3d](https://img.shields.io/badge/Graphics-deko3d%20(Low--Level%20GPU)-blue.svg)]()
+[![Graphics: deko3d](https://img.shields.io/badge/Graphics-deko3d%20(Low--Level%20GPU)-blue.svg)](https://github.com/fincs/deko3d)
 [![Audio: audren](https://img.shields.io/badge/Audio-audren%20(Dedicated%20DSP)-purple.svg)]()
-[![Author: markaurel13](https://img.shields.io/badge/Author-markaurel13-orange.svg)]()
+[![Author: markaurel13](https://img.shields.io/badge/Author-markaurel13-orange.svg)](https://github.com/markaurel13)
 
 A high-performance, native static recompilation port of **Tekken 3** (NTSC-U / SLUS-00402) for the Nintendo Switch.
 
-Unlike traditional emulation, this port statically recompiles original PlayStation 1 MIPS binaries directly into native ARM64 machine instructions, coupled with a purpose-built **deko3d** graphics renderer
+Unlike traditional emulation, this port statically recompiles original PlayStation 1 MIPS binaries directly into native ARM64 machine code, coupled with a purpose-built **deko3d** hardware graphics renderer and native **audren** sound architecture.
 
 ---
 
 ## ✨ Features
 
-- **Rock-Solid 60 FPS on STOCK CLOCK:** Direct native execution with zero emulation overhead and 60 solid fps.
-- **Internal Supersampling (SSAA):**
-  - **HD Resolution: 2X anti-aliasing by default, having the option to set 3X resolution on switch/tekken3_nx/config.txt (Game will still run on 60 solid fps anyways, it's on X2 by default because the switch screen is just 1280 x 720, so 4K resolution will not be noticed that much)
-  - **16:9 Fullscreen Widescreen:** Fills the full 720p/1080p display without sidebars (THis option is deactivated by default on switch/tekken3_nx/config.txt to preserve the original experience, but you can activate it anytime by simple changing the parameter widescreen_16_9 = OFF for widescreen_16_9 = ON) 
-- **2-Player Local Battles:** Automatic controller assignment supporting any Gamepad controller
-- **Save State & Memory Card Support:** Full persistence for character unlocks, high scores, and game settings saved automatically to `sdmc:/switch/tekken3/saves/`.
-- **All Modes Supported:** Arcade, VS Battle, Team Battle, Survival, Time Attack, Practice, Tekken Force, and Tekken Ball.
+- **Rock-Solid 60 FPS on Stock Clocks:** Direct native execution with zero emulation overhead, running at a locked 60 FPS without requiring overclocking.
+- **Internal Supersampling Anti-Aliasing (SSAA):**
+  - **2x HD (Default):** Crisp polygon edges and optimal performance (2048x1024 internal framebuffer).
+  - **3x Ultra HD:** Maximum polygon edge definition for 4K / large TV screens via `sdmc:/switch/tekken3/config.txt` *(Note: Since the Switch output is capped at 1080p, 3x SSAA is overkill and may cause occasional frame drops to ~55 FPS)*.
+  - **1x PS1 Native:** Authentic retro 1024x512 resolution for purists.
+- **Aspect Ratio Options:**
+  - **4:3 Original (Default):** Authentic retro proportions with clean black pillarbox sidebars.
+  - **16:9 Fullscreen Widescreen:** Fills the full 720p handheld or 1080p docked display without sidebars (toggleable in `sdmc:/switch/tekken3/config.txt`).
+- **Studio-Quality Audio Architecture:**
+  - Dedicated hardware DSP thread running on Core 2 at 44,100 Hz stereo via native `audren`.
+  - Fixed 1.0000x pitch lock eliminating wow, flutter, and pitch distortion.
+  - Studio-clean `-1.9 dB` (`0.80f`) headroom preventing digital clipping over HDMI TV audio and handheld speakers.
+- **Intelligent CD-DA Soundtrack Streaming:**
+  - Full Redump multi-track audio support with automated waveform and track size detection.
+  - Plays the ending credits music track flawlessly, even if disc tracks are arbitrarily named.
+- **Pixel-Perfect Rendering:**
+  - Custom deko3d shader pipeline with bilinear edge inset filtering to eliminate PlayStation VRAM border bleed.
+- **2-Player Local Battles:**
+  - Automatic controller assignment supporting handheld mode, Pro Controllers, split Joy-Cons, and generic USB/wireless gamepads.
+- **Full Persistence & Memory Card Support:**
+  - Dedicated 128 KB PlayStation memory card emulation with automatic atomic flushing to `sdmc:/switch/tekken3/saves/card1.mcd`.
+  - Seamless auto-saving for unlocked characters, high scores, records, and game settings.
+- **All Game Modes Supported:**
+  - Arcade, VS Battle, Team Battle, Survival, Time Attack, Practice, Tekken Force, and Tekken Ball.
 
 ---
 
 ## 📁 Installation & File Structure
 
-1. Extract the release package onto your Nintendo Switch microSD card.
-2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder. It must be NTSC-U / SLUS-00402 (USA version); otherwise it won't work).
+1. Extract the release package onto the root of your Nintendo Switch microSD card.
+2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
+   - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
+   - **Audio Credits Note:** For the ending credits music to play, make sure to copy both the data track and the audio tracks (e.g. `Track 1`, `Track 2`, and `Track 3` from standard Redump cue/bin dumps).
 
-  Your initial directory structure on your microSD should look like this:
+Your directory structure on the microSD card should look like this:
 
 ```text
 sdmc:/
 └── switch/
     └── tekken3/
         ├── tekken3_nx.nro              # The Switch executable
-        └── disc/
-            ├── Tekken 3 (USA).cue       
-            └── Tekken 3 (USA) (Track 1).bin
+        ├── config.txt                  # Graphics configuration (auto-generated if missing)
+        ├── disc/
+        │   ├── Tekken 3 (USA).cue       
+        │   ├── Tekken 3 (USA) (Track 1).bin
+        │   ├── Tekken 3 (USA) (Track 2).bin   # CD-DA Audio (Credits music)
+        │   └── Tekken 3 (USA) (Track 3).bin   # Padding track
+        └── saves/
+            ├── card1.mcd               # Memory Card Slot 1 (auto-created)
+            └── card2.mcd               # Memory Card Slot 2 (auto-created)
 ```
 
-> **Note:** The port includes an automatic universal disc detector. While standard names like `Tekken 3 (USA).cue` are recommended, it will automatically find and mount any `.cue`, `.bin`, `.iso`, or `.chd` placed inside the `disc/` or `tekken3/` directory regardless of its filename.
+> **Note:** The port includes an intelligent universal disc detector. While standard names like `Tekken 3 (USA).cue` are recommended, it will automatically search, match, and mount any compatible `.cue`, `.bin`, `.iso`, or `.chd` placed inside the `disc/` or `tekken3/` directory regardless of file naming.
 
 ---
 
 ## ⚙️ Graphics Configuration (`config.txt`)
 
-You can easily adjust graphical preferences by editing [`config.txt`](config.txt) located next to `tekken3_nx.nro`:
+You can customize graphical settings by editing [`config.txt`](config.txt) located in `sdmc:/switch/tekken3/config.txt`:
 
 ```ini
 # ==============================================================================
@@ -84,7 +109,7 @@ widescreen_16_9 = OFF
 ### Player 1 (Handheld or Pro Controller)
 | PS1 Button | Nintendo Switch | Action |
 |:---:|:---:|:---|
-| **D-Pad / Left Stick** | D-Pad / Left Stick | Movement & Crouching |
+| **D-Pad / Left Stick** | **D-Pad / Left Stick** | Movement & Crouching |
 | **Square ($\Box$)** | **Y** | Left Punch (LP) |
 | **Triangle ($\Delta$)** | **X** | Right Punch (RP) |
 | **Cross ($\times$)** | **B** | Left Kick (LK) |
@@ -93,6 +118,8 @@ widescreen_16_9 = OFF
 | **R1 / R2** | **R / ZR** | Customizable shortcut |
 | **Start** | **+ (Plus)** | Pause Menu (Arcade / VS / Practice) |
 | **Select** | **- (Minus)** | Select / Options |
+
+> **2-Player Mode:** Connecting a second controller automatically registers Player 2 for local multiplayer battles.
 
 ---
 
@@ -113,11 +140,11 @@ cmake -B build-switch -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake \
   -DCMAKE_BUILD_TYPE=Release
 
-# Build the .nro
+# Build the .nro package
 ninja -C build-switch
 ```
 
-The compiled binary and assets will be output to:
+The compiled binary and configuration files will be output to:
 - `build-switch/tekken3_nx.nro`
 - `build-switch/config.txt`
 
@@ -125,14 +152,19 @@ The compiled binary and assets will be output to:
 
 ## ⚖️ Disclaimer & Legal
 
-Tekken 3 is a trademark of Bandai Namco Entertainment Inc. This project is an independent open-source native reimplementation for homebrew-enabled Nintendo Switch consoles. No proprietary game assets, disc ROMs, or copyrighted code are distributed with this software. Users must provide their own legally purchased copy of *Tekken 3* for PlayStation.
+*Tekken 3* is a registered trademark of Bandai Namco Entertainment Inc. This project is an independent, non-commercial open-source native reimplementation designed strictly for homebrew-enabled Nintendo Switch consoles.
+
+No proprietary game assets, disc ROMs, BIOS dumps, or copyrighted code are distributed with this repository or release packages. Users must provide their own legally purchased copy of *Tekken 3* (USA, SLUS-00402) for PlayStation.
 
 ---
 
 ## 🏆 Credits & Acknowledgments
 
-- **Port Author & Maintainer:** **markaurel13**
-- **Namco:** Creators of the legendary *Tekken* franchise.
-- **devkitPro & libnx contributors:** The foundation of the Nintendo Switch homebrew toolchain.
-- **FinCS & deko3d contributors:** Incredible low-level GPU API for Tegra X1.
-- **psxrecomp project:** Pioneer in PlayStation 1 static recompilation technology.
+- **[markaurel13](https://github.com/markaurel13):** Nintendo Switch native port author, custom deko3d rendering backend, audren sound engine, input handling, and platform integration.
+- **[FishB0nes98](https://github.com/FishB0nes98):** Author of the original [Tekken 3 Recompiled](https://github.com/FishB0nes98/Tekken3Recompiled) project.
+- **[mstan](https://github.com/mstan):** Creator of the groundbreaking [psxrecomp](https://github.com/mstan/psxrecomp) static recompiler and [recomp-ui](https://github.com/mstan/recomp-ui).
+- **[FinCS](https://github.com/fincs):** Creator of the [deko3d](https://github.com/fincs/deko3d) low-level graphics library for the Nintendo Switch Nvidia Tegra X1 GPU.
+- **[devkitPro & libnx contributors](https://github.com/devkitPro/libnx):** The foundational SDK, toolchain, and system libraries powering Nintendo Switch homebrew development.
+- **[OpenBIOS Project](https://github.com/mstan/openbios-psx):** Open-source PlayStation BIOS implementation enabling clean, legal execution without proprietary firmware.
+- **[libchdr & LZMA SDK](https://github.com/rtissera/libchdr):** Disc image compression and sector decoding libraries.
+- **[Namco (Bandai Namco Entertainment)](https://www.bandainamcoent.com/):** The original developers and masterminds behind *Tekken 3* and its timeless gameplay.
