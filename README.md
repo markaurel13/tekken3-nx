@@ -41,7 +41,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
 
-Your directory structure on the microSD card should look like this (Before opening the game):
+Your directory structure on the microSD card should look like this (Before first launch):
 
 ```text
 sdmc:/
