@@ -41,7 +41,7 @@ sdmc:/
             └── Tekken 3 (USA) (Track 1).bin
 ```
 
-> **Note:** Supported disc filenames include `Tekken 3 (USA).cue`, `Tekken 3.cue`, `tekken3.cue`, or direct `.bin` tracks.
+> **Note:** The port includes an automatic universal disc detector. While standard names like `Tekken 3 (USA).cue` are recommended, it will automatically find and mount any `.cue`, `.bin`, `.iso`, or `.chd` placed inside the `disc/` or `tekken3/` directory regardless of its filename.
 
 ---
 
@@ -61,9 +61,9 @@ You can easily adjust graphical preferences by editing [`config.txt`](config.txt
 # Internal Supersampling Anti-Aliasing (SSAA):
 #   1 = 1x PS1 Native (1024x512)
 #   2 = 2x HD (2048x1024) [RECOMMENDED]
-#       -> Sharp edges, locked 60 FPS, optimal battery life, pristine on TV
+#       -> Sharp edges, optimal configuration
 #   3 = 3x Ultra HD (3072x1536)
-#       -> Maximum polygon edge definition for 4K / large TV screens
+#       -> Maximum polygon edge definition for 4K / large TV screens (Switch has a 1080p limit, so it is overkill and may cause FPS drops to 55 FPS)
 # ------------------------------------------------------------------------------
 supersampling = 2
 

@@ -440,12 +440,24 @@ void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
 int dirty_ram_text_image_registered(void) { return text_ref_image != NULL; }
 
 static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) {
-    if (!text_ref_image) return;
-    if (phys < text_ref_lo || phys + (uint32_t)size > text_ref_hi) return;
+    if (__builtin_expect(!text_ref_image, 0)) return;
+    if (__builtin_expect(phys < text_ref_lo || phys + (uint32_t)size > text_ref_hi, 1)) return;
     const uint8_t *ref = text_ref_image + (phys - text_ref_lo);
-    uint8_t buf[4] = { (uint8_t)val, (uint8_t)(val >> 8),
-                       (uint8_t)(val >> 16), (uint8_t)(val >> 24) };
-    if (memcmp(ref, buf, (size_t)size) != 0) {
+    int diff;
+    if (size == 1) {
+        diff = (*ref != (uint8_t)val);
+    } else if (size == 4) {
+        uint32_t r;
+        memcpy(&r, ref, 4);
+        diff = (r != val);
+    } else if (size == 2) {
+        uint16_t r;
+        memcpy(&r, ref, 2);
+        diff = (r != (uint16_t)val);
+    } else {
+        diff = (memcmp(ref, &val, (size_t)size) != 0);
+    }
+    if (__builtin_expect(diff, 0)) {
         uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;
         text_modified_bitmap[page >> 5] |= (1u << (page & 31u));
     }

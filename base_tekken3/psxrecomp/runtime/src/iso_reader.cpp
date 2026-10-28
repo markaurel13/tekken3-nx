@@ -323,6 +323,76 @@ bool ISOReader::Open(const std::string& filename) {
         tracks_.push_back(t);
     }
 
+    if (tracks_.size() == 1 && segments_.size() == 1) {
+        std::filesystem::path p(segments_.front().path);
+        std::filesystem::path dir = p.parent_path();
+        std::error_code ec;
+        std::vector<std::filesystem::path> sibling_bins;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (it->is_regular_file(ec)) {
+                if ((PSXRecompV4::path_has_extension_ci(it->path(), ".bin") ||
+                     PSXRecompV4::path_has_extension_ci(it->path(), ".img")) &&
+                    it->path() != p) {
+                    sibling_bins.push_back(it->path());
+                }
+            }
+        }
+        if (!sibling_bins.empty()) {
+            std::sort(sibling_bins.begin(), sibling_bins.end());
+            int track_num = 2;
+            for (const auto& sib : sibling_bins) {
+                BinSegment seg;
+                seg.path = sib.string();
+                seg.file.open(sib.string(), std::ios::binary);
+                if (seg.file.is_open()) {
+                    seg.file.seekg(0, std::ios::end);
+                    const std::streampos file_size = seg.file.tellg();
+                    seg.file.clear();
+                    if (file_size > 0) {
+                        const uint64_t size = static_cast<uint64_t>(file_size);
+                        seg.raw = (size % RAW_SECTOR_SIZE) == 0;
+                        seg.sector_count = static_cast<uint32_t>(size / (seg.raw ? RAW_SECTOR_SIZE : SECTOR_SIZE));
+                        seg.start_lba = next_lba;
+                        next_lba += seg.sector_count;
+                        segments_.push_back(std::move(seg));
+
+                        CDTrack t;
+                        t.number = track_num++;
+                        t.is_audio = true;
+                        t.start_lba = segments_.back().start_lba;
+                        t.pregap_lba = segments_.back().start_lba;
+                        tracks_.push_back(t);
+                        printf("[ISOReader] Auto-montado track de audio #%d: '%s' (LBA %u..%u)\n",
+                               t.number, sib.filename().string().c_str(), t.start_lba, next_lba);
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: If after checking files the disc still only has 1 track (bare .bin without audio files),
+    // synthesize dummy CD-DA tracks 2 and 3 pointing past the end of data.
+    // Games like Tekken 3 unconditionally query TOC for tracks 2 & 3 and call CdPosToInt() on them
+    // at the ending credits. If toc[2] is zeroes, CdPosToInt() returns -150 (< 0), which causes
+    // func_8006AE14 / func_8008F08C to spin forever in an infinite retry loop on a black screen.
+    if (tracks_.size() == 1) {
+        uint32_t total_sec = next_lba > 0 ? next_lba : 268976;
+        CDTrack t2;
+        t2.number = 2;
+        t2.is_audio = true;
+        t2.pregap_lba = total_sec;
+        t2.start_lba = total_sec;
+        tracks_.push_back(t2);
+
+        CDTrack t3;
+        t3.number = 3;
+        t3.is_audio = true;
+        t3.pregap_lba = total_sec + 150;
+        t3.start_lba = total_sec + 150;
+        tracks_.push_back(t3);
+        printf("[ISOReader] Generados tracks CD-DA virtuales 2 y 3 (TOC start=%u) para compatibilidad de endings\n", total_sec);
+    }
+
     // Store the resolved data-track path for callers
     bin_path_ = segments_.front().path;
 

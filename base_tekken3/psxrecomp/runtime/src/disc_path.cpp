@@ -38,6 +38,10 @@ bool same_file_path(const fs::path& a, const fs::path& b) {
 }
 
 fs::path absolute_or_self(const fs::path& p) {
+    std::string s = p.string();
+    if (s.rfind("sdmc:/", 0) == 0 || s.rfind("romfs:/", 0) == 0) {
+        return p;
+    }
     std::error_code ec;
     fs::path abs = fs::absolute(p, ec);
     return ec ? p : abs;

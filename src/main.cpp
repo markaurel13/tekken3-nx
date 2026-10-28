@@ -12,12 +12,15 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <strings.h>
 #include <switch.h>
 
 #include "renderer/deko3d_renderer.h"
 #include "platform/switch_audio.h"
 #include "platform/switch_input.h"
 #include "iso_reader.h"
+#include "disc_path.h"
 #include "tek_block_prof.h"
 
 // Referencias a los componentes de psxrecomp
@@ -409,7 +412,7 @@ static ssize_t log_devoptab_write(struct _reent *r, void *fd, const char *ptr, s
     (void)r; (void)fd;
     if (s_sd_log) {
         fwrite(ptr, 1, len, s_sd_log);
-        if (g_post_fmv_sync_active > 0 || memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
+        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ERROR", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
             fflush(s_sd_log);
             fsync(fileno(s_sd_log));
         }
@@ -1290,9 +1293,9 @@ static void load_or_create_config(int argc, char* argv[]) {
                 "# Internal Supersampling Anti-Aliasing (SSAA):\n"
                 "#   1 = 1x PS1 Native (1024x512)\n"
                 "#   2 = 2x HD (2048x1024) [RECOMMENDED]\n"
-                "#       -> Sharp edges, locked 60 FPS, optimal battery life, pristine on TV\n"
+                "#       -> Sharp edges, optimal configuration\n"
                 "#   3 = 3x Ultra HD (3072x1536)\n"
-                "#       -> Maximum polygon edge definition for 4K / large TV screens\n"
+                "#       -> Maximum polygon edge definition for 4K / large TV screens (Switch has a 1080p limit, so it is overkill and may cause FPS drops to 55 FPS)\n"
                 "# ------------------------------------------------------------------------------\n"
                 "supersampling = 2\n\n"
                 "# ------------------------------------------------------------------------------\n"
@@ -1354,10 +1357,122 @@ static void load_or_create_config(int argc, char* argv[]) {
     printf("   [+] widescreen_16_9 = %s\n", g_config.widescreen_16_9 ? "ON (16:9 Panoramica)" : "OFF (4:3 Original Pillarbox)");
 }
 
+// ============================================================================
+// Detección Universal de Disco (.cue, .bin, .iso, .chd)
+// ============================================================================
+static bool try_mount_disc_file(const std::string& path, std::string& out_mounted) {
+    if (path.empty()) return false;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    fclose(f);
+
+    printf("[DiscDetect] Probando montaje: '%s'...\n", path.c_str());
+    cdrom_init(path.c_str());
+    cdrom_set_disc_scex("SCEA");
+    cdrom_set_speed(4);
+    cdrom_set_game_speed(1);
+
+    if (cdrom_has_disc()) {
+        out_mounted = path;
+        printf("[DiscDetect] [+] ¡Montaje exitoso!\n");
+        return true;
+    }
+    printf("[DiscDetect] [-] No se pudo montar como disco valido.\n");
+    return false;
+}
+
+static std::string detect_and_mount_disc(int argc, char* argv[]) {
+    std::string mounted;
+
+    // Directorios donde buscar imágenes de disco
+    std::vector<std::string> search_dirs;
+    if (argc > 0 && argv && argv[0] && argv[0][0] != '\0') {
+        std::string nro_dir = argv[0];
+        size_t last_sep = nro_dir.find_last_of("/\\");
+        if (last_sep != std::string::npos) {
+            std::string dir = nro_dir.substr(0, last_sep);
+            search_dirs.push_back(dir + "/disc");
+            search_dirs.push_back(dir);
+        }
+    }
+    search_dirs.push_back("sdmc:/switch/tekken3/disc");
+    search_dirs.push_back("sdmc:/switch/tekken3");
+    search_dirs.push_back("disc");
+    search_dirs.push_back(".");
+
+    // Paso 1: Probar primero nombres exactos estándar
+    const char* exact_candidates[] = {
+        "sdmc:/switch/tekken3/disc/Tekken 3 (USA).cue",
+        "sdmc:/switch/tekken3/disc/Tekken 3.cue",
+        "sdmc:/switch/tekken3/disc/tekken3.cue",
+        "sdmc:/switch/tekken3/Tekken 3 (USA).cue",
+        "sdmc:/switch/tekken3/Tekken 3.cue",
+        "sdmc:/switch/tekken3/disc/Tekken 3 (USA) (Track 1).bin",
+        "disc/Tekken 3 (USA).cue"
+    };
+    for (const char* exact : exact_candidates) {
+        if (try_mount_disc_file(exact, mounted)) {
+            printf("[DiscDetect] Disco encontrado por coincidencia conocida: '%s'\n", mounted.c_str());
+            return mounted;
+        }
+    }
+
+    // Paso 2: Escaneo dinámico en búsqueda de CUALQUIER archivo .cue
+    for (const auto& dir_path : search_dirs) {
+        DIR* d = opendir(dir_path.c_str());
+        if (!d) continue;
+
+        struct dirent* ent;
+        while ((ent = readdir(d)) != nullptr) {
+            const char* name = ent->d_name;
+            if (name[0] == '.') continue;
+            size_t len = strlen(name);
+            if (len > 4 && strcasecmp(name + len - 4, ".cue") == 0) {
+                std::string full_path = dir_path + "/" + name;
+                if (try_mount_disc_file(full_path, mounted)) {
+                    printf("[DiscDetect] ¡Disco detectado automaticamente (.cue): '%s'!\n", mounted.c_str());
+                    closedir(d);
+                    return mounted;
+                }
+            }
+        }
+        closedir(d);
+    }
+
+    // Paso 3: Escaneo dinámico en búsqueda de CUALQUIER imagen directa (.chd, .bin, .iso, .img)
+    const char* image_exts[] = { ".chd", ".bin", ".iso", ".img" };
+    for (const auto& dir_path : search_dirs) {
+        DIR* d = opendir(dir_path.c_str());
+        if (!d) continue;
+
+        struct dirent* ent;
+        while ((ent = readdir(d)) != nullptr) {
+            const char* name = ent->d_name;
+            if (name[0] == '.') continue;
+            size_t len = strlen(name);
+            for (const char* ext : image_exts) {
+                size_t ext_len = strlen(ext);
+                if (len > ext_len && strcasecmp(name + len - ext_len, ext) == 0) {
+                    std::string full_path = dir_path + "/" + name;
+                    if (try_mount_disc_file(full_path, mounted)) {
+                        printf("[DiscDetect] ¡Disco detectado automaticamente (imagen): '%s'!\n", mounted.c_str());
+                        closedir(d);
+                        return mounted;
+                    }
+                }
+            }
+        }
+        closedir(d);
+    }
+
+    return "";
+}
+
 int main(int argc, char* argv[]) {
     // 1. Asegurar directorios de log en la microSD y abrir archivo persistente
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/tekken3", 0777);
+    mkdir("sdmc:/switch/tekken3/disc", 0777);
     s_sd_log = fopen("sdmc:/switch/tekken3/tekken3.log", "w");
     if (s_sd_log) {
         static char s_sd_log_buf[64 * 1024];
@@ -1377,7 +1492,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v22 - Step A Detailed Diagnostics: irq_adv breakdown, OpenBiosHotFn, 8-way DirtyTop, IrqChkDiag)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v26 - Clean Audio + AudioTick Diag)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {
@@ -1527,52 +1642,27 @@ int main(int argc, char* argv[]) {
            hle_req.fast_boot,
            fntrace_is_game_started());
 
-    // 7. Montar la imagen de disco de Tekken 3 desde la microSD
-    const char* candidate_paths[] = {
-        "sdmc:/switch/tekken3/disc/Tekken 3 (USA).cue",
-        "sdmc:/switch/tekken3/disc/Tekken 3.cue",
-        "sdmc:/switch/tekken3/disc/tekken3.cue",
-        "sdmc:/switch/tekken3/Tekken 3 (USA).cue",
-        "sdmc:/switch/tekken3/Tekken 3.cue",
-        "sdmc:/switch/tekken3/disc/Tekken 3 (USA) (Track 1).bin",
-        "disc/Tekken 3 (USA).cue"
-    };
-
-    const char* chosen_disc_path = candidate_paths[0];
-    for (size_t i = 0; i < sizeof(candidate_paths) / sizeof(candidate_paths[0]); i++) {
-        FILE* test_f = fopen(candidate_paths[i], "rb");
-        if (test_f) {
-            fclose(test_f);
-            chosen_disc_path = candidate_paths[i];
-            break;
-        }
-    }
-
-    printf("[Main] [7/7] Montando CD-ROM desde: %s...\n", chosen_disc_path);
-    cdrom_init(chosen_disc_path);
-    cdrom_set_disc_scex("SCEA");
-    // Paso D3: Aceleracion de lectura de CD-ROM en el arranque (4x en boot, 1x autentico en gameplay)
-    cdrom_set_speed(4);
-    cdrom_set_game_speed(1);
-    printf("[CDROM] Velocidad de arranque configurada a 4x (juego a 1x)\n");
-
-    if (cdrom_has_disc()) {
-        printf("[Main] Disco montado con exito en la unidad de CD-ROM (region=SCEA).\n");
+    // 7. Montar la imagen de disco de Tekken 3 (detección universal automática de cualquier .cue / .bin / .iso / .chd)
+    printf("[Main] [7/7] Detectando y montando CD-ROM desde la microSD...\n");
+    std::string chosen_disc_path = detect_and_mount_disc(argc, argv);
+    if (!chosen_disc_path.empty() && cdrom_has_disc()) {
+        printf("[Main] [+] Disco montado con exito en la unidad de CD-ROM: '%s' (region=SCEA).\n", chosen_disc_path.c_str());
     } else {
-        printf("[Main] Advertencia: No se pudo montar el disco en '%s'.\n", chosen_disc_path);
-        printf("[Main] Comprobando fallback a bin directo...\n");
-        const char* bin_fallback = "sdmc:/switch/tekken3/disc/Tekken 3 (USA) (Track 1).bin";
-        FILE* bf = fopen(bin_fallback, "rb");
-        if (bf) {
-            fclose(bf);
-            chosen_disc_path = bin_fallback;
-            cdrom_init(bin_fallback);
-            cdrom_set_speed(4);
-            cdrom_set_game_speed(1);
-            if (cdrom_has_disc()) {
-                printf("[Main] ¡Disco montado con exito usando fallback BIN!\n");
-            }
+        printf("\n========================================================\n");
+        printf("[FATAL ERROR] No se encontro ninguna imagen de Tekken 3!\n");
+        printf("Por favor coloca los archivos (.cue + .bin, .iso o .chd) en:\n");
+        printf("   sdmc:/switch/tekken3/disc/\n");
+        printf("o directamente en:\n");
+        printf("   sdmc:/switch/tekken3/\n");
+        printf("========================================================\n\n");
+        if (s_sd_log) {
+            fflush(s_sd_log);
+            fsync(fileno(s_sd_log));
+            fclose(s_sd_log);
+            s_sd_log = NULL;
         }
+        svcSleepThread(3000000000ULL);
+        return 1;
     }
 
     // Extraer imagen de texto de TEKKEN3/SLUS_004.02 del disco para dirty_ram_register_text_image
@@ -1604,7 +1694,7 @@ int main(int argc, char* argv[]) {
                 printf("[Main] Advertencia: no se pudo encontrar TEKKEN3/SLUS_004.02 en ISO (sz=%zu).\n", exe_sz);
             }
         } else {
-            printf("[Main] Advertencia: ISOReader no pudo abrir '%s'.\n", chosen_disc_path);
+            printf("[Main] Advertencia: ISOReader no pudo abrir '%s'.\n", chosen_disc_path.c_str());
         }
     }
 

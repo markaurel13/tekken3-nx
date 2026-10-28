@@ -2,10 +2,12 @@
 
 #include "cue_sheet.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -181,6 +183,77 @@ CueSheet parse_cue_sheet(const fs::path& cue_path) {
             t.has_index00 = cur_has_index00;
             sheet.tracks.push_back(t);
             cur_track_num = -1;
+        }
+    }
+
+    // Smart fallback: When users rename their .bin files or .cue on an SD card
+    // without updating the internal FILE strings in the .cue, match the missing
+    // FILE references to binary image files present in the same directory.
+    bool any_missing = false;
+    for (const auto& f : sheet.files) {
+        if (!f.exists) {
+            any_missing = true;
+            break;
+        }
+    }
+
+    if (any_missing && !sheet.files.empty()) {
+        std::vector<fs::path> dir_bins;
+        std::error_code ec;
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (it->is_regular_file(ec)) {
+                std::string ext = it->path().extension().string();
+                if (equal_ci(ext, ".bin") || equal_ci(ext, ".img") || equal_ci(ext, ".iso")) {
+                    dir_bins.push_back(it->path());
+                }
+            }
+        }
+
+        if (sheet.files.size() == 1 && !dir_bins.empty()) {
+            // Single-file cue: pick the largest binary file in the directory
+            auto best = std::max_element(dir_bins.begin(), dir_bins.end(),
+                [](const fs::path& a, const fs::path& b) {
+                    std::error_code ec1, ec2;
+                    return fs::file_size(a, ec1) < fs::file_size(b, ec2);
+                });
+            if (best != dir_bins.end()) {
+                printf("[CueSheet] Auto-asociando archivo único: '%s' -> '%s'\n",
+                       sheet.files[0].name.c_str(), best->filename().string().c_str());
+                sheet.files[0].path = *best;
+                sheet.files[0].exists = true;
+                sheet.files[0].is_binary = true;
+            }
+        } else if (sheet.files.size() <= dir_bins.size()) {
+            // Multi-file cue: Sort available bins by size descending so the
+            // primary data track (600+ MB) is first.
+            std::sort(dir_bins.begin(), dir_bins.end(),
+                [](const fs::path& a, const fs::path& b) {
+                    std::error_code ec1, ec2;
+                    return fs::file_size(a, ec1) > fs::file_size(b, ec2);
+                });
+
+            size_t data_file_idx = sheet.data_file_index();
+            printf("[CueSheet] Auto-asociando track de datos: '%s' -> '%s' (%llu bytes)\n",
+                   sheet.files[data_file_idx].name.c_str(), dir_bins[0].filename().string().c_str(),
+                   (unsigned long long)fs::file_size(dir_bins[0], ec));
+
+            sheet.files[data_file_idx].path = dir_bins[0];
+            sheet.files[data_file_idx].exists = true;
+            sheet.files[data_file_idx].is_binary = true;
+
+            // Audio tracks: sort remaining candidate bins alphabetically for deterministic ordering
+            std::vector<fs::path> audio_bins(dir_bins.begin() + 1, dir_bins.end());
+            std::sort(audio_bins.begin(), audio_bins.end());
+
+            size_t audio_bin_idx = 0;
+            for (size_t i = 0; i < sheet.files.size() && audio_bin_idx < audio_bins.size(); ++i) {
+                if (i == data_file_idx) continue;
+                printf("[CueSheet] Auto-asociando track de audio #%zu: '%s' -> '%s'\n",
+                       i + 1, sheet.files[i].name.c_str(), audio_bins[audio_bin_idx].filename().string().c_str());
+                sheet.files[i].path = audio_bins[audio_bin_idx++];
+                sheet.files[i].exists = true;
+                sheet.files[i].is_binary = true;
+            }
         }
     }
 

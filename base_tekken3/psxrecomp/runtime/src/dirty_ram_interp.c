@@ -553,13 +553,12 @@ static inline uint32_t fetch_word(uint32_t phys) {
     /* Main RAM is a process-lifetime static allocation. Cache its address so
      * instruction fetch does not cross translation units for every guest op. */
     static const uint8_t *ram;
-    if (!ram) ram = memory_get_ram_ptr();
-    if (phys < 0x00800000u) phys &= (RAM_SIZE - 1u);
-    if (phys >= RAM_SIZE) return 0;
-    return  (uint32_t)ram[phys]
-         | ((uint32_t)ram[phys + 1] <<  8)
-         | ((uint32_t)ram[phys + 2] << 16)
-         | ((uint32_t)ram[phys + 3] << 24);
+    if (__builtin_expect(!ram, 0)) ram = memory_get_ram_ptr();
+    if (__builtin_expect(phys < 0x00800000u, 1)) phys &= (RAM_SIZE - 1u);
+    if (__builtin_expect(phys >= RAM_SIZE, 0)) return 0;
+    uint32_t word;
+    memcpy(&word, ram + phys, 4);
+    return word;
 }
 
 /* Widescreen render-funnel cull detection for the interpreter ([widescreen.cull]

@@ -9,9 +9,9 @@
 # Internal Supersampling Anti-Aliasing (SSAA):
 #   1 = 1x PS1 Native (1024x512)
 #   2 = 2x HD (2048x1024) [RECOMMENDED]
-#       -> Sharp edges, locked 60 FPS, optimal battery life, pristine on TV
+#       -> Sharp edges, optimal configuration
 #   3 = 3x Ultra HD (3072x1536)
-#       -> Maximum polygon edge definition for 4K / large TV screens
+#       -> Maximum polygon edge definition for 4K / large TV screens (Switch has a 1080p limit, so it is overkill and may cause FPS drops to 55 FPS)
 # ------------------------------------------------------------------------------
 supersampling = 2
 

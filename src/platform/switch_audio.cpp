@@ -227,12 +227,15 @@ bool SwitchAudio::Init(int sampleRate) {
     audrvVoiceInit(&m_drv, 0, Channels, PcmFormat_Int16, m_sampleRate);
     audrvVoiceSetDestinationMix(&m_drv, 0, AUDREN_FINAL_MIX_ID);
 
-    // Matriz de paneo estéreo: canal L a Out 0, canal R a Out 1
-    audrvVoiceSetMixFactor(&m_drv, 0, 1.0f, 0, 0); // L -> L
-    audrvVoiceSetMixFactor(&m_drv, 0, 0.0f, 0, 1); // L -> R
-    audrvVoiceSetMixFactor(&m_drv, 0, 0.0f, 1, 0); // R -> L
-    audrvVoiceSetMixFactor(&m_drv, 0, 1.0f, 1, 1); // R -> R
+    // Matriz de paneo estéreo con margen de seguridad (-1.9 dB headroom) para evitar
+    // clipping digital a 0 dBFS e inter-sample overs en la salida HDMI (TV / Dock):
+    // canal L a Out 0, canal R a Out 1
+    audrvVoiceSetMixFactor(&m_drv, 0, 0.80f, 0, 0); // L -> L
+    audrvVoiceSetMixFactor(&m_drv, 0, 0.00f, 0, 1); // L -> R
+    audrvVoiceSetMixFactor(&m_drv, 0, 0.00f, 1, 0); // R -> L
+    audrvVoiceSetMixFactor(&m_drv, 0, 0.80f, 1, 1); // R -> R
     audrvVoiceStart(&m_drv, 0);
+    printf("[SwitchAudio] Headroom de salida configurado a 0.80f (-1.9 dB para TV/HDMI studio-clean)\n");
 
     // 5. Configurar WaveBuffers siguiendo el contrato estricto de alineamiento de audren:
     // data_raw SIEMPRE apunta al inicio del mempool (alineado a 0x1000) y cada bloque se
@@ -286,12 +289,33 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
     bool primed = false;
     float current_pitch = 1.0f;
 
+    uint32_t health_tick_cnt = 0;
+    uint32_t min_occ_win = RingSlots;
+    uint32_t max_occ_win = 0;
+    int16_t peak_l_win = 0;
+    int16_t peak_r_win = 0;
+    uint64_t clipped_samples_win = 0;
+
+    // --- Diagnostico: temporizacion de ticks de audren y tasa real de consumo ---
+    u64 prev_tick = 0;
+    double dt_min_ms = 1e9, dt_max_ms = 0.0, dt_sum_ms = 0.0;
+    uint32_t dt_over8 = 0;
+    u32 prev_played = audrvVoiceGetPlayedSampleCount(&self->m_drv, 0);
+
     while (self->m_threadRunning) {
         // audrenWaitFrame espera el tick de 5ms del DSP de audio de Switch
         audrenWaitFrame();
         if (!self->m_threadRunning) break;
 
         u64 t0 = armGetSystemTick();
+        if (prev_tick) {
+            double dt = (double)armTicksToNs(t0 - prev_tick) / 1e6;
+            if (dt < dt_min_ms) dt_min_ms = dt;
+            if (dt > dt_max_ms) dt_max_ms = dt;
+            dt_sum_ms += dt;
+            if (dt > 8.0) dt_over8++;
+        }
+        prev_tick = t0;
 
         audrvUpdate(&self->m_drv);
 
@@ -308,30 +332,51 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         uint32_t w = self->m_ringWriteIdx.load(std::memory_order_acquire);
         uint32_t occupancy = (w >= r) ? (w - r) : 0;
 
-        // 1. Priming inicial: acumular al menos 6 bloques (~100 ms) antes de comenzar a alimentar audren.
-        // Al entregar 3 a audren, quedan 3 buffers completos de colchón elástico (~50 ms).
+        if (occupancy < min_occ_win) min_occ_win = occupancy;
+        if (occupancy > max_occ_win) max_occ_win = occupancy;
+
+        if (++health_tick_cnt >= 200) {
+            u32 voice_drops = audrvVoiceGetVoiceDropsCount(&self->m_drv, 0);
+            printf("[AudioHealth] peak=(L:%d, R:%d) clip=%llu occ=[min=%u, max=%u] pitch=%.4f voice_drops=%u underruns=%llu\n",
+                   peak_l_win, peak_r_win, (unsigned long long)clipped_samples_win,
+                   min_occ_win, max_occ_win, current_pitch, voice_drops,
+                   (unsigned long long)g_prof_audio_underruns);
+            u32 played = audrvVoiceGetPlayedSampleCount(&self->m_drv, 0);
+            AppletOperationMode opm = appletGetOperationMode();
+            printf("[AudioTick] mode=%s dt_ms=[min=%.2f avg=%.2f max=%.2f >8ms=%u] played_delta=%u (esperado~44100) wavebuf_seq=%u\n",
+                   opm == AppletOperationMode_Console ? "DOCK" : "HANDHELD",
+                   dt_min_ms, dt_sum_ms / 199.0, dt_max_ms, dt_over8,
+                   (unsigned)(played - prev_played), audrvVoiceGetWaveBufSeq(&self->m_drv, 0));
+            prev_played = played;
+            dt_min_ms = 1e9; dt_max_ms = 0.0; dt_sum_ms = 0.0; dt_over8 = 0;
+            health_tick_cnt = 0;
+            min_occ_win = RingSlots;
+            max_occ_win = 0;
+            peak_l_win = 0;
+            peak_r_win = 0;
+            clipped_samples_win = 0;
+        }
+
+        // 1. Priming inicial: acumular al menos 16 bloques (~266 ms) antes de comenzar a alimentar audren.
+        // Al entregar 3 a audren, quedan 13 buffers completos de colchón elástico (~216 ms).
         if (!primed) {
-            if (occupancy >= 6) {
+            if (occupancy >= 16) {
                 primed = true;
             } else {
                 continue;
             }
         }
 
-        // 2. Control Dinámico de Tasa (Dynamic Rate Control):
-        // Ajusta el pitch sutilmente (±0.15%) para mantener el colchón elástico centrado en 4-6 slots
-        float target_pitch = 1.0f;
-        if (occupancy < 3) {
-            target_pitch = 0.9985f; // Ralentizar consumo para recuperar colchón
-        } else if (occupancy > 8) {
-            target_pitch = 1.0015f; // Acelerar consumo para evitar saturación
-        } else {
-            target_pitch = 1.0f;    // Nivel óptimo
-        }
-
-        if (target_pitch != current_pitch) {
-            current_pitch = target_pitch;
-            audrvVoiceSetPitch(&self->m_drv, 0, current_pitch);
+        // 2. Control de latencia máxima (sin alterar el tono/pitch):
+        // En Nintendo Switch bloqueada a 60 FPS, el juego genera exactamente 44100 muestras/seg
+        // y audren consume exactamente 44100 muestras/seg (1:1 lockstep físico por hardware).
+        // El tono se mantiene SIEMPRE FIJO a 1.0000x (sin desafinaciones ni efecto cinta gastada).
+        // Si tras saltar cinemáticas o pausas largas se acumulan más de 24 slots (>400 ms),
+        // descartamos suavemente el exceso para devolver la latencia al colchón óptimo (~200 ms).
+        if (occupancy > 24) {
+            uint32_t drop_count = occupancy - 16;
+            r += drop_count;
+            self->m_ringReadIdx.store(r, std::memory_order_release);
         }
 
         bool queuedAny = false;
@@ -347,8 +392,18 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
 
             if (r < w) {
                 uint32_t slot = r % RingSlots;
-                memcpy(self->m_audioBuffers[self->m_currentBuffer], self->m_ring[slot].samples, BufferSizeBytes);
-                memcpy(last_block, self->m_ring[slot].samples, BufferSizeBytes);
+                const int16_t* s_ptr = self->m_ring[slot].samples;
+                for (size_t s = 0; s < BufferSamples; s += 2) {
+                    int16_t sl = s_ptr[s];
+                    int16_t sr = s_ptr[s + 1];
+                    int16_t al = (sl < 0) ? (int16_t)-sl : sl;
+                    int16_t ar = (sr < 0) ? (int16_t)-sr : sr;
+                    if (al > peak_l_win) peak_l_win = al;
+                    if (ar > peak_r_win) peak_r_win = ar;
+                    if (al >= 32700 || ar >= 32700) clipped_samples_win++;
+                }
+                memcpy(self->m_audioBuffers[self->m_currentBuffer], s_ptr, BufferSizeBytes);
+                memcpy(last_block, s_ptr, BufferSizeBytes);
                 has_last_block = true;
                 self->m_ringReadIdx.store(r + 1, std::memory_order_release);
             } else {
