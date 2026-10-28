@@ -301,6 +301,8 @@ bool ISOReader::Open(const std::string& filename) {
                                                                  : SECTOR_SIZE));
         seg.start_lba    = next_lba;
         next_lba += seg.sector_count;
+        printf("[ISOReader] Segmento #%zu: path='%s' size=%llu bytes sector_count=%u start_lba=%u (raw=%d)\n",
+               segments_.size(), bin_name.c_str(), (unsigned long long)size, seg.sector_count, seg.start_lba, seg.raw);
         segments_.push_back(std::move(seg));
     }
 
@@ -312,6 +314,9 @@ bool ISOReader::Open(const std::string& filename) {
         t.start_lba = segments_[p.file_index].start_lba + p.index01;
         t.pregap_lba = segments_[p.file_index].start_lba +
                        (p.has_index00 ? p.index00 : p.index01);
+        printf("[ISOReader] Track #%d: is_audio=%d start_lba=%u pregap_lba=%u (file_idx=%zu path='%s')\n",
+               t.number, t.is_audio, t.start_lba, t.pregap_lba, p.file_index,
+               (p.file_index < segments_.size() ? segments_[p.file_index].path.c_str() : "N/A"));
         tracks_.push_back(t);
     }
 

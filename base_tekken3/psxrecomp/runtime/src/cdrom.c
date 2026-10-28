@@ -1598,11 +1598,16 @@ static void process_cdda_stream(uint32_t cycles) {
             }
         }
 
+        int16_t max_sample = 0;
+        for (int i = 0; i < CDDA_SECTOR_FRAMES * 2; ++i) {
+            int16_t v = (pcm[i] < 0) ? (int16_t)-pcm[i] : pcm[i];
+            if (v > max_sample) max_sample = v;
+        }
+
         static uint64_t s_cdda_diag_sectors = 0;
-        extern int g_post_fmv_sync_active;
-        if (s_cdda_diag_sectors < 5 || (g_post_fmv_sync_active && (s_cdda_diag_sectors % 75) == 0)) {
-            printf("[CDDA_Sector] count=%llu track=%d lba=%u read_ok=%d\n",
-                   (unsigned long long)s_cdda_diag_sectors, cdda_track, cdda_lba, read_ok);
+        if (s_cdda_diag_sectors < 10 || (s_cdda_diag_sectors % 75) == 0) {
+            printf("[CDDA_Sector] count=%llu track=%d lba=%u read_ok=%d pk=%d (muted=%d)\n",
+                   (unsigned long long)s_cdda_diag_sectors, cdda_track, cdda_lba, read_ok, max_sample, cd_muted);
             fflush(stdout);
         }
         s_cdda_diag_sectors++;
