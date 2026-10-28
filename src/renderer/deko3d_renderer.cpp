@@ -1140,14 +1140,22 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             dk::ImageView vramTexView{ m_vramTexture };
             m_cmdBuf.copyBufferToImage({ slotStagingGpu, 0, 0 }, vramTexView, { 0, 0, 0, w, h, 1 });
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
-            m_cmdBuf.blitImage(vramTexView, { 0, 0, 0, w, h, 1 },
+            uint32_t fmvSrcW = (w > 1) ? (w - 1) : 1;
+            m_cmdBuf.blitImage(vramTexView, { 0, 0, 0, fmvSrcW, h, 1 },
                                colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
         } else {
             // Presentación directa por hardware GPU Maxwell (0 ms de conversión CPU) con SSAA dinámico
             dk::ImageView vramTexView{ m_vramTexture };
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
-            m_cmdBuf.blitImage(vramTexView, { dispX * m_internalScale, dispY * m_internalScale, 0, w * m_internalScale, h * m_internalScale, 1 },
+            // Inset de borde derecho: Al reescalar horizontalmente (e.g. 736 -> 960 o 1280) con filtrado bilineal
+            // (DkBlitFlag_FilterLinear), el último pixel de destino muestrea a x > (w*scale - 0.5), sangrando
+            // con el texel adyacente fuera del framebuffer (memoria de texturas/UI en VRAM a x >= 368),
+            // lo cual provocaba una línea semi-transparente clara en el borde derecho.
+            // Restar 1 al ancho fuente mantiene el rango de muestreo estrictamente dentro del framebuffer renderizado.
+            uint32_t blitSrcW = (w * m_internalScale > 1) ? (w * m_internalScale - 1) : 1;
+            uint32_t blitSrcH = h * m_internalScale;
+            m_cmdBuf.blitImage(vramTexView, { dispX * m_internalScale, dispY * m_internalScale, 0, blitSrcW, blitSrcH, 1 },
                                colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
