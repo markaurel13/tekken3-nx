@@ -38,7 +38,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 ## 📁 Installation & File Structure
 
 1. Extract the release package onto the root of your Nintendo Switch microSD card.
-2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
+2. Place your own copy of **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
 3. (Optional) Use Sphaira to generate a Home Menu shortcut so you can launch the game directly without entering the Homebrew Menu.
 
@@ -148,7 +148,7 @@ The compiled binary and configuration files will be output to:
 
 *Tekken 3* is a registered trademark of Bandai Namco Entertainment Inc. This project is an independent, non-commercial open-source native reimplementation designed strictly for homebrew-enabled Nintendo Switch consoles.
 
-No proprietary game assets, disc ROMs, BIOS dumps, or copyrighted code are distributed with this repository or release packages. Users must provide their own legally purchased copy of *Tekken 3* (USA, SLUS-00402) for PlayStation.
+No proprietary game assets, disc ROMs, BIOS dumps, or copyrighted code are distributed with this repository or release packages. Users must provide their own copy of *Tekken 3* (USA, SLUS-00402) for PlayStation.
 
 ---
 
