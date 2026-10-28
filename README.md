@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.jpg" alt="Tekken 3 (USA) — Nintendo Switch Native Port" width="220" />
+</p>
+
 # Tekken 3 (USA) — Nintendo Switch Native Port
 
 [![Platform: Nintendo Switch](https://img.shields.io/badge/Platform-Nintendo%20Switch-E60012.svg?logo=nintendoswitch&logoColor=white)](https://github.com/markaurel13/tekken3_nx)
