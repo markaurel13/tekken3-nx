@@ -40,6 +40,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 1. Extract the release package onto the root of your Nintendo Switch microSD card.
 2. Place your legally obtained **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
+3. (Optional) Use Sphaira to generate a Home Menu shortcut so you can launch the game directly without entering the Homebrew Menu.
 
 Your directory structure on the microSD card should look like this (Before first launch):
 
@@ -47,16 +48,19 @@ Your directory structure on the microSD card should look like this (Before first
 sdmc:/
 └── switch/
     └── tekken3/
-        ├── tekken3_nx.nro              # The Switch executable
-        ├── config.txt                  # Graphics configuration (auto-generated if missing)
+        ├── tekken3_nx.nro              
+        ├── config.txt                  
         ├── disc/
         │   ├── Tekken 3 (USA).cue       
         │   ├── Tekken 3 (USA) (Track 1).bin
-        │   ├── Tekken 3 (USA) (Track 2).bin   # CD-DA Audio (Credits music)
-        │   └── Tekken 3 (USA) (Track 3).bin   # Padding track
+        │   ├── Tekken 3 (USA) (Track 2).bin   
+        │   └── Tekken 3 (USA) (Track 3).bin   
 ```
 
 > **Note:** The port includes an intelligent universal disc detector. While standard names like `Tekken 3 (USA).cue` are recommended, it will automatically search, match, and mount any compatible `.cue`, `.bin`, `.iso`, or `.chd` placed inside the `disc/` or `tekken3/` directory regardless of file naming.
+
+>  [!TIP]
+> **Enable Auto Save on First Launch:** Once in-game, Go to **OPTION MODE** → **MEMORY CARD** and turn **AUTO SAVE: ON**. This ensures your progress is saved automatically whenever you finish a mode, unlock a character, or set a new record
 
 ---
 
@@ -84,7 +88,7 @@ supersampling = 2
 
 # ------------------------------------------------------------------------------
 # Screen Aspect Ratio:
-#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]
+#   OFF = 4:3 Original with black sidebars [RECOMMENDED IF YOU WANT THE ORIGINAL EXPERIENCE]
 #         -> Preserves authentic retro proportions for characters and stages.
 #   ON  = 16:9 Fullscreen Widescreen
 #         -> Fills the entire Switch screen and 16:9 TV display without bars.
