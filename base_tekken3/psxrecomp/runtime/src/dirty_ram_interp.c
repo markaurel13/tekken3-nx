@@ -1365,6 +1365,67 @@ static int interp_enter_compiled(CPUState *cpu, uint32_t target) {
         cpu->pc = 0;
         return 1;
     }
+    /* Fast-path para VSync(-1) (func_800859A8 con a0 == -1) durante bucles de espera FMV
+     * (strNext en ra=0x800FED10 y strSync en ra=0x800FEE40). Evita las lecturas MMIO
+     * redundantes a GPUSTAT/Timer1 y avanza el reloj al siguiente evento de CD/DMA/VBlank
+     * para eliminar las ~14,000 iteraciones vacías por frame de vídeo. */
+    if (target == 0x800859A8u && cpu->gpr[4] == 0xFFFFFFFFu &&
+        !g_precise_mode && !g_ls_replay_active) {
+        uint32_t ra = cpu->gpr[31];
+        uint32_t adv = 48u;
+        if (ra == 0x800FED10u || ra == 0x800FEE40u) {
+            uint32_t dist = cycles_to_next_event();
+            if (dist > 64u && dist != 0xFFFFFFFFu && dist <= 564480u) {
+                adv = dist;
+            }
+        }
+        psx_advance_cycles(adv);
+        cpu->gpr[5] = cpu->read_word(0x80099B34u);
+        cpu->gpr[3] = cpu->read_word(0x80099B38u);
+        cpu->gpr[2] = cpu->read_word(0x8009AC68u);
+        cpu->pc = 0;
+        return 1;
+    }
+    /* Fast-path nativo para func_80105340 (pasada de brillo/fade por LUT de 256 bytes
+     * sobre 3,840 palabras = 15,360 bytes por slice de 16x240 en FMV). Evita ejecutar
+     * 2,227,240 instrucciones MIPS interpretadas por cada frame de fade-in/fade-out. */
+    if (target == 0x80105340u &&
+        fetch_word(0x00105340u) == 0x24080F00u &&
+        fetch_word(0x0010534Cu) == 0x24C65240u) {
+        uint8_t *ram = memory_get_ram_ptr();
+        if (ram) {
+            uint32_t a0 = cpu->gpr[4];
+            uint32_t a1 = cpu->gpr[5];
+            const uint8_t *lut = ram + 0x00105240u;
+            uint32_t t1 = 0, t2 = 0, t3 = 0, t4 = 0;
+            for (uint32_t i = 0; i < 3840u; i++) {
+                uint32_t w;
+                memcpy(&w, ram + (a0 & 0x001FFFFCu), 4);
+                uint32_t b0 = lut[w & 0xFFu];
+                uint32_t b1 = lut[(w >> 8) & 0xFFu];
+                uint32_t b2 = lut[(w >> 16) & 0xFFu];
+                uint32_t b3 = lut[(w >> 24) & 0xFFu];
+                t2 = b1 << 8;
+                t3 = b2 << 16;
+                t4 = b3 << 24;
+                t1 = b0 | t2 | t3 | t4;
+                memcpy(ram + (a1 & 0x001FFFFCu), &t1, 4);
+                a0 += 4u;
+                a1 += 4u;
+            }
+            cpu->gpr[4]  = a0;
+            cpu->gpr[5]  = a1;
+            cpu->gpr[6]  = 0x80105240u;
+            cpu->gpr[8]  = 0u;
+            cpu->gpr[9]  = t1;
+            cpu->gpr[10] = t2;
+            cpu->gpr[11] = t3;
+            cpu->gpr[12] = t4;
+            psx_advance_cycles(3840u * 4u);
+            cpu->pc = 0;
+            return 1;
+        }
+    }
     if (target == 0x8001A954u) site_note(&g_site_interp);
     /* Decline when the target page no longer matches the static game image.
      * Returning 0 lets the JAL/JALR handler fall through to local-flow interp
@@ -2350,23 +2411,6 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     if (addr == 0x8001A954u)      site_note(&g_site_dd954);   /* loop head re-dispatch */
     else if (addr == 0x80046264u) site_note(&g_site_dd264);   /* loop tail re-dispatch */
 
-    static int s_fmv_ram_dumped = 0;
-    if (!s_fmv_ram_dumped && (addr >= 0x800FD000u && addr <= 0x800FE500u)) {
-        s_fmv_ram_dumped = 1;
-        uint8_t *ram = memory_get_ram_ptr();
-        if (ram) {
-            FILE *f = fopen("sdmc:/switch/tekken3/fmv_ram_dump.bin", "wb");
-            if (!f) f = fopen("fmv_ram_dump.bin", "wb");
-            if (f) {
-                fwrite(ram + 0x000F0000u, 1, 0x10000u, f);
-                fflush(f);
-                fsync(fileno(f));
-                fclose(f);
-                printf("[FMV_DUMP] Successfully dumped 64KB RAM window (0xF0000-0x100000) to fmv_ram_dump.bin!\n");
-                fflush(stdout);
-            }
-        }
-    }
     int prev = g_dirty_interp_active;
     g_dirty_interp_active = 1;
     int prev_phase = g_exec_phase;
@@ -2750,14 +2794,6 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     }
 
 #ifdef PSX_HAS_GAME_DISPATCH
-    if ((addr & 0xFFFFF000u) == 0x800FE000u || (addr & 0xFFFFF000u) == 0x800FD000u) {
-        static uint32_t s_fmv_interp_log = 0;
-        if (s_fmv_interp_log++ < 10) {
-            printf("[FMV_Interp_Entry #%u] addr=0x%08X ra=0x%08X sp=0x%08X a0=0x%08X\n",
-                   s_fmv_interp_log, addr, cpu->gpr[31], cpu->gpr[29], cpu->gpr[4]);
-            fflush(stdout);
-        }
-    }
 #ifndef PSX_NO_DEBUG_TOOLS
     xprobe_event(cpu->gpr[31], XOP_DD, XSITE_DD, addr, 0u, cpu->gpr[29], cpu->gpr[31], 0);
 #endif
@@ -2765,8 +2801,14 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
      * native-safe. Dirty overlay pages and pages whose text bytes diverged from
      * the original EXE image fall through to interpret the live RAM bytes.
      * Note: psx_dispatch_game_compiled() already validates native_ok internally,
-     * so calling it directly avoids a duplicate lookup + range check. */
-    if (psx_game_address_in_text(addr)) {
+     * so calling it directly avoids a duplicate lookup + range check.
+     *
+     * Guard against the runtime overlay buffer (phys > 0x000B74A8, except the 4
+     * stubs at 0x000D35C4..0x000D35E8): those addresses have no static compiled
+     * entries in k_psx_game_dispatch, and setting clean_game_text_miss = 1 for
+     * them forced a 22,325-entry binary search on EVERY interpreted instruction. */
+    if (psx_game_address_in_text(addr) &&
+        (phys <= 0x000B74A8u || (phys >= 0x000D35C4u && phys <= 0x000D35E8u))) {
         if (!game_compiled_miss_cached(addr)) {
             g_mixed_depth++;
             {
