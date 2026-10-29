@@ -631,12 +631,6 @@ static void prof_thread_fn(void*) {
         if (++watchdog_counter >= 1000) {
             watchdog_counter = 0;
 
-            // Salida de emergencia inmediata incondicional con Plus + Minus desde el hilo Watchdog (Core 2)
-            // Invocamos svcExitProcess() a nivel de kernel para salir instantáneamente a hbmenu sin deadlocks de libc.
-            if (switch_input_check_immediate_exit()) {
-                svcExitProcess();
-            }
-
             u64 now_tick = armGetSystemTick();
             uint64_t cur_frame = s_frame_count;
 
@@ -675,12 +669,25 @@ static void prof_thread_fn(void*) {
     }
 }
 
+static bool s_prof_thread_started = false;
+
 static void prof_start(void) {
     s_prof_run = true;
-    if (R_SUCCEEDED(threadCreate(&s_prof_thread, prof_thread_fn, NULL, NULL, 0x4000, 0x3B, 2)))
+    if (R_SUCCEEDED(threadCreate(&s_prof_thread, prof_thread_fn, NULL, NULL, 0x4000, 0x3B, 2))) {
         threadStart(&s_prof_thread);
-    else
+        s_prof_thread_started = true;
+    } else {
         printf("[Prof] threadCreate failed\n");
+    }
+}
+
+static void prof_stop(void) {
+    if (s_prof_thread_started) {
+        s_prof_run = false;
+        threadWaitForExit(&s_prof_thread);
+        threadClose(&s_prof_thread);
+        s_prof_thread_started = false;
+    }
 }
 
 static void prof_report(uint64_t frame) {
@@ -1121,12 +1128,25 @@ static void switch_vblank_callback(void) {
     u64 input_ns = armTicksToNs(input_end - input_start);
     s_win_input_ns += input_ns;
 
-    // 2. Manejo de bucle principal y salida rápida con botones (Plus + Minus)
-    if (!appletMainLoop() || switch_input_is_exit_requested()) {
-        printf("[VBlank] Solicitud de salida detectada en frame %llu. Saliendo...\n",
+    // 2. Manejo de bucle principal del sistema (cierre oficial desde menú HOME de Switch)
+    if (!appletMainLoop()) {
+        printf("[VBlank] !appletMainLoop() detectado en frame %llu. Iniciando apagado limpio...\n",
                (unsigned long long)s_frame_count);
         if (s_sd_log) fflush(s_sd_log);
+        prof_stop();
+        cd_prefetch_shutdown();
         memcard_flush_all();
+        switch_audio_shutdown();
+        Deko3DRenderer::Instance().Shutdown();
+        if (s_sd_log) {
+            printf("[VBlank] Apagado limpio completado.\n");
+            fflush(s_sd_log);
+            fsync(fileno(s_sd_log));
+            fclose(s_sd_log);
+            s_sd_log = NULL;
+        }
+        romfsExit();
+        socketExit();
         exit(0);
     }
 
@@ -1492,7 +1512,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v29 - Intelligent Audio Track Matching)\n", __DATE__, __TIME__);
+    printf("   Build: %s %s (v32 - Remove Plus+Minus Exit Combo & Clean Applet Shutdown)\n", __DATE__, __TIME__);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {
@@ -1801,6 +1821,7 @@ int main(int argc, char* argv[]) {
 
     // 10. Limpieza ordenada si el juego termina
     printf("[Main] Finalizando subsistemas...\n");
+    prof_stop();
     cd_prefetch_shutdown();
     memcard_flush_all();
     switch_overlay_capture_write_json();

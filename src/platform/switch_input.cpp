@@ -148,13 +148,12 @@ void SwitchInput::Update() {
         }
     }
 
-    // Combinación de salida rápida / retorno a Homebrew Menu: Plus (+) y Minus (-) a la vez en P1
-    u64 p1Held = padGetButtons(&m_pads[0]);
-    if ((p1Held & HidNpadButton_Plus) && (p1Held & HidNpadButton_Minus)) {
-        m_exitRequested = true;
-    }
+    // NOTA: Se eliminó la combinación de salida Plus (+) + Minus (-) porque en Tekken 3
+    // Start + Select es una combinación nativa del juego (ej. reiniciar posición / menú en Practice Mode)
+    // y el cierre de la aplicación se maneja de forma nativa mediante el botón HOME de la Switch.
 
     // Combinación para abrir menú de cambio de mandos en plena partida: ZL + ZR + Minus
+    u64 p1Held = padGetButtons(&m_pads[0]);
     u64 p1Down = padGetButtonsDown(&m_pads[0]);
     if ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Minus)) {
         ShowControllerApplet();
@@ -192,19 +191,11 @@ void switch_input_show_controller_applet(void) {
 }
 
 bool switch_input_is_exit_requested(void) {
-    return SwitchInput::Instance().IsExitRequested();
+    return false;
 }
 
 bool switch_input_check_immediate_exit(void) {
-    static PadState s_exit_pad;
-    static bool s_exit_pad_inited = false;
-    if (!s_exit_pad_inited) {
-        padInitializeDefault(&s_exit_pad);
-        s_exit_pad_inited = true;
-    }
-    padUpdate(&s_exit_pad);
-    u64 held = padGetButtons(&s_exit_pad);
-    return ((held & HidNpadButton_Plus) && (held & HidNpadButton_Minus));
+    return false;
 }
 
 }

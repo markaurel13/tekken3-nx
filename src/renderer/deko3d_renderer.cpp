@@ -172,7 +172,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
         m_fenceInFlight[i] = false;
     }
 
-    // 4. Configurar Layout de Framebuffers (1280x720 RGBA8)
+    // 4. Configurar Layout de Framebuffers (1920x1080 RGBA8 con soporte dinámico 1080p Docked / 720p Handheld)
     dk::ImageLayout fbLayout;
     dk::ImageLayoutMaker{m_device}
         .setFlags(DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine)
@@ -216,8 +216,10 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     m_rawVramImage.initialize(rawLayout, m_memImages, curImgOffset);
     curImgOffset += rawLayout.getSize();
 
-    // 7. Crear Swapchain
-    m_swapchain = dk::SwapchainMaker{m_device, nwindowGetDefault(), fbPointers.data(), NumFramebuffers}.create();
+    // 7. Configurar NWindow a 1920x1080 máximo y crear Swapchain (con recorte dinámico 720p Handheld / 1080p Docked)
+    NWindow* win = nwindowGetDefault();
+    nwindowSetDimensions(win, TargetWidth, TargetHeight);
+    m_swapchain = dk::SwapchainMaker{m_device, win, fbPointers.data(), NumFramebuffers}.create();
 
     // 8. Cargar Shaders compilados
     uint32_t vshOffset = 0;
@@ -360,8 +362,11 @@ void Deko3DRenderer::BeginFrame() {
 }
 
 void Deko3DRenderer::Shutdown() {
+    if (!m_initialized) return;
+    m_initialized = false;
     WaitPendingFences();
     if (m_queue) m_queue.waitIdle();
+    m_cmdBuf = dk::CmdBuf{};
     m_swapchain.destroy();
     for (unsigned i = 0; i < NumFrameResources; i++) {
         m_cmdBufPool[i].destroy();
@@ -1076,29 +1081,45 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 
     dk::ImageView colorTarget{ m_framebuffers[m_curSlot] };
 
+    // Resolución de salida dinámica automática: 1920x1080 nativo en Dock (TV) / 1280x720 nativo en Portátil (Handheld)
+    const bool isDocked = (appletGetOperationMode() == AppletOperationMode_Console);
+    const uint32_t curOutW = isDocked ? TargetWidth : HandheldWidth;
+    const uint32_t curOutH = isDocked ? TargetHeight : HandheldHeight;
+
     // Aspecto de presentación configurable: 4:3 con Pillarbox o 16:9 pantalla completa
     uint32_t dstW, dstX, dstY, dstH;
     if (m_widescreen) {
-        dstW = TargetWidth;  // 1280
+        dstW = curOutW;                  // 1920 (Docked) / 1280 (Handheld)
         dstX = 0;
         dstY = 0;
-        dstH = TargetHeight; // 720
+        dstH = curOutH;                  // 1080 (Docked) / 720 (Handheld)
     } else {
-        dstW = TargetHeight * 4 / 3; // 960
-        dstX = (TargetWidth - dstW) / 2; // 160
+        dstW = curOutH * 4 / 3;          // 1440 (Docked) / 960 (Handheld)
+        dstX = (curOutW - dstW) / 2;     // 240  (Docked) / 160 (Handheld)
         dstY = 0;
-        dstH = TargetHeight; // 720
+        dstH = curOutH;                  // 1080 (Docked) / 720 (Handheld)
     }
 
-    static bool s_first_hd_present_logged = false;
-    if (!s_first_hd_present_logged) {
-        s_first_hd_present_logged = true;
-        printf("[Deko3D] %s Present activo: src=(%u,%u %ux%u) hr_src=(%u,%u %ux%u) -> dst=(%u,%u %ux%u) [SSAA=%ux]\n",
+    static int s_last_docked_mode = -1;
+    if ((int)isDocked != s_last_docked_mode) {
+        s_last_docked_mode = (int)isDocked;
+        nwindowSetCrop(nwindowGetDefault(), 0, 0, curOutW, curOutH);
+        printf("[Deko3D] %s Present activo (%s): src=(%u,%u %ux%u) hr_src=(%u,%u %ux%u) -> dst=(%u,%u %ux%u sobre %ux%u) [SSAA=%ux]\n",
                m_widescreen ? "16:9 Widescreen" : "4:3 HD",
+               isDocked ? "DOCKED 1080p" : "HANDHELD 720p",
                dispX, dispY, w, h, dispX * m_internalScale, dispY * m_internalScale, w * m_internalScale, h * m_internalScale,
-               dstX, dstY, dstW, dstH, m_internalScale);
+               dstX, dstY, dstW, dstH, curOutW, curOutH, m_internalScale);
         fflush(stdout);
     }
+
+    // CRÍTICO: Restaurar el Scissor al tamaño completo del framebuffer de salida (1920x1080)
+    // antes de invocar clearColor sobre colorTarget. En el hardware Maxwell / Deko3D, clearColor
+    // respeta el DkScissor activo; si se deja el Scissor del último FlushBatch de PS1
+    // (ej. clip=(0,98..367,166) -> 736x138), clearColor solo limpia ese pequeño recuadro,
+    // dejando restos congelados de la imagen anterior en las franjas negras laterales al alternar
+    // entre Docked (1920x1080) y Handheld (1280x720).
+    DkScissor fullOutScissor{ 0, 0, TargetWidth, TargetHeight };
+    m_cmdBuf.setScissors(0, { fullOutScissor });
 
     if (di.disabled) {
         m_cmdBuf.bindRenderTargets(&colorTarget);
@@ -1107,7 +1128,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     } else {
         m_cmdBuf.bindRenderTargets({});
         if (!m_widescreen) {
-            // Limpiar bandas laterales a negro puro (pillarboxing 4:3)
+            // Limpiar el 100% del framebuffer de salida a negro puro (pillarboxing 4:3)
             m_cmdBuf.bindRenderTargets(&colorTarget);
             m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
             m_cmdBuf.bindRenderTargets({});

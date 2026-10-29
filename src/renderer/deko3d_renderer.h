@@ -40,8 +40,10 @@ struct ViewportUniforms {
 class Deko3DRenderer {
 public:
     static constexpr unsigned NumFramebuffers = 3;
-    static constexpr uint32_t TargetWidth = 1280;
-    static constexpr uint32_t TargetHeight = 720;
+    static constexpr uint32_t TargetWidth = 1920;
+    static constexpr uint32_t TargetHeight = 1080;
+    static constexpr uint32_t HandheldWidth = 1280;
+    static constexpr uint32_t HandheldHeight = 720;
     static constexpr uint32_t VramWidth = 1024;
     static constexpr uint32_t VramHeight = 512;
     static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
