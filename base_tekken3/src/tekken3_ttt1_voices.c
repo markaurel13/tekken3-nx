@@ -7,6 +7,8 @@
 #include "spu.h"
 #include "tekken3_ttt1_assets.h"
 #include "tekken3_arcade_stages.h"
+#include "switch_file_io.h"
+#include "audio_limiter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,23 +90,21 @@ static int load_bank(unsigned p) {
     if(!root)return 0;
     char path[4096];
     if(snprintf(path,sizeof path,"%s/%s-voices.juv",root,tekken3_guest_data_prefix_for(p))>=(int)sizeof path)return 0;
-    FILE *f=fopen(path,"rb");
-    if(!f){
+    size_t file_size = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &file_size);
+    if(!cached || file_size < 32){
         k->mute=1;
         fprintf(stderr,"%s voices: no voice bank, character cries muted\n",tekken3_guest_name_for(p));
         return 0;
     }
-    /* The pack states its own length; the old fixed 527148 was Jun's. */
-    unsigned char head[32];
-    if(fread(head,1,sizeof head,f)!=sizeof head){fclose(f);return 0;}
+    const unsigned char *head = cached;
     unsigned size=rd32(head+8), count=rd32(head+12);
     if(size<32 || size>8u*1024*1024 || count<1 || count>MAX_SAMPLES ||
-       size<32+count*16){fclose(f);return 0;}
+       size<32+count*16 || size != file_size) return 0;
     unsigned char *data=(unsigned char*)malloc(size);
-    if(!data){fclose(f);return 0;}
-    memcpy(data,head,sizeof head);
-    int ok=fread(data+sizeof head,1,size-sizeof head,f)==size-sizeof head && fgetc(f)==EOF;
-    fclose(f);
+    if(!data) return 0;
+    memcpy(data, cached, size);
+    int ok=1;
     unsigned char digest[32];char hash[65];
     if(ok) {
         psx_sha256_compute(data,size,digest);
@@ -265,7 +265,7 @@ void __wrap_spu_render(int16_t *out,int frames) {
             if(!audible)value=0;
             for(unsigned ch=0;ch<2;ch++) {
                 int32_t mixed=(int32_t)out[f*2+ch]+value*main_volume[ch]/32768;
-                out[f*2+ch]=(int16_t)(mixed>32767?32767:mixed< -32768?-32768:mixed);
+                out[f*2+ch]=audio_soft_limit(mixed);
             }
         }
         if(v->pos==end)v->group=0;

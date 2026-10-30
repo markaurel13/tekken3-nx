@@ -60,6 +60,8 @@
 #include "psx_sdl.h"
 #include "tekken3_arcade_stages.h"
 #include "tekken3_stage_source.h"
+#include "switch_file_io.h"
+#include "audio_limiter.h"
 #include <math.h>
 #include <stdio.h>
 #include <math.h>
@@ -852,19 +854,18 @@ static int stage_supported(int arena) { return arena >= 0 && arena <= 12; }
 /* A format 3 (T3) or 4 (TTT) pack's file, checked; NULL otherwise. */
 static uint8_t *pack_read(int source, int stage, long *out_size, char *path, size_t path_size) {
     snprintf(path, path_size, "%s/stage%02d.ast", pack_dir_of(source), stage);
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    uint8_t *b = size > 64 ? malloc((size_t)size) : NULL;
-    int ok = b && fread(b, 1, (size_t)size, f) == (size_t)size;
-    fclose(f);
+    size_t sz = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &sz);
+    if (!cached || sz <= 64) return NULL;
+    uint8_t *b = (uint8_t *)malloc(sz);
+    if (!b) return NULL;
+    memcpy(b, cached, sz);
+    long size = (long)sz;
     uint16_t version = 0, number = 0; uint32_t total = 0;
-    if (ok) { memcpy(&version, b + 4, 2); memcpy(&number, b + 6, 2); memcpy(&total, b + 12, 4); }
+    memcpy(&version, b + 4, 2); memcpy(&number, b + 6, 2); memcpy(&total, b + 12, 4);
     int ttt = source == TEKKEN3_STAGE_TTT;
     unsigned want = ttt ? PACK_FORMAT_TTT : PACK_FORMAT;
-    if (!ok || memcmp(b, "ASTG", 4) || version != want || number != stage || total != (uint32_t)size
+    if (memcmp(b, "ASTG", 4) || version != want || number != stage || total != (uint32_t)size
         || (ttt && memcmp(b + 16, "TTTA", 4)) || !section(b, "VRAM") || !section(b, "TILE")
         || (ttt ? !section(b, "FAR2") || !section(b, "TRG2") || !section(b, "MISC")
                 : !section(b, "FARB") || !section(b, "FLOR") || !section(b, "TRIG"))) {
@@ -3430,7 +3431,7 @@ void tekken3_arcade_stages_thunder_mix(int16_t *out, int frames, int audible, co
     static int boost = -1, phase = -1;
     if (boost < 0) {
         const char *v = getenv("TEKKEN3_TTT1_SFX_VOLUME");
-        boost = v ? atoi(v) : 200;
+        boost = v ? atoi(v) : 140;
         if (boost < 0) boost = 0;
         if (boost > 800) boost = 800;
         const char *ph = getenv("TEKKEN3_TTT_THUNDER_PHASE");
@@ -3447,7 +3448,7 @@ void tekken3_arcade_stages_thunder_mix(int16_t *out, int frames, int audible, co
             for (unsigned k = 0; k < 2; k++) {
                 int32_t side = k && phase ? -value : value;
                 int32_t mixed = (int32_t)out[f * 2 + k] + side * main_volume[k] / 32768;
-                out[f * 2 + k] = (int16_t)(mixed > 32767 ? 32767 : mixed < -32768 ? -32768 : mixed);
+                out[f * 2 + k] = audio_soft_limit(mixed);
             }
         }
         if (t->pos >= t->frames) memset(t, 0, sizeof *t);

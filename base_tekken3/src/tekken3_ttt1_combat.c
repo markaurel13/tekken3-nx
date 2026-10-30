@@ -4,6 +4,7 @@
 #include "tekken3_ttt1_pack.h"
 #include "tekken3_ttt1_assets.h"
 #include "tekken3_fight_camera.h"
+#include "switch_file_io.h"
 #include "gpu_render.h"
 #include "gpu.h"
 #if defined(PSX_DEBUG_SERVER_LITE) || !defined(PSX_NO_DEBUG_TOOLS)
@@ -357,16 +358,18 @@ static void patch_base(uint32_t high_at,uint32_t low_at,unsigned reg,uint32_t ta
 static int load_tables(unsigned s,const char *root) {
     GuestCombat *c=&slots[s];
     char path[4096];snprintf(path,sizeof path,"%s/%s-tables.jst",root,tekken3_guest_moves_prefix_for(s));
-    FILE *f=fopen(path,"rb");if(!f)return 0;
-    unsigned char h[32];if(fread(h,1,32,f)!=32){fclose(f);return 0;}
+    size_t file_size = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &file_size);
+    if(!cached || file_size < 32) return 0;
+    const unsigned char *h = cached;
     uint32_t bytes=word(h+8),nr=word(h+12),np=word(h+16),nc=word(h+20);
     uint32_t fixed=nr*42+np+nc*4;
     if(word(h)!=0x3154534a || word(h+4)!=2 || nr<633 || nr>4096 ||
        np<1420 || np>65534 || (np&1) || nc<269 || nc>4096 ||
-       bytes<32+fixed || bytes>1024*1024 || word(h+24) || word(h+28)){fclose(f);return 0;}
-    unsigned char *p=malloc(bytes-32);if(!p){fclose(f);return 0;}
-    int ok=fread(p,1,bytes-32,f)==bytes-32 && fgetc(f)==EOF;fclose(f);
-    if(!ok){free(p);return 0;}
+       bytes<32+fixed || bytes>1024*1024 || word(h+24) || word(h+28) || bytes != file_size) return 0;
+    unsigned char *p=malloc(bytes-32);if(!p) return 0;
+    memcpy(p, cached + 32, bytes - 32);
+    int ok = 1;
     unsigned chunks=0,event_offset=0,event_bytes=0;
     for(unsigned at=fixed;ok && at<bytes-32;) {
         if(bytes-32-at<8){ok=0;break;}
@@ -483,17 +486,19 @@ static int load_combat(unsigned s) {
     GuestCombat *c=&slots[s];
     if(c->attempted)return c->loaded;c->attempted=1;
     const char *root=tekken3_ttt1_asset_root();if(!root)return 0;
-    char path[4096];FILE *f;
+    char path[4096];
     snprintf(path,sizeof path,"%s/%s-combat.jmv",root,tekken3_guest_moves_prefix_for(s));
-    if(!(f=fopen(path,"rb")))return 0;
-    unsigned char header[32];
-    if(fread(header,1,32,f)!=32 || word(header)!=0x314d554a || word(header+4)!=4){fclose(f);return 0;}
+    size_t file_size = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &file_size);
+    if(!cached || file_size < 32) return 0;
+    const unsigned char *header = cached;
+    if(word(header)!=0x314d554a || word(header+4)!=4) return 0;
     c->size=word(header+8);c->count=word(header+12);c->neutral=word(header+16);c->records=word(header+28);
     uint32_t ro=word(header+20),rn=word(header+24);
-    if(c->size>16*1024*1024 || c->count>RECORDS_MAX || !c->count || c->neutral>=c->count || c->records!=32+c->count*16 || c->records+c->count*56>c->size || ro>c->size || rn>(c->size-ro)/4){fclose(f);return 0;}
-    c->data=(unsigned char*)malloc(c->size);if(!c->data){fclose(f);return 0;}
-    memcpy(c->data,header,32);
-    int ok=fread(c->data+32,1,c->size-32,f)==c->size-32 && fgetc(f)==EOF;fclose(f);
+    if(c->size>16*1024*1024 || c->size != file_size || c->count>RECORDS_MAX || !c->count || c->neutral>=c->count || c->records!=32+c->count*16 || c->records+c->count*56>c->size || ro>c->size || rn>(c->size-ro)/4) return 0;
+    c->data=(unsigned char*)malloc(c->size);if(!c->data) return 0;
+    memcpy(c->data, cached, c->size);
+    int ok=1;
     for(unsigned i=0;ok && i<rn;i++) {
         uint32_t r=word(c->data+ro+i*4);
         if(r>c->size-4 || (r&3) || word(c->data+r)>=c->size)ok=0;
@@ -1724,18 +1729,19 @@ PSX_MOD_CONSTRUCTOR(register_ttt_hitspark) {
 static int read_hfx(const char *root,const char *prefix,const char *who,Hfx *out) {
     char path[4096];
     if(!root || snprintf(path,sizeof path,"%s/%s-hiteffect64.hfx",root,prefix)>=(int)sizeof path)return 0;
-    FILE *f=fopen(path,"rb");
-    if(!f) { fprintf(stderr,"TTT Hitspark: no %s, %s's strong-hit effect stays 32 x 32\n",path,who); return 0; }
-    enum { MOST=16+32*HFX_MAX+HFX_MAX*HFX_IMAGE };
-    unsigned char *p=malloc(MOST+1);
-    size_t n=p?fread(p,1,MOST+1,f):0;fclose(f);
-    unsigned images=n>=16?p[6]|p[7]<<8:0,palettes=n>=16?p[10]|p[11]<<8:0;
-    if(!p || n<16 || memcmp(p,"HFX6",4) || (p[4]|p[5]<<8)!=1 || (p[8]|p[9]<<8)!=HFX_SIDE ||
+    size_t n = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &n);
+    if(!cached) { fprintf(stderr,"TTT Hitspark: no %s, %s's strong-hit effect stays 32 x 32\n",path,who); return 0; }
+    unsigned images=n>=16?cached[6]|cached[7]<<8:0,palettes=n>=16?cached[10]|cached[11]<<8:0;
+    if(n<16 || memcmp(cached,"HFX6",4) || (cached[4]|cached[5]<<8)!=1 || (cached[8]|cached[9]<<8)!=HFX_SIDE ||
        !images || images>HFX_MAX || (palettes!=1 && palettes!=images) ||
        n!=16+32u*palettes+(size_t)images*HFX_IMAGE) {
         fprintf(stderr,"TTT Hitspark: %s is not a 64 x 64 effect pack, %s's stays 32 x 32\n",path,who);
-        free(p); return 0;
+        return 0;
     }
+    unsigned char *p=malloc(n);
+    if(!p) return 0;
+    memcpy(p, cached, n);
     out->data=p;out->images=images;out->palettes=palettes;out->flags=p[12]|p[13]<<8;
     fprintf(stderr,"TTT Hitspark: %s, %u images, %u palette(s)\n",who,images,palettes);
     return 1;

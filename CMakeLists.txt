@@ -235,6 +235,7 @@ add_executable(tekken3_nx
     src/tek_block_prof.c
     src/renderer/deko3d_renderer.cpp
     src/platform/switch_audio.cpp
+    src/platform/switch_file_io.c
     src/platform/switch_input.cpp
     base_tekken3/generated/SLUS_004.02_dispatch.c
     base_tekken3/generated/overlays_static.c

@@ -11,6 +11,8 @@
 #include "psx_runtime.h"
 #include "mod_plugins.h"
 #include "tekken3_ttt1_assets.h"
+#include "switch_file_io.h"
+#include "audio_limiter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,19 +79,17 @@ static int load_bank_for(unsigned p,int any_motion) {
     if(!root)return 0;
     char path[4096];
     if(snprintf(path,sizeof path,"%s/%s-sfx.jus",root,tekken3_guest_moves_prefix_for(p))>=(int)sizeof path)return 0;
-    FILE *f=fopen(path,"rb");
-    if(!f){fprintf(stderr,"%s sounds: no sound pack\n",tekken3_guest_name_for(p));return 0;}
-    unsigned char head[32];
-    if(fread(head,1,sizeof head,f)!=sizeof head){fclose(f);return 0;}
+    size_t file_size = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &file_size);
+    if(!cached || file_size < 32){fprintf(stderr,"%s sounds: no sound pack\n",tekken3_guest_name_for(p));return 0;}
+    const unsigned char *head = cached;
     unsigned size=rd32(head+8),count=rd32(head+12);
     int ok=rd32(head)==PACK_MAGIC && rd32(head+4)==1 && rd32(head+16)==44100 &&
-           size>=32 && size<=64u*1024*1024 && count<=SFX_INDEXES && size>=32+count*16;
+           size>=32 && size<=64u*1024*1024 && count<=SFX_INDEXES && size>=32+count*16 && size == file_size;
     unsigned char *data=ok?malloc(size):NULL;
     if(data) {
-        memcpy(data,head,sizeof head);
-        ok=fread(data+sizeof head,1,size-sizeof head,f)==size-sizeof head && fgetc(f)==EOF;
+        memcpy(data, cached, size);
     }
-    fclose(f);
     uint32_t next=32+count*16;
     for(unsigned i=0;ok && data && i<count;i++) {
         const unsigned char *e=data+32+i*16;
@@ -396,7 +396,7 @@ void tekken3_ttt1_sfx_mix(int16_t *out,int frames,int audible,const int16_t main
     static int boost=-1;
     if(boost<0) {
         const char *v=getenv("TEKKEN3_TTT1_SFX_VOLUME");
-        boost=v?atoi(v):200;
+        boost=v?atoi(v):140;
         if(boost<0)boost=0;
         if(boost>800)boost=800;
     }
@@ -408,12 +408,12 @@ void tekken3_ttt1_sfx_mix(int16_t *out,int frames,int audible,const int16_t main
             int32_t value=(int16_t)(q[0]|(unsigned)q[1]<<8);
             /* The pack holds the arcade driver's level relative to the
              * voices; against T3's own sounds it plays quiet, so it gets a
-             * boost (TEKKEN3_TTT1_SFX_VOLUME, percent, default 200). */
+             * boost (TEKKEN3_TTT1_SFX_VOLUME, percent, default 140). */
             value=value*gain/100*boost/100;
             if(!audible)value=0;
             for(unsigned k=0;k<2;k++) {
                 int32_t mixed=(int32_t)out[f*2+k]+value*main_volume[k]/32768;
-                out[f*2+k]=(int16_t)(mixed>32767?32767:mixed< -32768?-32768:mixed);
+                out[f*2+k]=audio_soft_limit(mixed);
             }
         }
         if(ch->pos>=ch->frames)memset(ch,0,sizeof *ch);

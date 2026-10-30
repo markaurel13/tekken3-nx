@@ -11,6 +11,7 @@ extern "C" {
 // Funciones C para interfacing con el runtime de psxrecomp
 bool switch_audio_init(int sample_rate);
 void switch_audio_update(void);
+void switch_audio_pump_if_needed(void);
 void switch_audio_queue(const int16_t* pcm_stereo, size_t frames);
 void switch_audio_shutdown(void);
 
@@ -35,6 +36,7 @@ public:
     static SwitchAudio& Instance();
 
     bool Init(int sampleRate = DefaultSampleRate);
+    bool IsInitialized() const { return m_initialized; }
     void Update();
     void QueueFrames(const int16_t* pcmStereo, size_t frames);
     void Shutdown();

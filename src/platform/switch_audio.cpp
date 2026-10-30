@@ -1,4 +1,5 @@
 #include "switch_audio.h"
+#include "audio_limiter.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -295,6 +296,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
     int16_t peak_l_win = 0;
     int16_t peak_r_win = 0;
     uint64_t clipped_samples_win = 0;
+    uint64_t compressed_samples_win = 0;
 
     // --- Diagnostico: temporizacion de ticks de audren y tasa real de consumo ---
     u64 prev_tick = 0;
@@ -337,8 +339,9 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
 
         if (++health_tick_cnt >= 200) {
             u32 voice_drops = audrvVoiceGetVoiceDropsCount(&self->m_drv, 0);
-            printf("[AudioHealth] peak=(L:%d, R:%d) clip=%llu occ=[min=%u, max=%u] pitch=%.4f voice_drops=%u underruns=%llu\n",
-                   peak_l_win, peak_r_win, (unsigned long long)clipped_samples_win,
+            printf("[AudioHealth] peak=(L:%d, R:%d) comp=%llu clip=%llu occ=[min=%u, max=%u] pitch=%.4f voice_drops=%u underruns=%llu\n",
+                   peak_l_win, peak_r_win, (unsigned long long)compressed_samples_win,
+                   (unsigned long long)clipped_samples_win,
                    min_occ_win, max_occ_win, current_pitch, voice_drops,
                    (unsigned long long)g_prof_audio_underruns);
             u32 played = audrvVoiceGetPlayedSampleCount(&self->m_drv, 0);
@@ -355,6 +358,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             peak_l_win = 0;
             peak_r_win = 0;
             clipped_samples_win = 0;
+            compressed_samples_win = 0;
         }
 
         // 1. Priming inicial: acumular al menos 16 bloques (~266 ms) antes de comenzar a alimentar audren.
@@ -400,6 +404,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
                     int16_t ar = (sr < 0) ? (int16_t)-sr : sr;
                     if (al > peak_l_win) peak_l_win = al;
                     if (ar > peak_r_win) peak_r_win = ar;
+                    if (al > 24576 || ar > 24576) compressed_samples_win++;
                     if (al >= 32700 || ar >= 32700) clipped_samples_win++;
                 }
                 memcpy(self->m_audioBuffers[self->m_currentBuffer], s_ptr, BufferSizeBytes);
@@ -442,12 +447,18 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
     }
 }
 
+static u64 s_last_audio_update_tick = 0;
+
 void SwitchAudio::Update() {
     if (!m_initialized) return;
 
     u64 t_spu0 = armGetSystemTick();
+    s_last_audio_update_tick = t_spu0;
     alignas(64) int16_t tempPcm[BufferSamples];
     spu_render(tempPcm, FramesPerStep);
+    for (size_t s = 0; s < BufferSamples; s++) {
+        tempPcm[s] = audio_soft_limit(tempPcm[s]);
+    }
     u64 t_spu1 = armGetSystemTick();
     uint64_t spu_ns = armTicksToNs(t_spu1 - t_spu0);
     g_prof_audio_spu_ns += spu_ns;
@@ -543,6 +554,20 @@ bool switch_audio_init(int sample_rate) {
 
 void switch_audio_update(void) {
     SwitchAudio::Instance().Update();
+}
+
+void switch_audio_pump_if_needed(void) {
+    if (!SwitchAudio::Instance().IsInitialized()) return;
+    u64 now = armGetSystemTick();
+    if (s_last_audio_update_tick == 0) {
+        s_last_audio_update_tick = now;
+        return;
+    }
+    // 320.000 ticks = 1 frame a 60 Hz (19.2 MHz / 60)
+    constexpr u64 TICKS_PER_AUDIO_FRAME = 320000;
+    if (now - s_last_audio_update_tick >= TICKS_PER_AUDIO_FRAME) {
+        SwitchAudio::Instance().Update();
+    }
 }
 
 void switch_audio_queue(const int16_t* pcm_stereo, size_t frames) {

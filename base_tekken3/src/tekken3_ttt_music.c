@@ -43,6 +43,7 @@
 #include "spu.h"
 #include "tekken3_stage_source.h"
 #include "tekken3_bgm_select.h"
+#include "audio_limiter.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -611,7 +612,7 @@ int tekken3_ttt_music_mix(int16_t *out, int frames, int audible, const int16_t m
         y[1] = (y[1] * cd_r) >> 15;
         for (int ch = 0; ch < 2; ch++) {
             int32_t v = y[ch] * gain / 100 * main_volume[ch] / 32768, m = out[f * 2 + ch] + v;
-            out[f * 2 + ch] = (int16_t)(m > 32767 ? 32767 : m < -32768 ? -32768 : m);
+            out[f * 2 + ch] = audio_soft_limit(m);
         }
     }
     return 1;
