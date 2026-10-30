@@ -153,6 +153,7 @@ static void upload_pack(void) {
         uint16_t *pixels=malloc(2u*w*h);
         if(pixels) {
             memcpy(pixels,p+8,2u*w*h);
+            psx_mod_gpu_high_vram_tag("wolf");  /* [HighVram_CLASH_Diag] */
             psx_mod_gpu_high_vram_upload((int)x,(int)y,(int)w,(int)h,pixels);
             free(pixels);
         }

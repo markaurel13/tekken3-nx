@@ -199,6 +199,13 @@ static int s_trig_ps1;
 static int s_log = -1;
 static unsigned s_frames;
 static unsigned s_stat_tiles, s_stat_floor, s_stat_far, s_stat_cone, s_stat_behind;
+/* [Floor_Rep_Diag]: H2, the floor's per-cell whole-quad<->split
+ * representation changing between frames with a static camera (texture-side
+ * seams flickering). The decision key (whole quad, or 2 triangles when
+ * nearq) and the split<11 budget; flips counted against the last frame. */
+static unsigned s_floor_split, s_floor_quad, s_floor_budget, s_floor_flips;
+static unsigned char s_floor_repr[100][4];
+static unsigned s_floor_repr_gen = ~0u;
 /* TTT Stages S4: the TTT stages' animation state (section "TTT Stages S4" below) */
 static struct {
     unsigned a98, a9a;                  /* 0x80243A98 / 0x80243A9A, u16 */
@@ -720,6 +727,86 @@ int tekken3_stage_high_vram_used(int x, int y, int w, int h) {
     return 0;
 }
 
+/* [HighVram_CLASH_Diag]: every runtime write to the upper half passes here
+ * (called from psx_mod_gpu_high_vram_upload, tagged with the writer). A
+ * write overlapping the loaded stage pack's rectangles (walls, floor, far
+ * background), its animated texture or a TTT stage's moving-texture
+ * destinations is the stage textures' flicker (hypothesis H1: the fight's
+ * spark cells, palettes, lasers or the wolf polluting the stage's
+ * textures). y, h in the upper half's 512..1023 coordinates. */
+void tekken3_stage_vram_write_watch(const char *tag, int x, int y, int w, int h) {
+    static struct { const char *tag; unsigned n; } s_by[8];
+    static unsigned s_nb, s_total, s_clash, s_gen = ~0u;
+    static int s_last_stage = -1;
+    unsigned now_gen = s_pack_generation;
+    if (now_gen != s_gen) {         /* a pack loaded or freed: close + start over */
+        if (s_nb) {                 /* the finished stage's whole-session mix */
+            fprintf(stdout, "[HighVram_Watch] stg=%d writes=%u:", s_last_stage, s_total);
+            for (unsigned j = 0; j < s_nb; j++) fprintf(stdout, " %s=%u", s_by[j].tag, s_by[j].n);
+            fprintf(stdout, " clash=%u\n", s_clash);
+            fflush(stdout);
+        }
+        s_gen = now_gen; s_nb = 0; s_total = 0; s_clash = 0;
+        memset(s_by, 0, sizeof s_by);
+    }
+    unsigned i = 0;
+    for (; i < s_nb && s_by[i].tag != tag; i++) {}
+    if (i == s_nb) {
+        if (s_nb == 8) i = 7;
+        else s_by[s_nb++].tag = tag;
+    }
+    s_by[i].n++;
+    s_total++;
+    s_last_stage = s_pack.stage;
+    /* the culprit: like tekken3_stage_high_vram_used, but naming what. The
+     * pack's own uploads at its load are always its own rectangles (they are
+     * the rect list itself): pack-tag writes are never a clash. */
+    const Pack *p = &s_pack;
+    const char *what = NULL; int rx = 0, ry = 0, rw = 0, rh = 0;
+    if (tanm_overlap(x, y, w, h)) {
+        static const int16_t moves[][5] = {
+            {3, 0x10, 0x280, 16, 64}, {3, 0x10, 0x2C0, 16, 64}, {3, 0x50, 0x300, 16, 64},
+            {6, 0x58, 0x2C0, 8, 64}, {6, 0x90, 0x230, 16, 32}, {6, 0, 0x240, 16, 64}, {6, 0, 0x200, 16, 64},
+            {7, 0x20, 0x3C0, 16, 64}};
+        unsigned stg = p->stage;
+        for (unsigned m = 0; m < sizeof moves / sizeof *moves && !what; m++)
+            if (moves[m][0] == stg && overlap(x, y, w, h, moves[m][1], moves[m][2], moves[m][3], moves[m][4])) {
+                what = "tanm"; rx = moves[m][1]; ry = moves[m][2]; rw = moves[m][3]; rh = moves[m][4];
+            }
+    }
+    if (!what && p->aframes && overlap(x, y, w, h, p->ax, p->ay, p->aw, p->ah)) {
+        what = "anim"; rx = p->ax; ry = p->ay; rw = p->aw; rh = p->ah;
+    }
+    if (!what) {
+        const uint8_t *o = p->file ? section(p->file, "VRAM") : NULL;
+        if (o) {
+            uint32_t n; memcpy(&n, o, 4); o += 4;
+            for (uint32_t k = 0; k < n && !what; k++) {
+                uint16_t r[4]; memcpy(r, o, 8); o += 8 + 2u * r[2] * r[3];
+                if (overlap(x, y, w, h, r[0], r[1], r[2], r[3])) {
+                    what = "vram"; rx = r[0]; ry = r[1]; rw = r[2]; rh = r[3];
+                }
+            }
+        }
+    }
+    if (what && strcmp(tag, "pack") != 0) {
+        unsigned shown = ++s_clash;
+        if (shown <= 40 || (shown % 120) == 0) {
+            fprintf(stdout,
+                "[HighVram_CLASH] #%u %s wrote (%d,%d) %ux%d over stage %d(%s) %s rect (%d,%d) %ux%d\n",
+                shown, tag, x, y, w, h, p->stage,
+                p->source == TEKKEN3_STAGE_TTT ? "TTT" : "T3", what, rx, ry, rw, rh);
+            fflush(stdout);
+        }
+    }
+    if ((s_total % 300) == 0) {     /* the whole session's mix, per tag */
+        fprintf(stdout, "[HighVram_Watch] stg=%d writes=%u:", p->stage, s_total);
+        for (unsigned j = 0; j < s_nb; j++) fprintf(stdout, " %s=%u", s_by[j].tag, s_by[j].n);
+        fprintf(stdout, " clash=%u\n", s_clash);
+        fflush(stdout);
+    }
+}
+
 static void anim_reset(void);
 static void storm_reset(void);
 static void ttt_anim_reset(void);
@@ -867,6 +954,7 @@ static int pack_load_from(int source, int stage) {
     /* VRAM: rectangles in the upper half */
     o = section(b, "VRAM");
     uint32_t n; memcpy(&n, o, 4); o += 4;
+    psx_mod_gpu_high_vram_tag("pack");      /* [HighVram_CLASH_Diag] */
     for (uint32_t i = 0; i < n; i++) {
         uint16_t r[4]; memcpy(r, o, 8); o += 8;
         if (!psx_mod_gpu_high_vram_upload(r[0], r[1], r[2], r[3], (const uint16_t *)o)) {
@@ -892,6 +980,24 @@ static int pack_load_from(int source, int stage) {
         o += 2u * r[2] * r[3];
     }
     s_pack_generation++;
+    /* [PackVRAM_Diag]: the rectangles this pack holds in the upper half, at
+     * each load. Runtime writes ([HighVram_CLASH]) are checked against
+     * these: a write inside them is stage texture pollution (flicker H1). */
+    {
+        const uint8_t *v = section(b, "VRAM");
+        if (v) {
+            uint32_t rn; memcpy(&rn, v, 4); v += 4;
+            fprintf(stdout, "[PackVRAM] stg=%d(%s) gen=%u rects=%u", p->stage,
+                    source == TEKKEN3_STAGE_TTT ? "TTT" : "T3", s_pack_generation, rn);
+            for (uint32_t k = 0; k < rn && k < 24; k++) {
+                uint16_t r[4]; memcpy(r, v, 8); v += 8 + 2u * r[2] * r[3];
+                fprintf(stdout, " (%d,%d %ux%u)", r[0], r[1], r[2], r[3]);
+            }
+            fprintf(stdout, p->aframes ? " anim=(%d,%d %ux%u f%u t%u)\n" : "\n",
+                    p->ax, p->ay, p->aw, p->ah, p->aframes, p->aperiod);
+            fflush(stdout);
+        }
+    }
     /* objects: models, then the drawing calls (T3's stages 3 and 11; TTT's
      * stage 3, its stage 11 helicopter flying in the rankings only: TTT Stages
      * S4), then (format 4) the model frame */
@@ -1098,10 +1204,22 @@ static void tj_begin(unsigned hook) {
 #define TTT_OT_LINK  1010
 static uint32_t s_ttt_ot;
 static unsigned s_draws, s_ttt_ot_draw = ~0u;   /* stage frames drawn; the one the OT was set up for */
+/* B130: the buffer() the floor hook read this s_draws.
+ * 0x800A08F0 advances inside 0x8006D014 (between floor and tiles), so
+ * buffer() can flip between the floor hook and stage_draw; both must use
+ * the same half or their primitives land in different OT buffers and the
+ * GPU only processes one, causing every-other-frame tile flicker.
+ * s_floor_buffer is set once per s_draws by floor_draw and re-used by
+ * stage_draw so that floor and tiles always go into the same DMA buffer. */
+static unsigned s_floor_buffer = 0;
+static unsigned s_floor_buffer_draws = ~0u;
 
 static uint32_t ttt_ot(void) {
     if (s_ttt_ot_draw != s_draws) {
-        s_ttt_ot = s_memory + BUFFER_BYTES * buffer();
+        /* B130: use floor_draw's captured buffer so TTT tiles and floor share
+         * the same DMA buffer every frame. */
+        unsigned b = (s_floor_buffer_draws == s_draws) ? s_floor_buffer : buffer();
+        s_ttt_ot = s_memory + BUFFER_BYTES * b;
         psx_mod_write_word(s_ttt_ot, 0xFFFFFFu);
         for (unsigned i = 1; i < TTT_OT_RANKS; i++)
             psx_mod_write_word(s_ttt_ot + 4 * i, (s_ttt_ot + 4 * (i - 1)) & 0xFFFFFFu);
@@ -1148,7 +1266,11 @@ static unsigned s_t3_ot_draw = ~0u;
 
 static uint32_t t3_ot(void) {
     if (s_t3_ot_draw != s_draws) {
-        s_t3_ot = s_memory + BUFFER_BYTES * buffer();
+        /* B130: use floor_draw's captured buffer (same as floor_draw sets
+         * s_t3_ot_draw = ~0 before calling here, so this always re-runs from
+         * floor; the guard prevents re-init in stage_draw's t3_ot_link). */
+        unsigned b = (s_floor_buffer_draws == s_draws) ? s_floor_buffer : buffer();
+        s_t3_ot = s_memory + BUFFER_BYTES * b;
         psx_mod_write_word(s_t3_ot + 4 * T3_OT_END, 0xFFFFFFu);
         psx_mod_write_word(s_t3_ot + 4 * T3_OT_WIDE, (s_t3_ot + 4 * T3_OT_END) & 0xFFFFFFu);
         s_t3_ot_draw = s_draws;
@@ -2229,6 +2351,7 @@ static void anim_tick(void) {
                     s_anim_upload_cnt, p->stage, f, p->ax, p->ay, p->aw, p->ah);
             fflush(stdout);
         }
+        psx_mod_gpu_high_vram_tag("anim");      /* [HighVram_CLASH_Diag] */
         psx_mod_gpu_high_vram_upload(p->ax, p->ay, p->aw, p->ah, p->apixels + (size_t)f * p->aw * p->ah);
         if (s_probe) fprintf(s_probe, "tex %u %d %u\n", psx_mod_read_word(0x800A08F0u), p->stage, f);
         s_anim_count = 0;
@@ -2746,10 +2869,23 @@ static void arcade_floor(const View *w, const Screen *s, int emit) {
                 }
                 int nearq = ((uint32_t)(w->pitch - 0x400)) < 0x201u;
                 for (int k = 0; k < 4; k++) if (sz[vi[k]] < e8) nearq = 1;
+                /* [Floor_Rep_Diag]: what this cell gets this frame, and
+                 * whether it flips against the last one (H2) */
+                unsigned ar = (unsigned)(10 + row0 - r) % 10, ac = (unsigned)(col0 + c) % 10;
+                unsigned acell = ar * 10 + ac, adq = q < 4 ? q : 3;
+                if (s_floor_repr[acell][adq] != 0xFF) {
+                    unsigned decf = (split < 11 && nearq) ? 1 : 0;
+                    if (decf != s_floor_repr[acell][adq]) s_floor_flips++;
+                    s_floor_repr[acell][adq] = (unsigned char)decf;
+                } else
+                    s_floor_repr[acell][adq] = (unsigned char)((split < 11 && nearq) ? 1 : 0);
                 if (split < 11 && nearq) {
+                    s_floor_split++;
+                    if (split == 10) s_floor_budget++;
                     floor_split(ot, rr, cc, xyv, col, uvo, pv, zv);
                     split++;
                 } else {
+                    s_floor_quad++;
                     floor_quad(ot, xyv, col, w0 & 0x3FFFFFFFu, w1, uvo, pv, zv);
                 }
                 /* B87: cells cut in 1, 2 or 4 quads meet in T-junctions,
@@ -3039,7 +3175,14 @@ static int floor_draw(CPUState *cpu) {
     for (int i = 0; i < 3; i++) w.cam[i] = (int)psx_mod_read_word(CAMERA + 0x14 + 4 * i);
     w.p1[0] = (int)psx_mod_read_word(cpu->gpr[4] + 0xF68); w.p1[1] = (int)psx_mod_read_word(cpu->gpr[4] + 0xF70);
     w.p2[0] = (int)psx_mod_read_word(cpu->gpr[5] + 0xF68); w.p2[1] = (int)psx_mod_read_word(cpu->gpr[5] + 0xF70);
-    s_cursor = s_memory + BUFFER_BYTES * buffer();
+    /* B130: capture buffer() once here so stage_draw uses the same half.
+     * buffer() can flip between the floor and tiles hooks (0x800A08F0
+     * advances inside 0x8006D014); if they diverge their packets land in
+     * different DMA buffers and the GPU only traverses one, causing
+     * every-other-frame flicker on hi-VRAM stage tiles. */
+    s_floor_buffer = buffer();
+    s_floor_buffer_draws = s_draws;
+    s_cursor = s_memory + BUFFER_BYTES * s_floor_buffer;
     s_end = s_cursor + FLOOR_BYTES;
     if (s_pack.source == TEKKEN3_STAGE_TTT) {
         s_cursor += 4u * TTT_OT_RANKS;     /* TTT's private OT first */
@@ -3049,6 +3192,13 @@ static int floor_draw(CPUState *cpu) {
         s_cursor += 4u * T3_OT_SLOTS;
     }
     s_stat_floor = 0;
+    /* [Floor_Rep_Diag]: this frame's counters; per-cell last decisions reset
+     * with the pack (a new pack's cells start unknown: 0xFF) */
+    if (s_floor_repr_gen != s_pack_generation) {
+        s_floor_repr_gen = s_pack_generation;
+        memset(s_floor_repr, 0xFF, sizeof s_floor_repr);
+    }
+    s_floor_split = s_floor_quad = s_floor_budget = s_floor_flips = 0;
     /* PGXP (precise words, T-junction pass) covers the arcade stages it was
      * validated on; TTT Stages' packets stay as they were drawn before it. */
     s_precise = psx_mod_precision_wanted() && s_pack.source != TEKKEN3_STAGE_TTT;
@@ -3375,6 +3525,7 @@ static void hivram_move(int sx, int sy, int w, int h, int dx, int dy) {
                 sx, sy, dx, dy, w, h);
         fflush(stdout);
     }
+    psx_mod_gpu_high_vram_tag("tanm");      /* [HighVram_CLASH_Diag] */
     psx_mod_gpu_high_vram_upload(dx, dy, w, h, tmp);
     if (s_probe) fprintf(s_probe, "tm %d %d %d %d %d %d\n", sx, sy, w, h, dx, dy);
 }
@@ -3400,6 +3551,7 @@ static void stage7_cage_clear(const uint8_t *dest) {
     uint16_t zero[16] = {0};
     if (!s_pack.hivram || dx < 0 || dx + 16 > 1024 || dy < 512 || dy >= 1024) return;
     memset(&s_pack.hivram[(size_t)(dy - 512) * 1024 + dx], 0, sizeof zero);
+    psx_mod_gpu_high_vram_tag("cage");      /* [HighVram_CLASH_Diag] */
     psx_mod_gpu_high_vram_upload(dx, dy, 16, 1, zero);
     if (s_probe) fprintf(s_probe, "tz %d %d\n", dx, dy);
 }
@@ -4286,7 +4438,23 @@ static void stage_draw(CPUState *cpu) {
         fprintf(s_probe, "\n");
         return;
     }
-    unsigned b = buffer();
+    /* B130: use the buffer captured by floor_draw this s_draws so that both
+     * floor and tiles land in the same DMA buffer (and thus the same OT).
+     * If the floor hook didn't run this frame (unlikely), fall back to
+     * buffer() to avoid stale data. */
+    unsigned raw_b = buffer();
+    unsigned b = (s_floor_buffer_draws == s_draws) ? s_floor_buffer : raw_b;
+    /* [BufSync_Diag]: log when the fix detects a mismatch (buffer flipped
+     * between floor hook and tiles hook -- the root cause of the flicker). */
+    if (s_floor_buffer_draws == s_draws && raw_b != s_floor_buffer) {
+        static unsigned s_bufsync_cnt = 0;
+        if (++s_bufsync_cnt <= 20 || (s_bufsync_cnt % 60) == 0) {
+            fprintf(stdout, "[BufSync_Diag] #%u f=%u stg=%d: buffer flipped %u->%u between floor and tiles (fixed)\n",
+                    s_bufsync_cnt, psx_mod_read_word(0x800A08F0u), s_pack.stage,
+                    s_floor_buffer, raw_b);
+            fflush(stdout);
+        }
+    }
     s_cursor = s_memory + BUFFER_BYTES * b + FLOOR_BYTES;
     s_end = s_memory + BUFFER_BYTES * (b + 1);
     s_stat_tiles = s_stat_far = s_stat_cone = s_stat_behind = s_stat_objects = s_stat_obj_behind = 0;
@@ -4340,10 +4508,12 @@ static void stage_draw(CPUState *cpu) {
     psx_mod_write_word(r1010, (psx_mod_read_word(r1010) & 0xFF000000u) | ((ot_a + 60) & 0xFFFFFFu));
     psx_mod_write_word(r1021, (psx_mod_read_word(r1021) & 0xFF000000u) | ((ot_b + 60) & 0xFFFFFFu));
     /* the PS1 tiles dropped: its private OT (2 slots, linked by 0x8006D7CC
-     * at rank 1010, arena 11: 1021, once we return) left empty, slot 1
-     * leading straight to slot 0 */
-    uint32_t priv = PRIVATE_OT + 8u * b;
-    psx_mod_write_word(priv + 4, (psx_mod_read_word(priv + 4) & 0xFF000000u) | (priv & 0xFFFFFFu));
+     * at rank 1010, arena 11: 1021, once we return) left empty in BOTH
+     * buffers, slot 1 leading straight to slot 0 */
+    for (unsigned k = 0; k < 2; k++) {
+        uint32_t priv = PRIVATE_OT + 8u * k;
+        psx_mod_write_word(priv + 4, (psx_mod_read_word(priv + 4) & 0xFF000000u) | (priv & 0xFFFFFFu));
+    }
     if (ttt && ttt_night()) {       /* B124: one black TILE (0x80243790) */
         static const uint8_t black[3];
         tile_rect(ttt_slot(TTT_OT_FAR), -s.margin, 0, SCREEN_W + 2 * s.margin, SCREEN_H, black);
@@ -4355,17 +4525,31 @@ static void stage_draw(CPUState *cpu) {
     } else {
         far_background(&s, (int)psx_mod_read_word(CAMERA + 4) - s_axis_before, (int)psx_mod_read_word(CAMERA));
     }
-    /* TEKKEN3_ARCADE_STAGES_HOLES (bench, tools/test_arcade_stage_holes.py):
-     * magenta under everything, the far background included (T3: last into
-     * rank 1023, drawn first; TTT: TTT_OT_FILL). A magenta pixel is one
-     * nothing of the frame covers, where T3 shows an older frame; seen too
-     * through transparent texels with nothing behind, which polygon coverage
-     * counts as covered. */
+    /* Solid background under everything (T3: last into rank 1023, drawn
+     * first; TTT: TTT_OT_FILL). Guarantees 100% of the screen is covered every
+     * frame in both buffers, completely eliminating previous-frame leakage
+     * through 1-pixel slits and transparent texels (the root cause of 60 Hz
+     * flicker when moving and when paused). */
     static int holes = -1;
     if (holes < 0) holes = getenv("TEKKEN3_ARCADE_STAGES_HOLES") != NULL;
     if (holes) {
         static const uint8_t magenta[3] = {255, 0, 255};
         tile_rect(ttt ? ttt_slot(TTT_OT_FILL) : main_ot(1023), -s.margin, 0, SCREEN_W + 2 * s.margin, SCREEN_H, magenta);
+    } else {
+        uint8_t bg[3];
+        if (ttt && ttt_night()) {
+            memset(bg, 0, sizeof bg);
+        } else if (s_pack.fcolours) {
+            const uint8_t *cell_rgb = s_pack.fcolours;
+            const uint8_t *top_rgb = s_pack.fcolours + 3;
+            const uint8_t *bottom_rgb = s_pack.fcolours + 7;
+            int top_on = s_pack.fcolours[6], bottom_on = s_pack.fcolours[10];
+            const uint8_t *src = bottom_on ? bottom_rgb : (cell_rgb[0] || cell_rgb[1] || cell_rgb[2] ? cell_rgb : (top_on ? top_rgb : cell_rgb));
+            memcpy(bg, src, sizeof bg);
+        } else {
+            memset(bg, 0, sizeof bg);
+        }
+        tile_rect(ttt ? ttt_slot(TTT_OT_FILL) : main_ot(1023), -s.margin, 0, SCREEN_W + 2 * s.margin, SCREEN_H, bg);
     }
     if (ttt) ttt_ot_link();
     static unsigned s_prev_tiles, s_prev_floor, s_prev_far, s_prev_cone, s_flicker_cnt;
@@ -4380,6 +4564,17 @@ static void stage_draw(CPUState *cpu) {
                     s_stat_cone, dc, s_stat_tiles, dt, s_stat_floor, df, s_stat_far, da, s_stat_behind);
             fflush(stdout);
         }
+    }
+    /* [Floor_Rep_Diag]: per-frame whole-quad<->split decisions. Flips are
+     * the floor's representation change with (nearq) or without (budget) a
+     * camera change: each flip is a candidate for the floor's flicker. */
+    if (s_floor_flips || s_floor_budget) {
+        static unsigned s_rep_prints;
+        if (++s_rep_prints <= 30 || (s_rep_prints % 60) == 0)
+            fprintf(stdout, "[Floor_Rep_Diag] #%u f=%u stg=%d cells=%u split=%u quad=%u budget_hit=%u flips=%u\n",
+                    s_rep_prints, psx_mod_read_word(0x800A08F0u), s_pack.stage,
+                    s_stat_floor, s_floor_split, s_floor_quad, s_floor_budget, s_floor_flips);
+        fflush(stdout);
     }
     s_prev_tiles = s_stat_tiles;
     s_prev_floor = s_stat_floor;
@@ -4411,14 +4606,37 @@ static uint32_t s_wrap_entry_count = 0;
 static uint32_t s_wrap_drawn_count = 0;
 static uint32_t s_wrap_reenter_count = 0;
 
+static ArcadeStageStats s_frame_stage_stats = {0};
+
+void arcade_stage_get_frame_stats(ArcadeStageStats *out) {
+    if (out) {
+        *out = s_frame_stage_stats;
+        out->s_running = s_running;
+    }
+}
+
+void arcade_stage_reset_frame_stats(void) {
+    s_frame_stage_stats.entry_count = 0;
+    s_frame_stage_stats.reenter_count = 0;
+    s_frame_stage_stats.draw_count = 0;
+    s_frame_stage_stats.slice_count = 0;
+    s_frame_stage_stats.last_slice_pc = 0;
+    s_frame_stage_stats.last_slice_ret = 0;
+    s_frame_stage_stats.last_slice_sp = 0;
+    s_frame_stage_stats.last_slice_s_sp = 0;
+    s_frame_stage_stats.s_running = s_running;
+}
+
 extern void __real_func_8006D014(CPUState *cpu);
 void __wrap_func_8006D014(CPUState *cpu) {
     if (cpu->pc == 0 || cpu->pc == 0x8006D014u) {
         bench_force();          /* nothing without its variable */
         light_push(cpu);        /* nothing unless a TTT stage's light came or went */
         s_wrap_entry_count++;
+        s_frame_stage_stats.entry_count++;
         if (s_running) {
             s_wrap_reenter_count++;
+            s_frame_stage_stats.reenter_count++;
             if (s_wrap_reenter_count <= 10 || (s_wrap_reenter_count % 60) == 0) {
                 fprintf(stdout, "[ArcadeStages_WARN] 0x8006D014 re-entered while s_running=1! (entry=%u reenters=%u)\n",
                         s_wrap_entry_count, s_wrap_reenter_count);
@@ -4442,8 +4660,14 @@ void __wrap_func_8006D014(CPUState *cpu) {
     if (cpu->pc == s_ret && cpu->gpr[29] == s_sp) {
         s_running = 0;
         s_wrap_drawn_count++;
+        s_frame_stage_stats.draw_count++;
         stage_frame(cpu);
     } else {
+        s_frame_stage_stats.slice_count++;
+        s_frame_stage_stats.last_slice_pc = cpu->pc;
+        s_frame_stage_stats.last_slice_ret = s_ret;
+        s_frame_stage_stats.last_slice_sp = cpu->gpr[29];
+        s_frame_stage_stats.last_slice_s_sp = s_sp;
         static uint32_t s_wrap_slice_count = 0;
         if (++s_wrap_slice_count <= 10 || (s_wrap_slice_count % 120) == 0) {
             fprintf(stdout, "[ArcadeStages_INFO] 0x8006D014 slice return: pc=0x%08X (expected s_ret=0x%08X, sp=0x%08X s_sp=0x%08X)\n",

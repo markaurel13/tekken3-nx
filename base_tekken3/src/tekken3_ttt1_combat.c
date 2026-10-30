@@ -1863,6 +1863,7 @@ static void place_hfx(const Hfx *h,const HfxCell *cells,unsigned pal_x,unsigned 
         for(unsigned row=0;same && row<HFX_SIDE;row++)
             same=!memcmp(hi+(size_t)(cells[k].y-512+row)*1024+cells[k].x,img+k*HFX_IMAGE+row*32,32);
     if(same)return;
+    psx_mod_gpu_high_vram_tag("hfx");       /* [HighVram_CLASH_Diag] */
     for(unsigned k=0;k<h->palettes;k++)
         psx_mod_gpu_high_vram_upload((int)pal_x,(int)(pal_y+k),16,1,(const uint16_t*)(pal+32*k));
     for(unsigned k=0;k<h->images;k++)
@@ -2016,6 +2017,7 @@ static void sparks_place(void) {
         const Hfx *h=s<SPARK_BOXES?spark_pack(s):sparks.ready==1 && sparks.mist.data?&sparks.mist:NULL;
         if(!h || !hi)continue;
         const uint16_t *row=hi+(size_t)(sparks.pal.y-512+s)*1024+sparks.pal.x;
+        if(memcmp(row,h->data+16,32))psx_mod_gpu_high_vram_tag("sparks");  /* [HighVram_CLASH_Diag] */
         if(memcmp(row,h->data+16,32))psx_mod_gpu_high_vram_upload(sparks.pal.x,sparks.pal.y+s,16,1,(const uint16_t*)(h->data+16));
     }
 }
@@ -2026,6 +2028,7 @@ static void spark_stream(const HfxCell *c,const Hfx *h,unsigned k) {
     if(!hi)return;
     for(unsigned row=0;row<HFX_SIDE;row++)
         if(memcmp(hi+(size_t)(c->y-512+row)*1024+c->x,img+row*32,32)) {
+            psx_mod_gpu_high_vram_tag("spark"); /* [HighVram_CLASH_Diag] */
             psx_mod_gpu_high_vram_upload(c->x,c->y,16,HFX_SIDE,(const uint16_t*)img);
             return;
         }

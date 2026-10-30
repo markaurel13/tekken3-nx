@@ -750,7 +750,7 @@ static uint32_t execute_ch2_gpu(void) {
                 break;
             }
             if (safety++ > MAX_NODES || cur_empty_nodes > 4096) {
-                hit_limit = 1;
+                hit_limit = cur_empty_nodes > 4096 ? 2 : 3;
                 last_addr = 0x00FFFFFFu;
                 break;
             }
@@ -824,7 +824,16 @@ static uint32_t execute_ch2_gpu(void) {
             }
             last_addr = addr;
         }
-        (void)hit_limit;
+        if (hit_limit) {
+            static unsigned s_dma_limit_cnt = 0;
+            if (++s_dma_limit_cnt <= 20 || (s_dma_limit_cnt % 60) == 0) {
+                extern uint64_t s_frame_count;
+                fprintf(stdout, "[DMA_OT_ABORT] #%u f=%llu reason=%d (1=floyd_loop,2=empty>4096,3=safety>max) addr=0x%08X slow=0x%08X total_nodes=%u empty=%u pkts=%u words=%u\n",
+                        s_dma_limit_cnt, (unsigned long long)s_frame_count, hit_limit, addr, slow_addr,
+                        cur_total_nodes, cur_empty_nodes, cur_packet_count, actual_words);
+                fflush(stdout);
+            }
+        }
 
         g_dma2_last_total_nodes = cur_total_nodes;
         g_dma2_last_empty_nodes = cur_empty_nodes;

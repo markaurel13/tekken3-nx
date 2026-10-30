@@ -52,8 +52,6 @@ public:
     static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
     static constexpr unsigned CmdPoolTotalSize = 16 * 1024 * 1024;   // 16 MB pool total para comandos
     static constexpr unsigned MaxVerticesPerFrame = 131072;          // 128K vértices por frame (~3.5 MB)
-    static constexpr uint32_t StagingRingStart = 0x00600000;         // 6 MB offset inicial (0x0..0x600000 reservado para depth24 FMVs)
-    static constexpr uint32_t StagingRingEnd = 64 * 1024 * 1024;     // 64 MB límite de staging (58 MB anillo dinámico)
 
     uint32_t m_internalScale = 2;
     uint32_t m_hrVramWidth = VramWidth * 2;
@@ -116,6 +114,9 @@ public:
     static constexpr unsigned NumFrameResources = 2;
     static constexpr unsigned CmdPoolSliceSize = 8 * 1024 * 1024;   // 8 MB pool por frame
     static constexpr unsigned VertexRingSliceSize = 4 * 1024 * 1024;// 4 MB vertices por frame (131072 vertices)
+    static constexpr uint32_t StagingRingStart = 0x00600000;         // 6 MB offset inicial (0x0..0x600000 reservado para depth24 FMVs)
+    static constexpr uint32_t StagingRingEnd = 64 * 1024 * 1024;     // 64 MB límite de staging (58 MB anillo dinámico)
+    static constexpr uint32_t StagingSliceSize = (StagingRingEnd - StagingRingStart) / NumFrameResources; // ~29 MB por frame
 
     // Sincronización de seguridad con fences GPU antes de lecturas de VRAM
     void WaitPendingFences();
@@ -152,6 +153,8 @@ private:
     int m_texHigh = 0;
     int m_clutHigh = 0;
     bool m_highVramDirty = false;
+    int m_highVramDirtyY1 = 0;
+    int m_highVramDirtyY2 = 512;
     int m_offsetX = 0;
     int m_offsetY = 0;
     int m_clipX1 = 0, m_clipY1 = 0, m_clipX2 = 1024, m_clipY2 = 512;
@@ -205,7 +208,7 @@ private:
     void* m_smpDescCpu = nullptr;
     DkGpuAddr m_smpDescGpu = 0;
 
-    ViewportUniforms* m_viewportUboCpu = nullptr;
+    DkGpuAddr m_viewportUboGpuPool[NumFrameResources] = {0, 0};
     DkGpuAddr m_viewportUboGpu = 0;
 
     uint32_t* m_vramStagingCpu = nullptr;

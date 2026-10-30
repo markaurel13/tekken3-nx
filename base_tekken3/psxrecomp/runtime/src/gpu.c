@@ -5339,6 +5339,14 @@ int psx_mod_gpu_high_vram_ready(void) {
 const uint16_t *gpu_high_vram_pixels(void) { return s_hivram; }
 uint64_t gpu_high_vram_primitives(void) { return s_hivram_prims; }
 
+/* [HighVram_CLASH_Diag]: which mod writes the upper half. Each writer sets
+ * the tag around its uploads (pack load, animated texture, hivram_move,
+ * TTT Hitspark, PS2 lasers, Unknown's wolf); psx_mod_gpu_high_vram_upload
+ * hands it to tekken3_stage_vram_write_watch, which flags writes landing on
+ * the loaded stage pack's rectangles (stage texture flicker, hypothesis H1). */
+static const char *s_hivram_tag = "untagged";
+void psx_mod_gpu_high_vram_tag(const char *tag) { s_hivram_tag = tag ? tag : "untagged"; }
+
 int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h, const uint16_t *pixels) {
     if (!s_hivram || !pixels || w <= 0 || h <= 0 || x < 0 || y < 512 ||
         x + w > 1024 || y + h > 1024)
@@ -5347,6 +5355,10 @@ int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h, const uint16_t *pix
         memcpy(s_hivram + (size_t)(y - 512 + row) * 1024u + (unsigned)x,
                pixels + (size_t)row * (unsigned)w, (size_t)w * sizeof *pixels);
     gr_high_vram_written(x, y - 512, w, h);
+    {
+        extern void tekken3_stage_vram_write_watch(const char *tag, int x, int y, int w, int h);
+        tekken3_stage_vram_write_watch(s_hivram_tag, x, y, w, h);
+    }
     return 1;
 }
 

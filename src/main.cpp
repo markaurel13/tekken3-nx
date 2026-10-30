@@ -22,6 +22,7 @@
 #include "iso_reader.h"
 #include "disc_path.h"
 #include "tek_block_prof.h"
+#include "build_version.h"
 
 // Referencias a los componentes de psxrecomp
 extern "C" {
@@ -1512,7 +1513,7 @@ int main(int argc, char* argv[]) {
     printf("\n============================================\n");
     printf("   TEKKEN 3 (USA) - Nintendo Switch Port\n");
     printf("   Static Recompilation con Deko3D + audren\n");
-    printf("   Build: %s %s (v32 - Remove Plus+Minus Exit Combo & Clean Applet Shutdown)\n", __DATE__, __TIME__);
+    printf("   Build ID: %s (Built: %s)\n", BUILD_GIT_HASH, BUILD_TIMESTAMP);
     printf("============================================\n\n");
     printf("[Main] Red/Socket rc=0x%08X, nxlink_sock=%d\n", sock_rc, s_nxlink_sock);
     if (s_nxlink_sock >= 0) {

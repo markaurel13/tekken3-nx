@@ -222,6 +222,13 @@ set_source_files_properties(
     PROPERTIES COMPILE_DEFINITIONS "RECOMP_LAUNCHER=1;TEKKEN3_LAUNCHER=1;PSX_SDL_NO_RENDER=1"
 )
 
+# Generar dinámicamente build_version.h con Git Hash y timestamp de compilación en cada build
+add_custom_target(generate_build_version ALL
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_build_version.py" "${CMAKE_CURRENT_BINARY_DIR}/build_version.h"
+    BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/build_version.h"
+    COMMENT "Generando build_version.h con Git hash y timestamp..."
+)
+
 # Definir ejecutable principal ELF
 add_executable(tekken3_nx
     src/main.cpp
@@ -236,7 +243,10 @@ add_executable(tekken3_nx
     ${PSX_RUNTIME_SOURCES}
 )
 
+add_dependencies(tekken3_nx generate_build_version)
+
 target_include_directories(tekken3_nx PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform

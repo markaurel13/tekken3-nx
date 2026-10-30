@@ -269,6 +269,7 @@ static void place(void) {
             same = !memcmp(hi + (size_t)(y - 512 + r) * 1024 + x, pack.pixels[i] + r * 16, 32);
     }
     if (same) return;
+    psx_mod_gpu_high_vram_tag("laser");     /* [HighVram_CLASH_Diag] */
     for (unsigned who = 0; who < 2; who++)
         for (unsigned i = 0; i < TEKKEN3_PS2_LASER_IMAGES; i++)
             psx_mod_gpu_high_vram_upload((int)px, (int)(py + who * ANGEL_ROW + i), 16, 1, pack.palette[who][i]);

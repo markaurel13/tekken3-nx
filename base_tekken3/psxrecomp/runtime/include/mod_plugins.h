@@ -93,6 +93,9 @@ int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h,
                                  const uint16_t* pixels);
 int psx_mod_gpu_high_vram_source(uint32_t address, uint32_t size);
 int psx_mod_gpu_high_vram_ready(void);
+/* [HighVram_CLASH_Diag]: the upper half's writer of the uploads that follow
+ * (src/tekken3_stage_vram_write_watch flags writes on the stage's rects). */
+void psx_mod_gpu_high_vram_tag(const char* tag);
 
 /*
  * A mod's own audio player in save states (BS_SEC_MOD_AUDIO). bytes: the
@@ -240,6 +243,21 @@ enum {
 };
 int psx_mod_set_controller_mode_override(uint32_t player,
                                          uint32_t controller_mode);
+
+typedef struct ArcadeStageStats {
+    uint32_t entry_count;
+    uint32_t reenter_count;
+    uint32_t draw_count;
+    uint32_t slice_count;
+    uint32_t last_slice_pc;
+    uint32_t last_slice_ret;
+    uint32_t last_slice_sp;
+    uint32_t last_slice_s_sp;
+    int s_running;
+} ArcadeStageStats;
+
+void arcade_stage_get_frame_stats(ArcadeStageStats *out);
+void arcade_stage_reset_frame_stats(void);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.
