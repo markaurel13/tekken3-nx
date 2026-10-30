@@ -1398,12 +1398,27 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         m_cmdBuf.bindRenderTargets({});
     } else {
         m_cmdBuf.bindRenderTargets({});
-        if (!m_widescreen) {
+        if (!m_widescreen || di.depth24) {
             // Limpiar el 100% del framebuffer de salida a negro puro (pillarboxing 4:3)
             m_cmdBuf.bindRenderTargets(&colorTarget);
             m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
             m_cmdBuf.bindRenderTargets({});
         }
+
+        static bool s_was_depth24 = false;
+        static int s_depth24_blank_frames = 0;
+        if (di.depth24 && !s_was_depth24) {
+            s_depth24_blank_frames = 2;
+            // Limpiar m_vramTexture para eliminar restos de UI de alta resolución del menú previo
+            dk::ImageView vramTarget{ m_vramTexture };
+            m_cmdBuf.bindRenderTargets(&vramTarget);
+            DkScissor fullScissor{ 0, 0, m_hrVramWidth, m_hrVramHeight };
+            m_cmdBuf.setScissors(0, { fullScissor });
+            m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+            m_cmdBuf.bindRenderTargets({});
+            m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+        }
+        s_was_depth24 = di.depth24;
 
         if (di.depth24 && m_vram && m_vramStagingCpu) {
             // Ruta para FMVs de 24-bit
@@ -1416,15 +1431,31 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 
             uint32_t* slotStagingCpu = m_vramStagingCpu + (size_t)m_curSlot * (VramWidth * VramHeight);
             DkGpuAddr slotStagingGpu = m_vramStagingGpu + (size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t));
-            for (uint32_t y = 0; y < h; y++) {
-                uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
-                gpu_depth24_present_row(&di, y, dstRow, w);
-                for (uint32_t x = 0; x < w; x++) {
-                    uint32_t argb = dstRow[x];
-                    uint32_t r = (argb >> 16) & 0xFFu;
-                    uint32_t g = (argb >> 8) & 0xFFu;
-                    uint32_t b = argb & 0xFFu;
-                    dstRow[x] = r | (g << 8) | (b << 16) | 0xFF000000u;
+
+            if (s_depth24_blank_frames > 0) {
+                s_depth24_blank_frames--;
+                for (uint32_t y = 0; y < h; y++) {
+                    uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
+                    for (uint32_t x = 0; x < w; x++) dstRow[x] = 0xFF000000u;
+                }
+            } else {
+                for (uint32_t y = 0; y < h; y++) {
+                    uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
+                    // En Tekken 3 los FMV STR son de 224 líneas (y=8..231). Las líneas 0..7
+                    // y 232..239 no son sobreescritas por MDEC y retienen restos de la VRAM
+                    // previa (como las barras blancas del menú de Theater Mode).
+                    if (h == 240 && (y < 8 || y >= 232)) {
+                        for (uint32_t x = 0; x < w; x++) dstRow[x] = 0xFF000000u;
+                    } else {
+                        gpu_depth24_present_row(&di, y, dstRow, w);
+                        for (uint32_t x = 0; x < w; x++) {
+                            uint32_t argb = dstRow[x];
+                            uint32_t r = (argb >> 16) & 0xFFu;
+                            uint32_t g = (argb >> 8) & 0xFFu;
+                            uint32_t b = argb & 0xFFu;
+                            dstRow[x] = r | (g << 8) | (b << 16) | 0xFF000000u;
+                        }
+                    }
                 }
             }
             m_memStaging.flushCpuCache((size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t)), (size_t)w * h * sizeof(uint32_t));
