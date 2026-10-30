@@ -23,6 +23,8 @@ void tekken3_outfits_set_character_override(int player, int character); /* -1: n
 int tekken3_outfits_available(void);
 int tekken3_outfits_load_catalog(const char *path);
 const Tekken3OutfitEntry *tekken3_outfits_entry(int character, int index);
+const Tekken3OutfitEntry *tekken3_outfits_raw_entry(int index);
+int tekken3_outfits_total_entries(void);
 int tekken3_outfits_count(int character);
 void tekken3_outfits_update(int selecting, int character1, int character2);
 void tekken3_outfits_sync(void);

@@ -243,7 +243,7 @@ int psx_mod_set_fixed_display_aspect(uint32_t numerator, uint32_t denominator) {
 }
 
 /* GL texture pack & outfit catalog registration */
-static void ensure_outfit_catalog_loaded(void) {
+void ensure_outfit_catalog_loaded(void) {
     static int s_loaded = 0;
     if (s_loaded) return;
     s_loaded = 1;

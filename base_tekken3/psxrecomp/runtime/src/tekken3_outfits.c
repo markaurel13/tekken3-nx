@@ -106,6 +106,15 @@ const Tekken3OutfitEntry *tekken3_outfits_entry(int cid,int index) {
  }
  return found?NULL:stock_entry(cid,index);
 }
+const Tekken3OutfitEntry *tekken3_outfits_raw_entry(int index) {
+ const Tekken3OutfitEntry *rows=catalog_count?catalog:defaults;
+ int n=catalog_count?catalog_count:(int)(sizeof defaults/sizeof *defaults);
+ if(index<0 || index>=n)return NULL;
+ return &rows[index];
+}
+int tekken3_outfits_total_entries(void) {
+ return catalog_count?catalog_count:(int)(sizeof defaults/sizeof *defaults);
+}
 int tekken3_outfits_count(int cid) {int n=0;while(tekken3_outfits_entry(cid,n))n++;return n;}
 void tekken3_outfits_set_available(int skin,int on) {if(skin>=0 && skin<T3_SKIN_COUNT)available[skin]=!!on;}
 void tekken3_outfits_set_character_available(int cid,int on) {

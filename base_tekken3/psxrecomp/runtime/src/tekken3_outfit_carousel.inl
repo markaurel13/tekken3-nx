@@ -83,6 +83,20 @@ static OutfitArt *outfit_load_art(const char *name) {
     }
     free(data);fclose(f);return a;
 }
+
+void host_osd_outfit_preload(void) {
+    int total = tekken3_outfits_total_entries();
+    int loaded = 0;
+    for (int i = 0; i < total; i++) {
+        const Tekken3OutfitEntry *e = tekken3_outfits_raw_entry(i);
+        if (e && e->art[0]) {
+            OutfitArt *a = outfit_load_art(e->art);
+            if (a && a->loaded) loaded++;
+        }
+    }
+    printf("[OutfitPreload] Pre-cargados %d/%d retratos de trajes en RAM (%zu KB)\n",
+           loaded, total, (outfit_art_pixels * 4) / 1024);
+}
 static void outfit_rect(uint32_t *dst,int x,int y,int w,int h,uint32_t color) {
     for(int yy=y;yy<y+h && yy<OUTFIT_H;yy++)for(int xx=x;xx<x+w && xx<OUTFIT_W;xx++)
         if(xx>=0 && yy>=0)dst[yy*OUTFIT_W+xx]=color;
@@ -166,20 +180,41 @@ int host_osd_outfit_image_hires(int player,const uint32_t **pixels,int width,int
         int lx=slot==0?4:slot==1?72:156,ly=slot==1?18:30;
         int x0=(lx*width+iw-1)/iw,y0=(ly*height+ih-1)/ih;
         int x1=((lx+cw)*width+iw-1)/iw,y1=((ly+ch)*height+ih-1)/ih;
-        double sw=a->width,sh=a->height;
-        if(sw*3>sh*2)sw=sh*2/3;else sh=sw*3/2;
-        double ox=(a->width-sw)/2,oy=(a->height-sh)/2;
-        for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++) {
-            double sx=ox+(x-x0+.5)*sw/(x1-x0)-.5,sy=oy+(y-y0+.5)*sh/(y1-y0)-.5;
-            if(sx<0)sx=0;if(sy<0)sy=0;
-            int ax=(int)sx,ay=(int)sy,bx=ax+1<a->width?ax+1:ax,by=ay+1<a->height?ay+1:ay;
-            double fx=sx-ax,fy=sy-ay;uint32_t c=0xff000000u;
-            for(int shift=0;shift<=16;shift+=8) {
-                double top=((a->pixels[ay*a->width+ax]>>shift)&255)*(1-fx)+((a->pixels[ay*a->width+bx]>>shift)&255)*fx;
-                double bottom=((a->pixels[by*a->width+ax]>>shift)&255)*(1-fx)+((a->pixels[by*a->width+bx]>>shift)&255)*fx;
-                c|=(uint32_t)(top*(1-fy)+bottom*fy+.5)<<shift;
+        if(x1<=x0 || y1<=y0)continue;
+        float sw=(float)a->width,sh=(float)a->height;
+        if(sw*3.0f>sh*2.0f)sw=sh*2.0f/3.0f;else sh=sw*3.0f/2.0f;
+        float ox=((float)a->width-sw)*0.5f,oy=((float)a->height-sh)*0.5f;
+        float inv_w=sw/(float)(x1-x0);
+        float inv_h=sh/(float)(y1-y0);
+        for(int y=y0;y<y1;y++) {
+            float sy=oy+((float)(y-y0)+0.5f)*inv_h-0.5f;
+            if(sy<0.0f)sy=0.0f;
+            int ay=(int)sy;
+            int by=ay+1<a->height?ay+1:ay;
+            float fy=sy-(float)ay;
+            float one_minus_fy=1.0f-fy;
+            const uint32_t *row_ay=&a->pixels[ay*a->width];
+            const uint32_t *row_by=&a->pixels[by*a->width];
+            uint32_t *dst_row=&dst[y*width];
+            for(int x=x0;x<x1;x++) {
+                float sx=ox+((float)(x-x0)+0.5f)*inv_w-0.5f;
+                if(sx<0.0f)sx=0.0f;
+                int ax=(int)sx;
+                int bx=ax+1<a->width?ax+1:ax;
+                float fx=sx-(float)ax;
+                float one_minus_fx=1.0f-fx;
+
+                uint32_t c00=row_ay[ax], c01=row_ay[bx];
+                uint32_t c10=row_by[ax], c11=row_by[bx];
+
+                uint32_t c=0xff000000u;
+                for(int shift=0;shift<=16;shift+=8) {
+                    float top=((float)((c00>>shift)&255))*one_minus_fx + ((float)((c01>>shift)&255))*fx;
+                    float bottom=((float)((c10>>shift)&255))*one_minus_fx + ((float)((c11>>shift)&255))*fx;
+                    c|=(uint32_t)(top*one_minus_fy + bottom*fy + 0.5f)<<shift;
+                }
+                dst_row[x]=c;
             }
-            dst[y*width+x]=c;
         }
     }
     *pixels=dst;return 1;

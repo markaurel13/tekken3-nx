@@ -26,6 +26,9 @@
 
 // Referencias a los componentes de psxrecomp
 extern "C" {
+extern void mod_runtime_activate_plugins(void);
+extern void ensure_outfit_catalog_loaded(void);
+extern void host_osd_outfit_preload(void);
 extern void cd_prefetch_shutdown(void);
 extern uint32_t g_game_entry_hits[];
 extern uint32_t psx_game_entry_addr(uint32_t);
@@ -1787,6 +1790,12 @@ int main(int argc, char* argv[]) {
     printf("[Main] ================================================\n");
     printf("[Main] ¡Iniciando ejecucion nativa de Tekken 3!\n");
     printf("[Main] ================================================\n");
+
+    // Pre-cargar catalogo y retratos de trajes en RAM para evitar tirones de E/S en microSD durante seleccion de personajes
+    printf("[Main] Pre-cargando catalogo y texturas de trajes en RAM...\n");
+    mod_runtime_activate_plugins();
+    ensure_outfit_catalog_loaded();
+    host_osd_outfit_preload();
 
     // 9. Arrancar el planificador y la recompilación
     prof_start();
