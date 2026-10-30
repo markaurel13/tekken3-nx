@@ -1441,10 +1441,13 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             } else {
                 for (uint32_t y = 0; y < h; y++) {
                     uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
-                    // En Tekken 3 los FMV STR son de 224 líneas (y=8..231). Las líneas 0..7
-                    // y 232..239 no son sobreescritas por MDEC y retienen restos de la VRAM
-                    // previa (como las barras blancas del menú de Theater Mode).
-                    if (h == 240 && (y < 8 || y >= 232)) {
+                    // En Tekken 3 los FMV STR tienen 220 líneas de contenido activo centradas
+                    // dentro del bloque MDEC de 224 líneas (y=8..231). Las líneas extremas
+                    // (y=230..231) contienen el relleno de macrobloque MDEC (que en espacio YUV
+                    // produce la línea verde clásica de PS1), y las líneas 0..7 y 232..239
+                    // son el overscan vertical que en CRT quedaba oculto tras el marco.
+                    // Centramos con 10 líneas de letterbox negro arriba (0..9) y 10 abajo (230..239).
+                    if (h == 240 && (y < 10 || y >= 230)) {
                         for (uint32_t x = 0; x < w; x++) dstRow[x] = 0xFF000000u;
                     } else {
                         gpu_depth24_present_row(&di, y, dstRow, w);
@@ -1458,13 +1461,19 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
                     }
                 }
             }
-            m_memStaging.flushCpuCache((size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t)), (size_t)w * h * sizeof(uint32_t));
+            uint32_t copyH = (h + 16 <= VramHeight) ? (h + 16) : h;
+            for (uint32_t y = h; y < copyH; y++) {
+                uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
+                for (uint32_t x = 0; x < w; x++) dstRow[x] = 0xFF000000u;
+            }
+            m_memStaging.flushCpuCache((size_t)m_curSlot * (VramWidth * VramHeight * sizeof(uint32_t)), (size_t)w * copyH * sizeof(uint32_t));
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_L2Cache);
             dk::ImageView vramTexView{ m_vramTexture };
-            m_cmdBuf.copyBufferToImage({ slotStagingGpu, 0, 0 }, vramTexView, { 0, 0, 0, w, h, 1 });
+            m_cmdBuf.copyBufferToImage({ slotStagingGpu, 0, 0 }, vramTexView, { 0, 0, 0, w, copyH, 1 });
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
             uint32_t fmvSrcW = (w > 1) ? (w - 1) : 1;
-            m_cmdBuf.blitImage(vramTexView, { 0, 0, 0, fmvSrcW, h, 1 },
+            uint32_t fmvSrcH = (h > 1) ? (h - 1) : 1;
+            m_cmdBuf.blitImage(vramTexView, { 0, 0, 0, fmvSrcW, fmvSrcH, 1 },
                                colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
         } else {
