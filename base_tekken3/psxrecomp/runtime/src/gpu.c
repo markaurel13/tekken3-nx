@@ -5470,6 +5470,10 @@ static void gp0_execute_command(void) {
     texpage_x = tx; texpage_y = ty;
 }
 
+uint64_t g_prof_dma2_prepass_ns = 0;
+uint64_t g_prof_dma2_walk_ns = 0;
+uint64_t g_prof_gp0_diag_ns = 0;
+
 static void gp0_execute_command_now(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     int selector_fade_side = 0;
@@ -5537,6 +5541,10 @@ static void gp0_execute_command_now(void) {
         gr_wide_set_primitive_expanded(expand_sidecar);
         t3_selector_sidecar_unclipped = unclipped_sidecar;
     }
+#if defined(__aarch64__) || defined(__SWITCH__)
+    uint64_t t_diag0, t_diag1;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_diag0));
+#endif
     gp0_opcode_count[opcode]++;
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
     extern void ws_bg_phase_note(uint32_t op);
@@ -5549,6 +5557,10 @@ static void gp0_execute_command_now(void) {
         ws_census_record(opcode, cvx, cvy);
         ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
     }
+#if defined(__aarch64__) || defined(__SWITCH__)
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_diag1));
+    g_prof_gp0_diag_ns += ((t_diag1 - t_diag0) * 625u) / 12u;
+#endif
 
     /* Categorize for diagnostics */
     if (opcode <= 0x01) gp0_nop_count++;

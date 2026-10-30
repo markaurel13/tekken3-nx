@@ -731,7 +731,16 @@ static uint32_t execute_ch2_gpu(void) {
         gpu_ws_begin_linked_list();
         uint32_t start_addr =
             psx_mod_gpu_dma_resolve_address(channels[2].madr);
+#if defined(__aarch64__) || defined(__SWITCH__)
+        uint64_t t_pre0, t_pre1, t_walk1;
+        __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_pre0));
+#endif
         gpu_ws_prepass_linked_list(start_addr);
+#if defined(__aarch64__) || defined(__SWITCH__)
+        __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_pre1));
+        extern uint64_t g_prof_dma2_prepass_ns;
+        g_prof_dma2_prepass_ns += ((t_pre1 - t_pre0) * 625u) / 12u;
+#endif
         const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
         uint32_t last_addr = start_addr;
         int hit_limit = 0;
@@ -843,6 +852,11 @@ static uint32_t execute_ch2_gpu(void) {
 
         channels[2].madr = last_addr;
         gpu_ws_end_linked_list();
+#if defined(__aarch64__) || defined(__SWITCH__)
+        __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_walk1));
+        extern uint64_t g_prof_dma2_walk_ns;
+        g_prof_dma2_walk_ns += ((t_walk1 - t_pre1) * 625u) / 12u;
+#endif
     } else {
         /* Burst mode (sync_mode == 0) */
         uint32_t word_count = channels[2].bcr & 0xFFFF;

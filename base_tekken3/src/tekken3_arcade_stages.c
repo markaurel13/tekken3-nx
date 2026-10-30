@@ -416,7 +416,13 @@ static int log_on(void) {
 
 /* TEKKEN3_ARCADE_STAGES_PERF: every 600 frames, the module's time per frame
  * (floor hook + stage frame) and the time between two stage frames */
-#ifdef _WIN32
+#if defined(__aarch64__) || defined(__SWITCH__)
+static inline uint64_t now_ns(void) {
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return (cnt * 625u) / 12u;
+}
+#elif defined(_WIN32)
 __declspec(dllimport) int __stdcall QueryPerformanceCounter(long long *count);
 __declspec(dllimport) int __stdcall QueryPerformanceFrequency(long long *frequency);
 static uint64_t now_ns(void) {
@@ -434,6 +440,13 @@ static uint64_t now_ns(void) {
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
 #endif
+uint64_t g_prof_exp_floor_ns = 0;
+uint64_t g_prof_exp_ps1_stage_ns = 0;
+uint64_t g_prof_exp_stage_tiles_ns = 0;
+uint64_t g_prof_exp_stage_objs_ns = 0;
+uint64_t g_prof_exp_stage_far_ns = 0;
+uint64_t g_prof_exp_stage_total_ns = 0;
+uint64_t g_prof_exp_stage_calls = 0;
 static int s_perf = -1;
 static uint64_t s_perf_mod, s_perf_mod_max, s_perf_last, s_perf_gap_max, s_perf_gap_sum;
 static unsigned s_perf_frames, s_perf_gaps, s_perf_slow, s_perf_hitch;
@@ -1764,7 +1777,7 @@ static void tiles(const Gte *g, const Screen *s, uint32_t ot_a, uint32_t ot_b) {
      * Only applied on genuine entry (s_grace==0 -> GRACE_N), not on re-entry
      * while still in the grace window (s_grace>0 && s_grace<GRACE_N). */
     enum { GRACE_N = 30 };          /* frames of exit grace = 0.5 s at 60 fps */
-    enum { APPEAR_N = 2 };          /* frames of entry suppress (1/30 s at 60 fps) */
+    enum { APPEAR_N = 0 };          /* frames of entry suppress: 0 (immediate appearance, avoids 2-frame blackout on camera cuts) */
     static uint8_t s_grace[256];    /* exit-grace countdown per tile */
     static uint8_t s_appear[256];   /* entry-suppress countdown per tile */
     static uint8_t s_vis_prev[256]; /* vis[] result (after grace) of last frame */
@@ -1814,45 +1827,6 @@ static void tiles(const Gte *g, const Screen *s, uint32_t ot_a, uint32_t ot_b) {
             if (s_appear[t] > 0) s_appear[t] = 0;
         }
     }
-    /* [TileOsc_Diag]: detect tiles that oscillate visible<->invisible after grace is applied.
-     * If a tile flips its post-grace visibility in TWO consecutive frames, it is a persistent
-     * oscillator that grace cannot fix -- the true source of visual flicker.
-     * Log every unique tile that oscillates, with its raw-cone grace value and flip count. */
-    {
-        static unsigned s_osc_log_cnt = 0;
-        for (unsigned t = 0; t < s_pack.ntiles && t < 256; t++) {
-            int now_vis = vis[t] > 0;
-            int was_vis = s_vis_prev[t] > 0;
-            if (now_vis != was_vis) {
-                /* post-grace flip: grace did NOT prevent this transition */
-                if (s_osc_cnt[t] < 255) s_osc_cnt[t]++;
-                if (s_osc_cnt[t] >= 2) {
-                    /* oscillating tile: flipped at least twice, log every occurrence */
-                    if (++s_osc_log_cnt <= 40 || (s_osc_log_cnt % 120) == 0) {
-                        fprintf(stdout,
-                            "[TileOsc_Diag] #%u f=%u stg=%d tile=%u grace=%u osc=%u vis:%d->%d raw_vis=%d\n",
-                            s_osc_log_cnt, psx_mod_read_word(0x800A08F0u), s_pack.stage,
-                            t, s_grace[t], s_osc_cnt[t], was_vis, now_vis,
-                            (int8_t)s_grace[t] == GRACE_N);
-                        fflush(stdout);
-                    }
-                }
-            } else {
-                /* no flip this frame: decay oscillation count slowly */
-                if (s_osc_cnt[t] > 0) s_osc_cnt[t]--;
-            }
-            s_vis_prev[t] = (uint8_t)now_vis;
-        }
-    }
-    if (flips >= 6) {
-        if (++s_flip_cnt <= 10 || (s_flip_cnt % 120) == 0) {
-            fprintf(stdout, "[Stage_Tile_Flips] #%u f=%u stg=%d flips=%d / %u (chg=%s)\n",
-                    s_flip_cnt, psx_mod_read_word(0x800A08F0u), s_pack.stage,
-                    flips, s_pack.ntiles,
-                    stage_changed ? "stage" : "cam");
-            fflush(stdout);
-        }
-    }
     /* stage_check.py probe: every 15th frame, the inputs of ttt.geometry_commands
      * and every primitive TTT's rules keep (before the guard behind the camera) */
     int tlog = ttt && s_probe && psx_mod_read_word(0x800A08F0u) % 15 == 0;
@@ -1866,19 +1840,6 @@ static void tiles(const Gte *g, const Screen *s, uint32_t ot_a, uint32_t ot_b) {
             fprintf(s_probe, "%04X", bits);
         }
         fprintf(s_probe, "\n");
-    }
-    /* [Nclip_Flip_Diag]: track nclip sign per tile/prim to detect oscillations.
-     * When a prim that was front-facing (nclip>0) turns back-facing (nclip<0),
-     * log the actual nclip value so we know the threshold needed to fix it.
-     * s_prev_nc: 1 = was positive/visible, 0 = was negative/culled. */
-    enum { NC_TILES = 256, NC_PRIMS = 64 };
-    static int8_t  s_prev_nc[NC_TILES * NC_PRIMS];   /* 1=was-vis, 0=was-culled */
-    static unsigned s_nc_flip_cnt = 0;
-    static unsigned s_nc_generation = ~0u;
-    if (s_pack_generation != s_nc_generation) {
-        memset(s_prev_nc, 0, sizeof s_prev_nc);
-        s_nc_generation = s_pack_generation;
-        s_nc_flip_cnt = 0;
     }
     for (unsigned t = 0; t < s_pack.ntiles; t++) {
         const Tile *tl = &s_pack.tiles[t];
@@ -1900,25 +1861,8 @@ static void tiles(const Gte *g, const Screen *s, uint32_t ot_a, uint32_t ot_b) {
              * here the PS1 screen with the 16:9 margins and the same slack */
             if ((flags & PRIM_FRAMED) && !in_frame(s, sx[a], sy[a]) && !in_frame(s, sx[b], sy[b]) && !in_frame(s, sx[c], sy[c]))
                 continue;
-            /* NCLIP_BIAS: cull only when clearly back-facing (nclip < -1000).
-             * The original PS1 culled at <= 0, but integer rounding causes
-             * edge-on polygons (nclip ≈ 0) to flip sign each frame at 60 fps,
-             * producing visible texture flicker.
-             * Log analysis shows oscillating polys have nc between -100 and -415;
-             * genuine backfaces have nc < -5000. A bias of -1000 sits safely in
-             * the gap, covering all observed oscillators without showing real backfaces. */
+            /* NCLIP_BIAS: cull only when clearly back-facing (nclip < -1000). */
             int64_t nc = (flags & PRIM_NO_NCLIP) ? 1 : nclip(sx[a], sy[a], sx[b], sy[b], sx[c], sy[c]);
-            /* [Nclip_Flip_Diag]: log when a prim crosses zero (was visible, now culled or vice-versa) */
-            unsigned nc_idx = t < NC_TILES && k < NC_PRIMS ? t * NC_PRIMS + k : 0;
-            int nc_was = s_prev_nc[nc_idx];
-            int nc_now = nc > -1000 ? 1 : 0;   /* matches the bias threshold */
-            if (nc_was != nc_now && t < NC_TILES && k < NC_PRIMS) {
-                if (++s_nc_flip_cnt <= 30 || (s_nc_flip_cnt % 120) == 0)
-                    fprintf(stdout, "[Nclip_Flip] #%u f=%u stg=%d t=%u k=%u nc=%lld (was %s, now %s)\n",
-                            s_nc_flip_cnt, psx_mod_read_word(0x800A08F0u), s_pack.stage,
-                            t, k, (long long)nc, nc_was ? "vis" : "cull", nc_now ? "vis" : "cull");
-            }
-            s_prev_nc[nc_idx] = (int8_t)nc_now;
             if (nc < -1000) continue;
             /* not in the arcade: a vertex behind the camera gives a stray
              * polygon (never seen in the arcade's fights: its cone drops the
@@ -3216,10 +3160,11 @@ static int floor_draw(CPUState *cpu) {
 }
 
 static int floor_hook(CPUState *cpu) {
-    if (!perf_on()) return floor_draw(cpu);
     uint64_t t = now_ns();
     int r = floor_draw(cpu);
-    s_perf_floor = now_ns() - t;
+    uint64_t dt = now_ns() - t;
+    g_prof_exp_floor_ns += dt;
+    if (perf_on()) s_perf_floor = dt;
     return r;
 }
 
@@ -4488,7 +4433,10 @@ static void stage_draw(CPUState *cpu) {
                 s_pack.togr[0], s_pack.togr[1] <= 2 ? s_pack.togr[1] : s_pack.gkind);
         fflush(stdout);
     }
+    uint64_t t_tiles0 = now_ns();
     tiles(&g, &s, ot_a, ot_b);
+    uint64_t t_objs0 = now_ns();
+    g_prof_exp_stage_tiles_ns += (t_objs0 - t_tiles0);
     if (ttt) {      /* TTT Stages S4: stage 3's object, stage 11's beams, stage 2's particles */
         Gte w;
         if (!ttt_night()) ttt_objects(&g, &s);
@@ -4500,6 +4448,8 @@ static void stage_draw(CPUState *cpu) {
         objects(&g);
     }
     tj_fix();
+    uint64_t t_far0 = now_ns();
+    g_prof_exp_stage_objs_ns += (t_far0 - t_objs0);
     /* B117: A and B lead to what their ranks hold once the objects are
      * linked: TTT's stage 3 links its carousel at 1022, B's rank, and the
      * game draws B, then the carousel (ttt.Stage.frame) */
@@ -4552,35 +4502,8 @@ static void stage_draw(CPUState *cpu) {
         tile_rect(ttt ? ttt_slot(TTT_OT_FILL) : main_ot(1023), -s.margin, 0, SCREEN_W + 2 * s.margin, SCREEN_H, bg);
     }
     if (ttt) ttt_ot_link();
-    static unsigned s_prev_tiles, s_prev_floor, s_prev_far, s_prev_cone, s_flicker_cnt;
-    int dt = (int)s_stat_tiles - (int)s_prev_tiles;
-    int df = (int)s_stat_floor - (int)s_prev_floor;
-    int da = (int)s_stat_far - (int)s_prev_far;
-    int dc = (int)s_stat_cone  - (int)s_prev_cone;
-    if (s_frames > 1 && (abs(dt) > 15 || abs(df) > 10 || abs(da) > 5)) {
-        if (++s_flicker_cnt <= 20 || (s_flicker_cnt % 60) == 0) {
-            fprintf(stdout, "[Stage_Delta_Diag] #%u f=%u stg=%d cone=%u(dc=%d) tiles=%u(dt=%d) flr=%u(df=%d) far=%u(da=%d) behind=%u\n",
-                    s_flicker_cnt, psx_mod_read_word(0x800A08F0u), s_pack.stage,
-                    s_stat_cone, dc, s_stat_tiles, dt, s_stat_floor, df, s_stat_far, da, s_stat_behind);
-            fflush(stdout);
-        }
-    }
-    /* [Floor_Rep_Diag]: per-frame whole-quad<->split decisions. Flips are
-     * the floor's representation change with (nearq) or without (budget) a
-     * camera change: each flip is a candidate for the floor's flicker. */
-    if (s_floor_flips || s_floor_budget) {
-        static unsigned s_rep_prints;
-        if (++s_rep_prints <= 30 || (s_rep_prints % 60) == 0)
-            fprintf(stdout, "[Floor_Rep_Diag] #%u f=%u stg=%d cells=%u split=%u quad=%u budget_hit=%u flips=%u\n",
-                    s_rep_prints, psx_mod_read_word(0x800A08F0u), s_pack.stage,
-                    s_stat_floor, s_floor_split, s_floor_quad, s_floor_budget, s_floor_flips);
-        fflush(stdout);
-    }
-    s_prev_tiles = s_stat_tiles;
-    s_prev_floor = s_stat_floor;
-    s_prev_far   = s_stat_far;
-    s_prev_cone  = s_stat_cone;
-    if ((++s_frames % 60) == 1) {
+    g_prof_exp_stage_far_ns += (now_ns() - t_far0);
+    if ((++s_frames % 120) == 1) {
         fprintf(stdout, "[ArcadeStages] f=%u stg=%d(%s) phase=%d cone=%u tiles=%u(drop=%u) obj=%u(drop=%u) flr=%u far=%u mem=%u/%u alloc_fails=%u\n",
                 psx_mod_read_word(0x800A08F0u), s_pack.stage,
                 s_pack.source == TEKKEN3_STAGE_TTT ? "TTT" : "T3",
@@ -4594,12 +4517,16 @@ static void stage_draw(CPUState *cpu) {
 }
 
 static void stage_frame(CPUState *cpu) {
-    if (!perf_on()) { stage_draw(cpu); s_draws++; return; }
     uint64_t t = now_ns();
     stage_draw(cpu);
+    uint64_t dt = now_ns() - t;
+    g_prof_exp_stage_total_ns += dt;
+    g_prof_exp_stage_calls++;
     s_draws++;
-    perf_frame(s_perf_floor + (now_ns() - t));
-    s_perf_floor = 0;
+    if (perf_on()) {
+        perf_frame(s_perf_floor + dt);
+        s_perf_floor = 0;
+    }
 }
 
 static uint32_t s_wrap_entry_count = 0;
@@ -4651,7 +4578,9 @@ void __wrap_func_8006D014(CPUState *cpu) {
             s_probe_gte = 0;
         }
     }
+    uint64_t t_ps1_0 = now_ns();
     __real_func_8006D014(cpu);
+    g_prof_exp_ps1_stage_ns += (now_ns() - t_ps1_0);
     if (!s_running) return;
     if (s_probe && !s_probe_gte && cpu->pc == 0x80036AF8u) {       /* first tile: the PS1's GTE */
         for (int i = 0; i < 8; i++) s_ps1_gte[i] = (int32_t)cpu->gte_ctrl[i];

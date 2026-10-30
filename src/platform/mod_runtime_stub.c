@@ -131,7 +131,19 @@ void mod_runtime_activate_plugins(void) {
     }
 }
 
+#if defined(__aarch64__) || defined(__SWITCH__)
+static inline uint64_t mod_prof_ns(void) {
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return (cnt * 625u) / 12u;
+}
+#else
+static inline uint64_t mod_prof_ns(void) { return 0; }
+#endif
+uint64_t g_prof_exp_vblank_mods_ns = 0;
+
 void mod_runtime_on_vblank(void) {
+    uint64_t t0 = mod_prof_ns();
     if (!s_plugins_activated) {
         mod_runtime_activate_plugins();
     }
@@ -144,6 +156,7 @@ void mod_runtime_on_vblank(void) {
             s_vblank_plugins[i].callback();
         }
     }
+    g_prof_exp_vblank_mods_ns += (mod_prof_ns() - t0);
 }
 
 void mod_runtime_on_dispatch(uint32_t target) {

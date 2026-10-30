@@ -569,6 +569,18 @@ extern uint64_t g_prof_iso_raw_read_ns;
 extern uint64_t g_prof_audio_spu_ns;
 extern uint64_t g_prof_audio_audren_ns;
 extern uint64_t g_prof_audio_underruns;
+
+extern uint64_t g_prof_exp_floor_ns;
+extern uint64_t g_prof_exp_ps1_stage_ns;
+extern uint64_t g_prof_exp_stage_tiles_ns;
+extern uint64_t g_prof_exp_stage_objs_ns;
+extern uint64_t g_prof_exp_stage_far_ns;
+extern uint64_t g_prof_exp_stage_total_ns;
+extern uint64_t g_prof_exp_stage_calls;
+extern uint64_t g_prof_exp_vblank_mods_ns;
+extern uint64_t g_prof_dma2_prepass_ns;
+extern uint64_t g_prof_dma2_walk_ns;
+extern uint64_t g_prof_gp0_diag_ns;
 }
 
 #define PROF_PHASES 14
@@ -618,7 +630,9 @@ static void prof_thread_fn(void*) {
         uint64_t c = s_prof_phase_cnt[ph];
         s_prof_phase_cnt[ph] = c + 1;
         if (ph != 7) {
-            uint32_t pc = g_prof_pc & ~0xFu;   /* 16-byte buckets */
+            uint32_t raw_pc = psx_last_irq_check_pc();
+            if (!raw_pc) raw_pc = g_prof_pc;
+            uint32_t pc = raw_pc & ~0xFu;   /* 16-byte buckets */
             uint32_t h = (pc >> 4) * 2654435761u;
             for (int i = 0; i < 16; i++) {
                 uint32_t s = (h + i) & (PROF_PC_SLOTS - 1);
@@ -775,6 +789,23 @@ static void prof_report(uint64_t frame) {
     double d_audren_ms = (double)delta_audren_ns / 1e6 / fr;
     printf("[AudioBreakdown] per-frame: spu_mix=%.3fms (Core 0) audren_dsp=%.3fms (Core 2) ring_underrun=%llu\n",
            d_spu_ms, d_audren_ms, (unsigned long long)delta_underrun);
+
+    printf("[PROF_EXPANDED] per-frame: floor=%.3fms ps1_orig_stg=%.3fms stg_draw=%.3fms(tiles=%.3fms objs=%.3fms far=%.3fms calls=%.1f) vblank_mods=%.3fms | dma2(prepass=%.3fms walk_gp0=%.3fms gp0_diag=%.3fms)\n",
+           (double)g_prof_exp_floor_ns / 1e6 / fr,
+           (double)g_prof_exp_ps1_stage_ns / 1e6 / fr,
+           (double)g_prof_exp_stage_total_ns / 1e6 / fr,
+           (double)g_prof_exp_stage_tiles_ns / 1e6 / fr,
+           (double)g_prof_exp_stage_objs_ns / 1e6 / fr,
+           (double)g_prof_exp_stage_far_ns / 1e6 / fr,
+           (double)g_prof_exp_stage_calls / fr,
+           (double)g_prof_exp_vblank_mods_ns / 1e6 / fr,
+           (double)g_prof_dma2_prepass_ns / 1e6 / fr,
+           (double)g_prof_dma2_walk_ns / 1e6 / fr,
+           (double)g_prof_gp0_diag_ns / 1e6 / fr);
+    g_prof_exp_floor_ns = g_prof_exp_ps1_stage_ns = g_prof_exp_stage_tiles_ns = 0;
+    g_prof_exp_stage_objs_ns = g_prof_exp_stage_far_ns = g_prof_exp_stage_total_ns = 0;
+    g_prof_exp_stage_calls = g_prof_exp_vblank_mods_ns = 0;
+    g_prof_dma2_prepass_ns = g_prof_dma2_walk_ns = g_prof_gp0_diag_ns = 0;
 
     s_prof_last_dev_sio = g_prof_dev_sio_ns;
     s_prof_last_dev_cdrom = g_prof_dev_cdrom_ns;

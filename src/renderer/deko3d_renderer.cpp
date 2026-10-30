@@ -786,49 +786,7 @@ void Deko3DRenderer::FlushBatch() {
     // 8. Barrera de memoria y ejecución del Draw Call
     __asm__ __volatile__("dsb sy" ::: "memory");
     m_cmdBuf.barrier(DkBarrier_Primitives, DkInvalidateFlags_Shader | DkInvalidateFlags_Descriptors | DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
-    /* [Deko3D_BankDiag]: the batch about to be drawn, tallied by sampled
-     * bank. This reads the exact vertices the draw call uses, the same
-     * count the diag above samples (a per-frame aggregate is printed by
-     * RenderDisplay). */
-    {
-        for (uint32_t i = m_vtxBatchStart; i < m_vtxAllocated; i++) {
-            s_bank_v++;
-            if (m_vtxRingCpu[i].flags & 0x80u) s_bank_hi_tex++;
-            if (m_vtxRingCpu[i].flags & 0x100u) s_bank_hi_clut++;
-        }
-        /* [BatchFlip_Diag]: this batch's state, for the per-frame multiset */
-        bank_key_add(m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0],
-                     m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1],
-                     m_vtxRingCpu[m_vtxBatchStart].flags, count / 3);
-    }
     m_cmdBuf.draw(DkPrimitive_Triangles, count, 1, m_vtxBatchStart, 0);
-
-    static uint64_t s_flush_count = 0;
-    s_flush_count++;
-
-    if (s_flush_count <= 10 || (s_flush_count % 300) == 0) {
-        uint16_t tp = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[0];
-        uint16_t clut = m_vtxRingCpu[m_vtxBatchStart].tpage_clut[1];
-        uint32_t clut_x = (clut & 0x3Fu) * 16u;
-        uint32_t clut_y = (clut >> 6u) & 0x1FFu;
-        uint16_t c0 = m_vram ? m_vram[clut_y * VramWidth + clut_x] : 0;
-        uint16_t c1 = m_vram ? m_vram[clut_y * VramWidth + clut_x + 1] : 0;
-        static bool s_first_batch_37f4_logged = false;
-        if (c0 == 0x37F4 && !s_first_batch_37f4_logged) {
-            s_first_batch_37f4_logged = true;
-            printf("[Deko3D_ALERT] FlushBatch #%llu: FIRST BATCH WITH c0=0x37F4! cnt=%u tp=0x%x clut=0x%x(c0=0x%04x,c1=0x%04x)\n",
-                   (unsigned long long)s_flush_count, count, tp, clut, c0, c1);
-            fflush(stdout);
-        }
-        printf("[Deko3D] FlushBatch #%llu: cnt=%u clip=(%d,%d..%d,%d) abs=%d v0=(%.1f,%.1f) uv0=(%.1f,%.1f) tp=0x%x clut=0x%x(c0=0x%04x,c1=0x%04x) flags=0x%x\n",
-               (unsigned long long)s_flush_count, count,
-               m_clipX1, m_clipY1, m_clipX2, m_clipY2, isAbsolute ? 1 : 0,
-               m_vtxRingCpu[m_vtxBatchStart].pos[0], m_vtxRingCpu[m_vtxBatchStart].pos[1],
-               m_vtxRingCpu[m_vtxBatchStart].uv[0], m_vtxRingCpu[m_vtxBatchStart].uv[1],
-               tp, clut, c0, c1,
-               m_vtxRingCpu[m_vtxBatchStart].flags);
-        fflush(stdout);
-    }
 
     m_vtxBatchStart = m_vtxAllocated;
 }
@@ -910,15 +868,6 @@ void Deko3DRenderer::DrawShadedTexturedTriangle(int x0, int y0, int u0, int v0, 
 }
 
 void Deko3DRenderer::DrawRect(int x, int y, int w, int h, uint16_t color) {
-    if (h >= 400) {
-        static uint32_t s_dk_rect_cnt = 0;
-        if (++s_dk_rect_cnt <= 10 || (s_dk_rect_cnt % 60) == 0) {
-            printf("[Deko3D_DrawRect_Diag] #%u: x=%d y=%d w=%d h=%d color=0x%04x clip=(%d,%d..%d,%d)\n",
-                   s_dk_rect_cnt, x, y, w, h, (unsigned)color,
-                   m_clipX1, m_clipY1, m_clipX2, m_clipY2);
-            fflush(stdout);
-        }
-    }
     uint8_t rgba[4];
     PS1ColorToRGBA8(color, rgba);
     uint32_t flags = (m_semiEnabled ? 8u : 0u) | ((uint32_t)m_semiMode << 4u);
@@ -973,18 +922,6 @@ void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
 
     s_frame_fill_rects++;
 
-    if (w >= 200 || h >= 200) {
-        static uint32_t s_fill_alert_cnt = 0;
-        if (s_fill_alert_cnt++ < 40 || (s_fill_alert_cnt % 60) == 0) {
-            GpuDisplayInfo cur_di{};
-            gpu_get_display_info(&cur_di);
-            printf("[FILLRECT_DIAG] #%u f=%llu vtx_before=%u rect=(%d,%d %dx%d) col=0x%04X dispY=%u drawOff=(%d,%d) clipY=(%d..%d)\n",
-                   s_fill_alert_cnt, (unsigned long long)s_frame_count, m_vtxAllocated,
-                   x, y, w, h, color, cur_di.display_y, m_offsetX, m_offsetY, m_clipY1, m_clipY2);
-            fflush(stdout);
-        }
-    }
-
     FlushBatch();
     sw_fill_rect(x, y, w, h, color);
     // FillRect draws only to the framebuffer (m_vramTexture), never texture memory.
@@ -1016,17 +953,6 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
     }
 
     s_frame_copy_rects++;
-
-    int is_paused = psx_mod_game_started() ? (int)(psx_mod_read_word(0x80095494u) != 0) : 0;
-    if (is_paused) {
-        extern CPUState* debug_cpu_ptr;
-        uint32_t pc = debug_cpu_ptr ? debug_cpu_ptr->pc : 0;
-        uint32_t ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0;
-        uint32_t sp = debug_cpu_ptr ? debug_cpu_ptr->gpr[29] : 0;
-        printf("[PAUSE_COPY_RECT] f=%llu src=(%d,%d) dst=(%d,%d) size=(%dx%d) pc=0x%08X ra=0x%08X sp=0x%08X\n",
-               (unsigned long long)s_frame_count, sx, sy, dx, dy, w, h, pc, ra, sp);
-        fflush(stdout);
-    }
 
     FlushBatch();
 
@@ -1064,20 +990,6 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
     if (!m_initialized || !data || w <= 0 || h <= 0) return;
 
     s_frame_vram_transfers++;
-
-    int is_paused = psx_mod_game_started() ? (int)(psx_mod_read_word(0x80095494u) != 0) : 0;
-    if (is_paused) {
-        static uint32_t s_last_pause_vram_x = 0xFFFF, s_last_pause_vram_y = 0xFFFF;
-        if (s_last_pause_vram_x != (uint32_t)x || s_last_pause_vram_y != (uint32_t)y) {
-            extern CPUState* debug_cpu_ptr;
-            uint32_t pc = debug_cpu_ptr ? debug_cpu_ptr->pc : 0;
-            uint32_t ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0;
-            printf("[PAUSE_VRAM_TRANSFER] f=%llu dst=(%d,%d) size=(%dx%d) pc=0x%08X ra=0x%08X\n",
-                   (unsigned long long)s_frame_count, x, y, w, h, pc, ra);
-            fflush(stdout);
-            s_last_pause_vram_x = x; s_last_pause_vram_y = y;
-        }
-    }
 
     extern int g_post_fmv_sync_active;
     if (g_post_fmv_sync_active) {
@@ -1383,52 +1295,6 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
 }
 
 int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh) {
-    /* [BatchFlip_Diag]: diff this frame'd batch multiset against the last.
-     * Prints first 40 changes then every 60th: a batch whose triangle count
-     * changed between near frames with a static camera. */
-    {
-        extern uint64_t s_frame_count;      /* debug_server.c */
-        static unsigned s_flip_events = 0;
-        unsigned changed = 0;
-        for (unsigned i = 0; i < s_bank_nkeys; i++) {
-            unsigned pn = 0;
-            for (unsigned j = 0; j < s_bank_nprev; j++)
-                if (s_bank_prev[j].tpage == s_bank_keys[i].tpage &&
-                    s_bank_prev[j].clut == s_bank_keys[i].clut &&
-                    s_bank_prev[j].flags == s_bank_keys[i].flags) { pn = s_bank_prev[j].n; break; }
-            if (s_bank_keys[i].n != pn) {
-                if (++s_flip_events <= 40 || (s_flip_events % 60) == 0)
-                    printf("[BatchFlip_Diag] f=%llu tp=0x%03x cl=0x%04x fl=0x%03x tris %u->%u\n",
-                           (unsigned long long)s_frame_count, s_bank_keys[i].tpage & 0xFFF,
-                           s_bank_keys[i].clut, s_bank_keys[i].flags & 0x3FF,
-                           pn, s_bank_keys[i].n);
-                fflush(stdout);
-                if (++changed > 16) break;      /* whole-frame teardown: don't spam */
-            }
-        }
-        /* store present as previous */
-        for (unsigned i = 0; i < s_bank_nkeys && i < BANK_MAX_KEYS; i++) s_bank_prev[i] = s_bank_keys[i];
-        s_bank_nprev = s_bank_nkeys;
-        s_bank_nkeys = 0;
-        for (unsigned i = 0; i < BANK_MAX_KEYS; i++) s_bank_keys[i].n = 0;
-    }
-    /* [Deko3D_BankDiag]: this frame's batched triangles by sampled bank, as
-     * read at draw time (the same slice FlushBatch saw). Printed when the
-     * tally changes for the frame, first 40 then every 60th event. */
-    {
-        extern uint64_t s_frame_count;      /* debug_server.c */
-        static int s_prev_hi_tex = -1, s_prev_hi_clut = -1;
-        static unsigned s_changes = 0;
-        if (s_bank_hi_tex != s_prev_hi_tex || s_bank_hi_clut != s_prev_hi_clut) {
-            if (++s_changes <= 40 || (s_changes % 60) == 0)
-                printf("[Deko3D_BankDiag] f=%llu v=%u hi_tex_v=%u hi_clut_v=%u (was hi_tex_v=%d hi_clut_v=%d)\n",
-                       (unsigned long long)s_frame_count, s_bank_v, s_bank_hi_tex, s_bank_hi_clut,
-                       s_prev_hi_tex, s_prev_hi_clut);
-            fflush(stdout);
-            s_prev_hi_tex = s_bank_hi_tex; s_prev_hi_clut = s_bank_hi_clut;
-        }
-        s_bank_v = 0; s_bank_hi_tex = 0; s_bank_hi_clut = 0;
-    }
     if (out != nullptr) {
         return sw_render_display(out, pitch, dx, dy, dw, dh);
     }
@@ -1461,7 +1327,17 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     if (w == 0) w = 1;
     if (h == 0) h = 1;
 
-    bool inCombat = (w == 368 && h == 480 && m_clipY1 == 20 && m_clipY2 == 467);
+    int screenState = psx_mod_game_started() ? (int)(int16_t)psx_mod_read_half(0x800AE204u) : -1;
+    bool inCombat = (w == 368 && h == 480) && (screenState == 8 || screenState == 6 || m_clipY1 == 20);
+
+    static bool s_last_in_combat_state = false;
+    if (inCombat != s_last_in_combat_state) {
+        printf("[CombatTransition] Present #%llu: inCombat=%d->%d (w=%u h=%u screenState=%d clipY1=%d clipY2=%d)\n",
+               (unsigned long long)s_present_count, (int)s_last_in_combat_state, (int)inCombat,
+               w, h, screenState, m_clipY1, m_clipY2);
+        fflush(stdout);
+        s_last_in_combat_state = inCombat;
+    }
 
     static int s_prev_depth24 = -1;
     static int s_prev_disabled = -1;
