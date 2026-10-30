@@ -9034,6 +9034,11 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
          * call (initial entry + each tail-call re-dispatch). a0..a3
          * reflect the args being passed for THIS iteration. */
         fntrace_record(cpu, addr);
+#ifdef __SWITCH__
+        extern void fmv_diag_pre_dispatch(CPUState* cpu, uint32_t addr);
+        extern void fmv_diag_post_dispatch(CPUState* cpu, uint32_t addr);
+        fmv_diag_pre_dispatch(cpu, addr);
+#endif
         cpu->pc = 0;
         int lo = 0, hi = 3989 - 1;
         int found = 0;
@@ -9098,6 +9103,16 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
         int game_text_in_shell_window =
             game_phys >= 0x00030000u && game_phys <= 0x00043D43u &&
             psx_game_address_in_text(addr) && psx_game_text_native_ok(addr);
+        /* Fast path for dynamically loaded FMV overlays (Tekken 3 STR & VLC) */
+        if (!found && fntrace_is_game_started() &&
+            ((addr >= 0x800FDD58u && addr < 0x80100000u) ||
+             (addr >= 0x80104D58u && addr < 0x80106558u))) {
+            extern int psx_dispatch_fmv_overlay(CPUState* cpu, uint32_t addr);
+            if (psx_dispatch_fmv_overlay(cpu, addr)) {
+                g_dispatch_static_hits++;
+                found = 1;
+            }
+        }
         /* Fast path on Switch/production: once the game has started, route ALL
          * game-text addresses directly to psx_dispatch_game_compiled before
          * running the 3989-entry OpenBIOS binary search! */
@@ -9168,6 +9183,9 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
                 psx_unknown_dispatch(cpu, addr, phys);
             }
         }
+#ifdef __SWITCH__
+        fmv_diag_post_dispatch(cpu, addr);
+#endif
         /* Fix B: if the function just RETURNED via the recompiled exception
          * return (jr $k0; rfe) inside the synchronous handler, cpu->pc now holds
          * the real resume EPC and the RFE armed the escape — unwind to

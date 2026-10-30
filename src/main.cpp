@@ -944,6 +944,8 @@ static void check_combat_stall_diagnostic(uint32_t frame) {
     g_mesh_3d_prim_emitted_frame = 0;
 }
 
+extern "C" void fmv_diag_vblank(uint64_t frame_count);
+
 static void switch_vblank_callback(void) {
     u64 frame_start_tick = armGetSystemTick();
     if (s_last_cb_exit_tick != 0) {
@@ -960,6 +962,7 @@ static void switch_vblank_callback(void) {
     s_frame_count++;
     memory_log_frame_prim_diag((uint32_t)s_frame_count);
     check_combat_stall_diagnostic((uint32_t)s_frame_count);
+    fmv_diag_vblank(s_frame_count);
     static bool s_game_started_logged = false;
     if (!s_game_started_logged && fntrace_is_game_started()) {
         s_game_started_logged = true;

@@ -1135,6 +1135,8 @@ static int active(void) {
     if (psx_mod_read_byte(NO_STAGE)) return 0;
     uint32_t mode = psx_mod_read_word(MODE);
     if (mode == 7 || mode == 8) return 0;
+    /* Guard uninitialized camera on frame 0 to avoid 1-frame stage glitch before zoom starts */
+    if (psx_mod_read_word(CAMERA + 0x14) == 0 && psx_mod_read_word(CAMERA + 0x1C) == 0) return 0;
     /* The dark arena (True Ogre's fight) keeps the PS1's flat stage, unless
      * a TTT stage is wanted there: drawn at night (ttt_night). */
     int ttt = ttt_wanted();

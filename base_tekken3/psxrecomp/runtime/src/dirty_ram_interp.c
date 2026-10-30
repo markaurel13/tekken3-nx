@@ -1427,6 +1427,13 @@ static int interp_enter_compiled(CPUState *cpu, uint32_t target) {
         }
     }
     if (target == 0x8001A954u) site_note(&g_site_interp);
+    if ((target >= 0x800FDD58u && target < 0x80100000u) ||
+        (target >= 0x80104D58u && target < 0x80106558u)) {
+        extern int psx_dispatch_fmv_overlay(CPUState* cpu, uint32_t addr);
+        if (psx_dispatch_fmv_overlay(cpu, target)) {
+            return 1;
+        }
+    }
     /* Decline when the target page no longer matches the static game image.
      * Returning 0 lets the JAL/JALR handler fall through to local-flow interp
      * of the live RAM bytes instead of running stale compiled code. */
@@ -2843,6 +2850,13 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         clean_game_text_miss = 1;
     }
 #endif
+
+    /* Fast dispatch for dynamically loaded FMV overlays (Tekken 3 STR & VLC) */
+    if ((addr >= 0x800FDD58u && addr < 0x80100000u) ||
+        (addr >= 0x80104D58u && addr < 0x80106558u)) {
+        extern int psx_dispatch_fmv_overlay(CPUState* cpu, uint32_t addr);
+        if (psx_dispatch_fmv_overlay(cpu, addr)) return 1;
+    }
 
     /* B-2: statically-compiled overlay functions (generated/overlays_static.c).
      * Inert unless a game provides an overlays_static.c at build time. */

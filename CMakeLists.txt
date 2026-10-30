@@ -154,6 +154,10 @@ set(TEKKEN3_EXPANDED_SOURCES
     base_tekken3/src/tekken3_cine_scene.c
     base_tekken3/src/tekken3_cine_swap.c
     base_tekken3/src/tekken3_ttt1_records.c
+    base_tekken3/src/tekken3_fmv_overlay.c
+    base_tekken3/src/tekken3_fmv_str.c
+    base_tekken3/src/tekken3_fmv_vlc.c
+    base_tekken3/src/tekken3_fmv_diag.c
     "${TEKKEN3_FIGHT_CAMERA_SOURCE}"
     "${TEKKEN3_ARCADE_CAMERAS_SOURCE}"
     "${TTT1_COMBAT_HOOKS}"
@@ -317,6 +321,9 @@ set(TEKKEN3_WRAP_SYMBOLS
     func_800757A8
     func_8008D658
     func_8003CB84
+    func_8003E170
+    func_8003D6B0
+    func_8003D7BC
     spu_render
     spu_set_host_mix_volume
     spu_init

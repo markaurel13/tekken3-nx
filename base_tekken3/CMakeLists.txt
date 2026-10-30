@@ -141,7 +141,7 @@ if(TEKKEN3_JUN_EXPERIMENTAL)
         "-Wl,--wrap=func_80031BFC" "-Wl,--wrap=func_80052AD0"
         "-Wl,--wrap=func_80052958" "-Wl,--wrap=func_80052990" "-Wl,--wrap=func_8006BF20"
         "-Wl,--wrap=func_8003626C" "-Wl,--wrap=func_80036294" "-Wl,--wrap=func_800362C4"
-        "-Wl,--wrap=func_8003F044"
+        "-Wl,--wrap=func_8003F044" "-Wl,--wrap=func_8003E170" "-Wl,--wrap=func_8003D6B0" "-Wl,--wrap=func_8003D7BC"
         "-Wl,--wrap=func_800513C0" "-Wl,--wrap=func_80051464" "-Wl,--wrap=func_8005155C" "-Wl,--wrap=func_80051660"
         "-Wl,--wrap=func_80052948")
 endif()

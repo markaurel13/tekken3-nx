@@ -30,6 +30,10 @@ extern void __real_func_80040DF4(CPUState *cpu);
 extern void __real_func_800757A8(CPUState *cpu);
 extern void __real_func_8008D658(CPUState *cpu);
 extern void __real_func_8003CB84(CPUState *cpu);
+extern void __real_func_8003E170(CPUState *cpu);
+extern void __real_func_8003D6B0(CPUState *cpu);
+extern void __real_func_8003D7BC(CPUState *cpu);
+extern void func_8003DA68(CPUState *cpu);
 extern int tekken3_guest_character(unsigned id);
 
 /* LASER_SOUND: the lasers' sound, which TTT1 asks for outside its table
@@ -349,20 +353,67 @@ static int round_end_moves_on(void) {
     if(kind==6 || kind==7)return next==(psx_mod_read_word(0x800afa88)==7?240u:60u);
     return kind!=5 && pose_over(0) && pose_over(1);
 }
+static int s_round_skip_active = 0;
+
+void __wrap_func_8003E170(CPUState *cpu) {
+    if (cpu->pc == 0 || cpu->pc == 0x8003e170u) {
+        uint32_t round_end = psx_mod_read_word(ROUND_END);
+        if (round_end == 9 || round_end >= 10 || s_round_skip_active) {
+            cpu->pc = cpu->gpr[31];
+            return;
+        }
+    }
+    __real_func_8003E170(cpu);
+}
+
+void __wrap_func_8003D6B0(CPUState *cpu) {
+    if (cpu->pc == 0 || cpu->pc == 0x8003d6b0u) {
+        uint32_t round_end = psx_mod_read_word(ROUND_END);
+        if (round_end == 9 || round_end >= 10 || s_round_skip_active) {
+            cpu->pc = cpu->gpr[31];
+            return;
+        }
+    }
+    __real_func_8003D6B0(cpu);
+}
+
+void __wrap_func_8003D7BC(CPUState *cpu) {
+    if (cpu->pc == 0 || cpu->pc == 0x8003d7bcu) {
+        uint32_t round_end = psx_mod_read_word(ROUND_END);
+        if (round_end == 9 || round_end >= 10 || s_round_skip_active) {
+            func_8003DA68(cpu);
+            return;
+        }
+    }
+    __real_func_8003D7BC(cpu);
+}
+
 void __wrap_func_8003CB84(CPUState *cpu) {
     static unsigned held;
     if(cpu->pc==0 || cpu->pc==0x8003cb84) {
+        uint32_t round_end = psx_mod_read_word(ROUND_END);
+        if (round_end == 0) {
+            s_round_skip_active = 0;
+        } else if (round_end == 9 || round_end >= 10) {
+            s_round_skip_active = 1;
+        }
         round_frames++;
         int waiting=wins_task && round_frames-wins_checked<=2;
         if(!waiting)wins_task=0;
         if(wins_left && !waiting)wins_left--;
         if(!waiting && !wins_left)held=0;
-        else if(psx_mod_read_word(ROUND_END)==ROUND_END_POSE && round_end_moves_on() && held<HOLD_MAX) {
+        else if(round_end==ROUND_END_POSE && round_end_moves_on() && held<HOLD_MAX) {
             held++;
             cpu->pc=cpu->gpr[31];return;
         }
     }
     __real_func_8003CB84(cpu);
+    if(cpu->pc==0 || cpu->pc==cpu->gpr[31]) {
+        uint32_t round_end = psx_mod_read_word(ROUND_END);
+        if (round_end == 9 || round_end >= 10) {
+            s_round_skip_active = 1;
+        }
+    }
 }
 
 /* The lasers' own sound: 80116EA4 asks for it when the beam starts
