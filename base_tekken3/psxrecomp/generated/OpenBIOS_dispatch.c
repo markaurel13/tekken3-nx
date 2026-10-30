@@ -9081,6 +9081,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
          * (game not started) still falls through to normalize(). */
         extern int fntrace_is_game_started(void);
         extern int dirty_ram_text_native_ok(uint32_t phys);
+        extern int psx_game_text_native_ok(uint32_t addr);
         extern int psx_dispatch_game_compiled(CPUState* cpu, uint32_t addr);
         int game_shell_overlap = fntrace_is_game_started() &&
             game_phys >= 0x00030000u && game_phys <= 0x00043D43u;
@@ -9096,7 +9097,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
          * dispatches); post-load it holds the game EXE (matches -> game path). */
         int game_text_in_shell_window =
             game_phys >= 0x00030000u && game_phys <= 0x00043D43u &&
-            psx_game_address_in_text(addr) && dirty_ram_text_native_ok(game_phys);
+            psx_game_address_in_text(addr) && psx_game_text_native_ok(addr);
         /* Fast path on Switch/production: once the game has started, route ALL
          * game-text addresses directly to psx_dispatch_game_compiled before
          * running the 3989-entry OpenBIOS binary search! */
@@ -9108,7 +9109,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
         }
         if (!found && (game_shell_overlap || game_text_in_shell_window ||
             (psx_game_address_in_text(addr) &&
-             (dirty_ram_is_dirty(game_phys) || !dirty_ram_text_native_ok(game_phys))))) {
+             (dirty_ram_is_dirty(game_phys) || !psx_game_text_native_ok(addr))))) {
             found = dirty_ram_dispatch(cpu, addr, stop_addr);
         }
 #endif

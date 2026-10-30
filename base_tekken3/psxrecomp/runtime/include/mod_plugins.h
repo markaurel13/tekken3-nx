@@ -55,8 +55,78 @@ uint32_t psx_mod_alloc_guest_memory(uint32_t size, uint32_t alignment);
  */
 uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size, uint32_t alignment);
 
+/*
+ * Texture alias: 4bpp textured polygons and sprites that read texels
+ * u0..u1 x v0..v1 of texture page `page` (GP0 texpage bits 0-4) through a CLUT
+ * in x clut_x0..clut_x1, y clut_y0..clut_y1 (VRAM coordinates) read them from
+ * page `dst_page` instead, v moved by dv. Lets a mod move a sheet the game
+ * keeps where other data must go. on = 0 turns it off.
+ */
+void psx_mod_gpu_texture_alias(int on, unsigned page, unsigned u0, unsigned v0,
+                               unsigned u1, unsigned v1, unsigned clut_x0,
+                               unsigned clut_y0, unsigned clut_x1,
+                               unsigned clut_y1, unsigned dst_page, int dv);
+
+/*
+ * Upper VRAM half, y 512..1023, as on Namco System 12 (1024 x 1024 VRAM).
+ * Absent unless a plugin asks: call enable from its activation callback (it
+ * allocates the CPU copy; the renderer makes its own on first use). Returns
+ * 1 on success. Without it the GPU is the PS1's, 1024 x 512, y wrapping at
+ * 512, with no memory and no savestate bytes added.
+ *
+ * upload: copy w x h halfwords (rows of w) to VRAM (x, y), y in 512..1023,
+ * the rectangle wholly inside the half. Returns 0 if refused.
+ *
+ * source: the guest packet memory [address, address + size), allocated with
+ * psx_mod_alloc_gpu_dma_memory, whose primitives may read the half when the
+ * GPU walks them in a linked list (ordering table): texpage bit 11 adds 512
+ * to the texture page y (polygons; sprites after such a GP0(E1h) or
+ * polygon from that memory), CLUT bit 15 adds 512 to the CLUT y. These are
+ * the System 12 GPU's bits; every other packet, the game's included, keeps
+ * the PS1 meaning. Up to 8 ranges. Primitives never draw into the half.
+ *
+ * ready: 1 when enabled and the active renderer samples the half (software
+ * and OpenGL do; Vulkan does not, and skips such primitives).
+ */
+int psx_mod_gpu_high_vram_enable(void);
+int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h,
+                                 const uint16_t* pixels);
+int psx_mod_gpu_high_vram_source(uint32_t address, uint32_t size);
+int psx_mod_gpu_high_vram_ready(void);
+
+/*
+ * A mod's own audio player in save states (BS_SEC_MOD_AUDIO). bytes: the
+ * size of its state now, 0 while it plays nothing (then no section is
+ * written and the state file is the stock one); write fills that many bytes;
+ * read restores them and returns 0 to reject the load. A state without the
+ * section never calls read: the mod resets its player when the SPU's state
+ * is read (spu_snapshot_read, applied before this section). One player.
+ */
+void psx_mod_audio_state_register(uint32_t (*bytes)(void),
+                                  void (*write)(uint8_t* out),
+                                  int (*read)(const uint8_t* in, uint32_t len));
+
 /* Current per-side widescreen reveal in native game pixels (zero at 4:3). */
 int32_t psx_mod_widescreen_x_margin(void);
+
+/*
+ * Sub-pixel precision for packets a mod builds itself ([video]
+ * geometry_correction / perspective_texturing, ENHANCEMENTS.md G1.13). A mod
+ * that projects its own vertices (its own RTPS) calls psx_mod_precise_word
+ * right after writing a vertex position word: `address` and `value` are the
+ * word just written, x16 / y16 the screen position in 16.16 before rounding
+ * (integer part equal to the word's 11-bit X and Y, or the word is left
+ * uncorrected), z the depth (the GTE's SZ). The GPU uses it only while the
+ * word still holds `value`. psx_mod_precision_wanted() is 0 when both options
+ * are off: skip the work then. RAM and psx_mod_alloc_gpu_dma_memory only.
+ */
+int psx_mod_precision_wanted(void);
+/* 1 when geometry correction is on, so sub-pixel positions are drawn. With
+ * perspective texturing alone only depth is used: work that only adjusts
+ * positions (snapping a vertex onto a neighbour's edge, say) can be skipped. */
+int psx_mod_geometry_wanted(void);
+void psx_mod_precise_word(uint32_t address, uint32_t value, int32_t x16,
+                          int32_t y16, uint32_t z);
 
 /*
  * Read the committed value of one of this package's declared options, as the

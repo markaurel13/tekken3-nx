@@ -102,6 +102,10 @@ void gr_vram_write(int x, int y, uint16_t pixel);
 uint16_t gr_vram_read(int x, int y);
 void gr_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data);
 void gr_vram_transfer_out(int x, int y, int w, int h, uint16_t *data);
+int  gr_vram_watch(int x, int y, int w, int h);
+int  gr_vram_watch_take(int id);
+int  gr_set_high_vram(const uint16_t *high, int tex_high, int clut_high);
+void gr_high_vram_written(int x, int y, int w, int h);
 
 /* Draw area / offset */
 void gr_set_draw_area(int x1, int y1, int x2, int y2);
@@ -230,6 +234,8 @@ typedef struct GpuRenderBackend {
      * pixel count, writes width/height to ow/oh. NULL if unsupported. */
     int  (*wide_dump_full)(uint32_t *out, int cap_pixels, int *ow, int *oh,
                            int base_x);
+    int  (*set_high_vram)(const uint16_t *high, int tex_high, int clut_high);
+    void (*high_vram_written)(int x, int y, int w, int h);
 } GpuRenderBackend;
 
 #ifdef __cplusplus

@@ -1,0 +1,1317 @@
+{
+ "about": "Tekken Tag Tournament (PS2) Theater grid, census of 2026-10-03. cursor = EE word 0x01FC4814 (writing it through PINE moves the cursor and the panel follows). Grid: 4 rows x 10 columns; row 1 = MOVIE (cols 1-2), 6 characters, MUSIC (cols 9-10); rows 2-3 = 10 characters; row 4 = EXIT, 8 characters, EXIT. Cursor 0 and 7 are not on the grid (garbage panel). lines = the panel under the grid: buttons, (nP), label; yellow = drawn in yellow instead of white. The button only picks the costume the scene is played with; the scene content is the same (Omar), except where the label changes (Panda, Tiger, Angel, Mokujin, Alex). kind/ending_key from ttt_endings.json; null = not checked yet. Unlocked save (CodeBreaker, TIPS 28).",
+ "cells": [
+  {
+   "cursor": 1,
+   "row": 1,
+   "col": 3,
+   "page": "3/3",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "KUNIMITSU",
+     "yellow": false,
+     "ending_key": "kunimitsu",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "KUNIMITSU",
+     "yellow": false,
+     "ending_key": "kunimitsu",
+     "kind": "engine"
+    },
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "KUNIMITSU",
+     "yellow": false,
+     "ending_key": "kunimitsu",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 2,
+   "row": 1,
+   "col": 4,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "KAZUYA",
+     "yellow": false,
+     "ending_key": "kazuya",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "KAZUYA",
+     "yellow": false,
+     "ending_key": "kazuya",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 3,
+   "row": 1,
+   "col": 5,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "BRUCE",
+     "yellow": false,
+     "ending_key": "bruce",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "BRUCE",
+     "yellow": false,
+     "ending_key": "bruce",
+     "kind": "engine"
+    }
+   ],
+   "scene": {
+    "kind": "engine",
+    "checked": "2026-10-03",
+    "button": "□",
+    "seen_by_omar": "Bruce alone in a temple (ruins) does a kind of Embu (Muay Thai moves); at the end, seen from behind, a pile of beaten bodies behind him, Kazuya and Heihachi among them.",
+    "measured": "one skeleton (98 nodes) at 0x87A2F0; 2 sequences of 1024 + 117 frames (counter 0x447F24). The bodies of the last shot (seq 0, frame ~841-1023) are 30 static objects, not skeletons: a linked list at 0x01FBF590, 0x90 bytes each, empty at frame 8: world matrix +0x00, then pointers to a descriptor (0x0044D140 table, 0x30 each, value 0x349 = 841: maybe the frame they appear), a small table (0x004539A8, 0x20 each) and a block (0x00FCD310, 0xE8 each), base position (floats), angle -2.618, scale 1.2, index 0..29.",
+    "capture": "workspace/ttt-ps2/theater/bruce.jsonl (ttt_capture.py --relink): 1140 frames, seq 0 = 1..1023, seq 1 = 0..116, none missed",
+    "objects": {
+     "7": "Heihachi",
+     "5": "Kazuya",
+     "note": "confirmed by Omar 2026-10-03: each object hidden in turn on save state 5 (x of its matrix, its record base +0x4C and its table +8 pushed 100000 away); the others: Tekken Force soldiers and rubble, not told apart",
+     "types": "record +0x70 >> 16: 1 Kazuya (5), 2 Heihachi (7), 0 soldier (the 28 others)",
+     "pile": "1-7 and 25-28 (11 bodies stacked 320..1444 high): Kazuya prone, Heihachi on his back arms over his head (Omar, matches the decoded poses)",
+     "poses": "pose block = u16 frame count then frame 0's 57 TTT1 channels as is (decoder 0x00367CA0(block, out, frame, 57)); tools/ps2/ttt_static_bodies.py -> workspace/ttt-ps2/bruce-pile.json"
+    },
+    "t3": {
+     "arena": 12,
+     "stage": "Heihachi",
+     "decided": "Omar 2026-10-03",
+     "bodies": "Omar 2026-10-03: not all 30; try only the pile holding Heihachi (7) and Kazuya (5), check the load, remove more step by step if it crashes"
+    },
+    "retarget": "workspace/ttt-ps2/bruce-ttt1.json (ttt_retarget.py ... 0 bruce --calib-frame 0:328, the same node numbers as Kazuya's skeleton)"
+   }
+  },
+  {
+   "cursor": 4,
+   "row": 1,
+   "col": 6,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "KUMA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "PANDA",
+     "yellow": true,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "KUMA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "PANDA",
+     "yellow": true,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 5,
+   "row": 1,
+   "col": 7,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "JACK-2",
+     "yellow": false,
+     "ending_key": "jack2",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "JACK-2",
+     "yellow": false,
+     "ending_key": "jack2",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 6,
+   "row": 1,
+   "col": 8,
+   "page": "3/3",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "LEE",
+     "yellow": false,
+     "ending_key": "lee",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "LEE",
+     "yellow": false,
+     "ending_key": "lee",
+     "kind": "engine"
+    },
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "LEE",
+     "yellow": false,
+     "ending_key": "lee",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 8,
+   "row": 2,
+   "col": 1,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "BAEK",
+     "yellow": false,
+     "ending_key": "baek",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "BAEK",
+     "yellow": false,
+     "ending_key": "baek",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 9,
+   "row": 2,
+   "col": 2,
+   "page": "3/3",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "MICHELLE",
+     "yellow": false,
+     "ending_key": "michelle",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "MICHELLE",
+     "yellow": false,
+     "ending_key": "michelle",
+     "kind": "engine"
+    },
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "MICHELLE",
+     "yellow": false,
+     "ending_key": "michelle",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 10,
+   "row": 2,
+   "col": 3,
+   "page": "1/1",
+   "lines": [
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "ARMOR KING",
+     "yellow": false,
+     "ending_key": "armorking",
+     "kind": "engine"
+    },
+    {
+     "buttons": "□×△○",
+     "player": null,
+     "label": null,
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 11,
+   "row": 2,
+   "col": 4,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "GUN JACK",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "GUN JACK",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "GUN JACK",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "GUN JACK",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 12,
+   "row": 2,
+   "col": 5,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "ANNA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "ANNA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "ANNA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "ANNA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 13,
+   "row": 2,
+   "col": 6,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "BRYAN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "BRYAN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "BRYAN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "BRYAN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 14,
+   "row": 2,
+   "col": 7,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "HEIHACHI",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "HEIHACHI",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "HEIHACHI",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "HEIHACHI",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 15,
+   "row": 2,
+   "col": 8,
+   "page": "1/1",
+   "lines": [
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "GANRYU",
+     "yellow": false,
+     "ending_key": "ganryu",
+     "kind": "engine"
+    },
+    {
+     "buttons": "□×△○",
+     "player": null,
+     "label": null,
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 16,
+   "row": 2,
+   "col": 9,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "JULIA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "JULIA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "JULIA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "JULIA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 17,
+   "row": 2,
+   "col": 10,
+   "page": "3/3",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "JUN",
+     "yellow": false,
+     "ending_key": "jun",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "JUN",
+     "yellow": false,
+     "ending_key": "jun",
+     "kind": "engine"
+    },
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "JUN",
+     "yellow": false,
+     "ending_key": "jun",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 18,
+   "row": 3,
+   "col": 1,
+   "page": "6/6",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "XIAOYU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "XIAOYU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "XIAOYU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "XIAOYU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "START",
+     "player": "5P",
+     "label": "XIAOYU",
+     "yellow": true,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "R1",
+     "player": "6P",
+     "label": "XIAOYU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 19,
+   "row": 3,
+   "col": 2,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "YOSHIMITSU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "YOSHIMITSU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "YOSHIMITSU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "YOSHIMITSU",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 20,
+   "row": 3,
+   "col": 3,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "NINA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "NINA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "NINA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "NINA",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 21,
+   "row": 3,
+   "col": 4,
+   "page": "5/5",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "LAW",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "LAW",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "LAW",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "LAW",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "START",
+     "player": "5P",
+     "label": "LAW",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 22,
+   "row": 3,
+   "col": 5,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "HWOARANG",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "HWOARANG",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "HWOARANG",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "HWOARANG",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 23,
+   "row": 3,
+   "col": 6,
+   "page": "5/5",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "EDDY",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "EDDY",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "EDDY",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "EDDY",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "START",
+     "player": "5P",
+     "label": "TIGER",
+     "yellow": true,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 24,
+   "row": 3,
+   "col": 7,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "PAUL",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "PAUL",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "PAUL",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "PAUL",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 25,
+   "row": 3,
+   "col": 8,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "KING",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "KING",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "KING",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "KING",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 26,
+   "row": 3,
+   "col": 9,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□×",
+     "player": "1P",
+     "label": "LEI",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△○",
+     "player": "3P",
+     "label": "LEI",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 27,
+   "row": 3,
+   "col": 10,
+   "page": "5/5",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "JIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "JIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "JIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "JIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "START",
+     "player": "5P",
+     "label": "JIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 28,
+   "row": 4,
+   "col": 3,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "WANG",
+     "yellow": false,
+     "ending_key": "wang",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "WANG",
+     "yellow": false,
+     "ending_key": "wang",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 29,
+   "row": 4,
+   "col": 4,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "P.JACK",
+     "yellow": false,
+     "ending_key": "pjack",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "P.JACK",
+     "yellow": false,
+     "ending_key": "pjack",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 30,
+   "row": 4,
+   "col": 5,
+   "page": "3/3",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "DEVIL",
+     "yellow": false,
+     "ending_key": "devil",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "DEVIL",
+     "yellow": false,
+     "ending_key": "devil",
+     "kind": "engine"
+    },
+    {
+     "buttons": "START",
+     "player": "3P",
+     "label": "ANGEL",
+     "yellow": true,
+     "ending_key": "angel",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 31,
+   "row": 4,
+   "col": 6,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "TRUE OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "TRUE OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "TRUE OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "TRUE OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 32,
+   "row": 4,
+   "col": 7,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "OGRE",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 33,
+   "row": 4,
+   "col": 8,
+   "page": "2/2",
+   "lines": [
+    {
+     "buttons": "□△",
+     "player": "1P",
+     "label": "ROGER",
+     "yellow": false,
+     "ending_key": "roger",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×○",
+     "player": "2P",
+     "label": "ALEX",
+     "yellow": false,
+     "ending_key": "alex",
+     "kind": "engine"
+    }
+   ]
+  },
+  {
+   "cursor": 34,
+   "row": 4,
+   "col": 2,
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "player": "1P",
+     "label": "TETSUJIN",
+     "yellow": false,
+     "ending_key": "tetsujin",
+     "kind": "engine"
+    },
+    {
+     "buttons": "×",
+     "player": "2P",
+     "label": "MOKUJIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "player": "3P",
+     "label": "MOKUJIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    },
+    {
+     "buttons": "○",
+     "player": "4P",
+     "label": "MOKUJIN",
+     "yellow": false,
+     "ending_key": null,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 35,
+   "row": 4,
+   "col": 9,
+   "page": "1/1",
+   "lines": [
+    {
+     "buttons": "□×△○",
+     "player": "1P",
+     "label": "UNKNOWN",
+     "yellow": false,
+     "ending_key": "unknown",
+     "kind": "fmv"
+    }
+   ]
+  }
+ ],
+ "special": [
+  {
+   "cursor": 36,
+   "row": 1,
+   "col": "1-2",
+   "label": "MOVIE",
+   "page": "4/4",
+   "lines": [
+    {
+     "buttons": "□",
+     "label": "OPENING MOVIE",
+     "kind": null
+    },
+    {
+     "buttons": "×",
+     "label": "ARCADE MOVIE",
+     "kind": null
+    },
+    {
+     "buttons": "△",
+     "label": "EMBU",
+     "kind": "engine",
+     "scene": {
+      "checked": "2026-10-03",
+      "stage": "Chinese temple courtyard, storm sky",
+      "measured": "cutscene counter 0x447F24 restarts at each sequence; actors at 0x87A2F0 and 0x885B90 (Kazuya ending addresses), node count changes with the character (104, 130, 134, 148)",
+      "order_by_omar": [
+       "Jin: kata (classic)",
+       "Xiaoyu",
+       "Xiaoyu hits Paul",
+       "Jin hits Paul",
+       "Hwoarang",
+       "Hwoarang and Eddy",
+       "Hwoarang and Paul",
+       "Paul with Jun",
+       "Jun",
+       "Paul",
+       "Xiaoyu",
+       "Eddy",
+       "Jin with the Devil Jin side (the small tattoo)"
+      ],
+      "capture": "workspace/ttt-ps2/theater/embu/embu.jsonl (tools/ps2/ttt_embu_capture.py, one sequence at a time from Omar's save state 7): seq 0 = 0..1023, seq 1 = 2..1023, seq 2 = 7..201 (the Embu ends at seq 2 frame 242: 2 290 frames in all; under a capture it ends early, after about 1.2 sequences)",
+      "effects": [
+       {
+        "seq": 0,
+        "frame": "~826 (between 798 and 856)",
+        "who": "Paul",
+        "what": "fiery punch on Hwoarang (orange flames around the fist)",
+        "t3": "Paul strong-hit effect (Omar: mark it, use the T3 effect, never copy the PS2 one)"
+       },
+       {
+        "seq": 1,
+        "frame": "~43 (between 17 and 71)",
+        "who": "Jin (Devil side)",
+        "what": "red lightning from the forehead, then white fade",
+        "t3": "red lightning (Omar)"
+       }
+      ],
+      "effects_note": "seen on save states 0.7 s apart from Omar's slot 6 (frame 772, just before Paul's punch); the game's effect list is not found in RAM yet (0x01FAB0E0 holds a pointer table whose first 8 entries change at the punch: a lead)",
+      "effects_complete": "yes, Omar 2026-10-03: these two are the only effects of the Embu",
+      "t3": {
+       "replaces": "T3 attract Embu variant 1 (variant 0 with swapped costumes)",
+       "arena": 4,
+       "stage": "Hwoarang",
+       "decided": "Omar 2026-10-03"
+      }
+     }
+    },
+    {
+     "buttons": "○",
+     "label": "EMBU2",
+     "yellow": true,
+     "kind": null
+    }
+   ]
+  },
+  {
+   "cursor": 37,
+   "row": 1,
+   "col": "9-10",
+   "label": "MUSIC",
+   "lines": [
+    {
+     "buttons": null,
+     "label": "MUSIC PLAYER"
+    }
+   ]
+  },
+  {
+   "cursor": 38,
+   "row": 4,
+   "col": 10,
+   "label": "EXIT",
+   "lines": [
+    {
+     "buttons": null,
+     "label": "EXIT THEATER MENU"
+    }
+   ]
+  },
+  {
+   "cursor": 39,
+   "row": 4,
+   "col": 1,
+   "label": "EXIT",
+   "lines": [
+    {
+     "buttons": null,
+     "label": "EXIT THEATER MENU"
+    }
+   ]
+  }
+ ]
+}

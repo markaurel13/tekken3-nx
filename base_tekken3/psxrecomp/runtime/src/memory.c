@@ -34,7 +34,7 @@
 #define SCRATCHPAD_SIZE 1024
 #define BIOS_ROM_SIZE   (512 * 1024)
 #define MOD_MEMORY_BASE 0x1F000000u
-#define MOD_MEMORY_SIZE (1u * 1024u * 1024u)
+#define MOD_MEMORY_SIZE PSX_MOD_GUEST_MEMORY_SIZE
 
 static uint8_t ram[RAM_SIZE];
 static uint8_t s_ram_overflow[RAM_OVERFLOW_SIZE];
@@ -93,6 +93,22 @@ static int mod_gpu_dma_memory_offset(uint32_t phys, uint32_t width,
 uint32_t psx_mod_gpu_dma_resolve_address(uint32_t address) {
     return psx_mod_gpu_dma_resolve_address_for(
         address, mod_gpu_dma_memory_used);
+}
+
+const uint8_t *psx_mod_memory_region(int which, uint32_t *used) {
+    if (which == 0) { *used = mod_memory_used; return mod_memory; }
+    *used = mod_gpu_dma_memory_used;
+    return mod_gpu_dma_memory;
+}
+
+int psx_mod_memory_restore(int which, const uint8_t *data, uint32_t len) {
+    uint8_t *region = which == 0 ? mod_memory : mod_gpu_dma_memory;
+    uint32_t *used = which == 0 ? &mod_memory_used : &mod_gpu_dma_memory_used;
+    uint32_t cap = which == 0 ? (uint32_t)MOD_MEMORY_SIZE : (uint32_t)PSX_MOD_GPU_DMA_APERTURE_SIZE;
+    if (len > cap) return 0;
+    memcpy(region, data, len);
+    if (*used < len) *used = len;
+    return 1;
 }
 
 /* Exposed for inlined main-RAM load helpers in psx_cyc.h (VLC/decode hot path). */
@@ -490,8 +506,6 @@ int dirty_ram_text_native_ok(uint32_t phys) {
     if (memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), n) == 0)
         return 1;
 
-    text_diverged_bitmap[page >> 5] |= bit;
-    g_text_diverged_pages++;
     g_text_native_blocked++;
     return 0;
 }
@@ -568,7 +582,7 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
             for (uint32_t p = p0; p <= p1; p++) {
                 uint32_t bit = 1u << (p & 31u);
-                if ((text_modified_bitmap[p >> 5] | text_diverged_bitmap[p >> 5]) & bit) {
+                if ((text_modified_bitmap[p >> 5] | dirty_ram_bitmap[p >> 5] | text_diverged_bitmap[p >> 5]) & bit) {
                     any_page_flagged = 1;
                     break;
                 }

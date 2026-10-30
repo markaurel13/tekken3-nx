@@ -33,6 +33,26 @@ class ProbeError(ValueError):
     pass
 
 
+# The TTT1 sets the import accepts, World first. The US C1, US B and Japan C1
+# program ROMs differ from the World's only in the version header
+# (ROM+0x20041-0x201FF): the game program they unpack and every other chip are
+# the same (TIPS.md § 96).
+TTT_SETS = ("tektagt", "tektagtuc1", "tektagtub", "tektagtjc1")
+
+
+def ttt_set(archive: Path) -> str:
+    """The accepted TTT1 set whose program ROMs (by CRC) the archive holds, else
+    tektagt, so that reconstruct names the chips it misses."""
+    sets = json.loads(MANIFEST.read_text(encoding="utf-8"))["sets"]
+    with zipfile.ZipFile(archive) as source:
+        crcs = {f"{info.CRC:08x}" for info in source.infolist() if not info.is_dir()}
+    for name in TTT_SETS:
+        if {spec["crc32"] for region in sets[name]["regions"] if region["name"] == "maincpu:rom"
+                for spec in region["loads"]} <= crcs:
+            return name
+    return TTT_SETS[0]
+
+
 def digest(data: bytes | bytearray) -> str:
     return hashlib.sha256(data).hexdigest()
 

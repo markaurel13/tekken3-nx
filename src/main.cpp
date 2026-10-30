@@ -941,7 +941,7 @@ static void switch_vblank_callback(void) {
         s_last_vblank_frame = s_frame_count;
     }
 
-    const uint64_t report_interval = (s_frame_count <= 360) ? 120 : 600;
+    const uint64_t report_interval = 120;
 
     if (s_frame_count <= 5 || s_frame_count == 60 || (s_frame_count % report_interval) == 0) {
         extern uint64_t g_dirty_dispatch_calls;

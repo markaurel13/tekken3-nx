@@ -18,7 +18,30 @@ base_tekken3/disc/
 *.chd
 !romfs/bios/openbios.bin
 
+# Arcade ROMs & compressed packages
+*.zip
+*.7z
+*.rar
+*.tar*
+*.gz
+
+# Memory dumps, saves & state
+*.mcd
+*.dump
+saves/
+fmv_ram_dump.bin
+
+# Python cache & tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
 # Large PC mods & local config
 base_tekken3/mods/
 .switch_ip
 *.log
+.vscode/
+.idea/
+.DS_Store

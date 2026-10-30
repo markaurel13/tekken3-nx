@@ -1,0 +1,20 @@
+{
+ "about": "Baek's Tekken Tag Tournament (PS2) ending (scene 17): Hwoarang kneels, Baek lectures him. Converted by tools/ps2/ttt_to_cine.py (docs/CINE-CONVERT.md).",
+ "scene": "baek",
+ "arena": 4,
+ "dark": 0,
+ "trigger": "arcade-end p1=baek",
+ "ttt_stage": {"stage": 4, "courtyard": 12350,
+               "why": "the PS2 script's stage 4 (scene table 0x51B388), TTT arcade's stage 4 (Hwoarang's temple): every TTT cinematic on its TTT stage (the user, 2026-10-21); no cmd 7 in the script: no lightning (a forced stage has no random storm); the courtyard as the Embu's (TIPS 115); --basis canonical:180: the arcade stage 4 is turned half round from the PS2's (yaw 0 showed the balustrades and mountains where the PS2 has the temple gate and its stairs, 899-1199; Michelle's stage 13 matches at 0); without TTT Stages, the T3 arena 4 above"},
+ "actors": [
+  {"cast": "baek", "costume": 0, "skeleton": "baek",
+   "retarget": ["--basis", "canonical:180", "--contacts", "--twists", "--collars", "--world"],
+   "why": "TTT costume -1 (the player's): T3 costume 0"},
+  {"cast": "hwoarang", "costume": 0, "skeleton": "baek", "idle": "roster/Hwoarang-TTT1-idle.poses",
+   "retarget": ["--calib", "{actor0}", "--contacts", "--twists", "--collars"],
+   "why": "a Tekken 3 native on Baek's TTT1 skeleton (no TTT1 model of his), his TTT1 stance; TTT costume 2: T3 costume 0, his white dobok (the user's choice)"}
+ ],
+ "ignore": [
+  {"task": "0x3a0850", "why": "stage 4 background ambience: born with no script command, lives 1-5 frames, always 9700+ units from both actors (median 12000), only in the two stage 4 endings (Baek, Wang); the T3 arena brings its own"}
+ ]
+}

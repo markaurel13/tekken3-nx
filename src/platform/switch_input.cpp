@@ -7,6 +7,8 @@ extern "C" {
     void sio_set_pad_connected(int slot, int connected);
     void sio_set_pad_state_slot(int slot, uint16_t buttons);
     void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
+    void tekken3_outfits_connect(int player, int connected);
+    uint16_t tekken3_outfits_input(int player, uint16_t buttons);
 }
 
 SwitchInput& SwitchInput::Instance() {
@@ -142,9 +144,14 @@ void SwitchInput::Update() {
             uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
             uint16_t ps1Buttons = connected ? TranslatePadState(m_pads[i], i, lx, ly, rx, ry) : 0xFFFF;
 
+            tekken3_outfits_connect(i, (connected || i == 0) ? 1 : 0);
+            ps1Buttons = tekken3_outfits_input(i, ps1Buttons);
+
             // Enviar estado de botones y sticks a la simulación SIO de PS1
             sio_set_pad_state_slot(i, ps1Buttons);
             sio_set_pad_sticks(i, lx, ly, rx, ry);
+        } else {
+            tekken3_outfits_connect(i, 0);
         }
     }
 

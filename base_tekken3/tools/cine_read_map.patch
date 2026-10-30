@@ -1,0 +1,81 @@
+diff --git a/psxrecomp/runtime/src/gpu_render.c b/psxrecomp/runtime/src/gpu_render.c
+index cf01245..43a584c 100644
+--- a/psxrecomp/runtime/src/gpu_render.c
++++ b/psxrecomp/runtime/src/gpu_render.c
+@@ -187,9 +187,25 @@ void gr_draw_gouraud_triangle(int x0, int y0, uint16_t c0, int x1, int y1, uint1
+                               int x2, int y2, uint16_t c2) {
+     WATCH_TRI(x0, y0, x1, y1, x2, y2); g_b->draw_gouraud_triangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
+ }
++/* LOCAL PROBE (cine-scene, not committed): VRAM blocks of 16x16 read as
++ * texels (1) or CLUT (2) while gr_read_map_on. */
++unsigned char gr_read_map[32][64]; int gr_read_map_on;
++static void read_mark(int x0,int y0,int x1,int y1,unsigned char bit){
++    if(x0<0)x0=0; if(y0<0)y0=0; if(x1>1023)x1=1023; if(y1>511)y1=511;
++    for(int y=y0/16;y<=y1/16;y++)for(int x=x0/16;x<=x1/16;x++)gr_read_map[y][x]|=bit;
++}
++static void READ_MARK(int umin,int umax,int vmin,int vmax,uint16_t cx,uint16_t cy,uint16_t tp){
++    if(!gr_read_map_on)return;
++    int bx=(tp&15)*64, by=((tp>>4)&1)*256, depth=(tp>>7)&3, div=depth==0?4:depth==1?2:1;
++    read_mark(bx+umin/div,by+vmin,bx+umax/div,by+vmax,1);
++    if(depth<2)read_mark(cx,cy,cx+(depth==0?15:255),cy,2);
++}
++#define MIN3(a,b,c) ((a)<(b)?((a)<(c)?(a):(c)):((b)<(c)?(b):(c)))
++#define MAX3(a,b,c) ((a)>(b)?((a)>(c)?(a):(c)):((b)>(c)?(b):(c)))
+ void gr_draw_textured_triangle(int x0, int y0, int u0, int v0, int x1, int y1, int u1, int v1,
+                                int x2, int y2, int u2, int v2,
+                                uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
++    READ_MARK(MIN3(u0,u1,u2),MAX3(u0,u1,u2),MIN3(v0,v1,v2),MAX3(v0,v1,v2),clut_x,clut_y,texpage);
+     WATCH_TRI(x0, y0, x1, y1, x2, y2); g_b->draw_textured_triangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2,
+                                 clut_x, clut_y, texpage);
+ }
+@@ -198,16 +214,19 @@ void gr_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0, uint32_t c
+                                       int x2, int y2, int u2, int v2, uint32_t c2,
+                                       uint16_t clut_x, uint16_t clut_y,
+                                       uint16_t texpage, int raw) {
++    READ_MARK(MIN3(u0,u1,u2),MAX3(u0,u1,u2),MIN3(v0,v1,v2),MAX3(v0,v1,v2),clut_x,clut_y,texpage);
+     WATCH_TRI(x0, y0, x1, y1, x2, y2); g_b->draw_shaded_textured_triangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1,
+                                        x2, y2, u2, v2, c2, clut_x, clut_y, texpage, raw);
+ }
+ void gr_draw_flat_rect(int x, int y, int w, int h, uint16_t c) { WATCH_BOX(x, y, w, h); g_b->draw_flat_rect(x, y, w, h, c); }
+ void gr_draw_textured_rect(int x, int y, int w, int h, int u, int v,
+                            uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
++    READ_MARK(u,u+w-1,v,v+h-1,clut_x,clut_y,texpage);
+     WATCH_BOX(x, y, w, h); g_b->draw_textured_rect(x, y, w, h, u, v, clut_x, clut_y, texpage);
+ }
+ void gr_draw_textured_rect_scaled(int x, int y, int w, int h, int u0, int v0, int u1, int v1,
+                                   uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
++    READ_MARK(u0<u1?u0:u1,u0<u1?u1:u0,v0<v1?v0:v1,v0<v1?v1:v0,clut_x,clut_y,texpage);
+     WATCH_BOX(x, y, w, h); g_b->draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, clut_x, clut_y, texpage);
+ }
+ void gr_draw_line(int x0, int y0, int x1, int y1, uint16_t c) { WATCH_TRI(x0, y0, x1, y1, x1, y1); g_b->draw_line(x0, y0, x1, y1, c); }
+diff --git a/src/tekken3_cine_scene.c b/src/tekken3_cine_scene.c
+index 2246d97..f22c702 100644
+--- a/src/tekken3_cine_scene.c
++++ b/src/tekken3_cine_scene.c
+@@ -134,8 +134,26 @@ static void black(void) {
+ 
+ /* Every frame (src/tekken3_embu_scenes.c). */
+ static void test_tick(void);
++/* TEKKEN3_CINE_SCENE_READ_MAP=file: the VRAM a scene reads while it plays,
++ * by 16 x 16 blocks (t texels, c CLUT, b both), from the renderer's
++ * gr_read_map (the other half of tools/cine_read_map.patch). */
++static void read_map(void) {
++    extern unsigned char gr_read_map[32][64]; extern int gr_read_map_on;
++    extern int tekken3_cine_engine_frame(void);
++    static int was; const char *out=getenv("TEKKEN3_CINE_SCENE_READ_MAP");
++    int on=out && stage==PLAYING && tekken3_cine_engine_frame()>=0;
++    if(on && !was) { memset(gr_read_map,0,sizeof gr_read_map); gr_read_map_on=1; }
++    if(!on && was) {
++        gr_read_map_on=0;
++        FILE *f=fopen(out,"w");
++        if(f) { for(int y=0;y<32;y++){ for(int x=0;x<64;x++) fputc(".tcb"[gr_read_map[y][x]&3],f); fputc(10,f);} fclose(f); }
++        fprintf(stderr,"Cine scene: read map to %s%c",out,10);
++    }
++    was=on;
++}
+ void tekken3_cine_scene_tick(void) {
+     test_tick();
++    read_map();
+     if(stage!=LOADING) return;
+     unsigned state=psx_mod_read_half(STATE),phase=psx_mod_read_half(PHASE);
+     write_scene();

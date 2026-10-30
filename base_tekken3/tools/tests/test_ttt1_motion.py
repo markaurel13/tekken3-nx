@@ -1,7 +1,10 @@
 import struct
 import unittest
 
-from tools.ttt1_motion import decode
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ttt1"))
+from motion import decode
 
 
 class MotionDecoderTests(unittest.TestCase):

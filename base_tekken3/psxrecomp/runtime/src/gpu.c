@@ -45,6 +45,7 @@ extern uint32_t psx_read_word(uint32_t addr);
 
 /* ---- VRAM ---- */
 static uint16_t vram[1024 * 512];
+int g_psx_gpu_allow_oversize = 0;
 
 /* ---- GP0 state machine ---- */
 
@@ -206,9 +207,11 @@ void gpu_ws_set_auto_ui_squash(int on) {
 }
 static int ws_clear_reveal = 0;
 static int ws_nw_full_mirror = 0;
+static int ws_nw_world_history = 0;
 static int g_mmx6_void_sides = 0;
 static uint32_t g_mmx6_void_generation = 1;
 void gpu_ws_set_clear_reveal(int on) { ws_clear_reveal = on ? 1 : 0; }
+void gpu_ws_set_nw_world_history(int on) { ws_nw_world_history = on ? 1 : 0; }
 void gpu_ws_set_nw_full_mirror(int on) { ws_nw_full_mirror = on ? 1 : 0; }
 int gpu_ws_nw_background_history_enabled(void) {
     return ws_clear_reveal && ws_nw_full_mirror;
@@ -2631,8 +2634,11 @@ static void ws_refresh_current_reveal_margins(void) {
 /* A native-wide sidecar is host-owned and is not automatically redrawn like
  * the guest's canonical framebuffer. Refresh its synthetic columns once per
  * active back buffer and frame, before this list submits any margin geometry. */
+static int s_hivram_in_list;
+
 void gpu_ws_begin_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
+    s_hivram_in_list = 1;
     if (gp0_state != GP0_IDLE) {
         gp0_state = GP0_IDLE;
         gp0_words_collected = 0;
@@ -2652,6 +2658,7 @@ void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
 
 void gpu_ws_end_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
+    s_hivram_in_list = 0;
     if (gp0_state != GP0_IDLE) {
         gp0_state = GP0_IDLE;
         gp0_words_collected = 0;
@@ -4096,7 +4103,19 @@ static void gp0_exec_mono_rect(void) {
     ws_expand_fullscreen_rect(&x0, y0, &w, h);
     x0 += ws_nw_hud_shift(x0, w);   /* native-wide HUD corner re-anchor (no-op else) */
     x0 += draw_offset_x; y0 += draw_offset_y;
-    if (draw_area_out_rect(x0, y0, w, h)) return;
+    int is_out = draw_area_out_rect(x0, y0, w, h);
+    if (h >= 400) {
+        static uint32_t s_mono_rect_cnt = 0;
+        if (++s_mono_rect_cnt <= 10 || (s_mono_rect_cnt % 60) == 0) {
+            fprintf(stdout, "[GPU_MonoRect_Diag] #%u: x0=%d y0=%d w=%d h=%d col=0x%04x doff=(%d,%d) clip_out=%d darea=(%d,%d..%d,%d)\n",
+                    s_mono_rect_cnt, (int)x0, (int)y0, w, h, (unsigned)color,
+                    (int)draw_offset_x, (int)draw_offset_y, is_out,
+                    (int)draw_area_left, (int)draw_area_top,
+                    (int)draw_area_right, (int)draw_area_bottom);
+            fflush(stdout);
+        }
+    }
+    if (is_out) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     gr_draw_flat_rect(x0, y0, w, h, color);
 }
@@ -5266,8 +5285,180 @@ int gpu_ws_census_dump(uint32_t f0, uint32_t f1, const char *path) {
 void gpu_ws_census_set(int on) { ws_census_on = on ? 1 : 0; }
 uint64_t gpu_ws_census_seq(void) { return ws_census_seq; }
 
+/* Texture alias (psx_mod_gpu_texture_alias): see mod_plugins.h. */
+static struct {
+    int on;
+    unsigned page, u0, v0, u1, v1, cx0, cy0, cx1, cy1, dst_page;
+    int dv;
+} tex_alias;
+
+void psx_mod_gpu_texture_alias(int on, unsigned page, unsigned u0, unsigned v0,
+                               unsigned u1, unsigned v1, unsigned clut_x0,
+                               unsigned clut_y0, unsigned clut_x1,
+                               unsigned clut_y1, unsigned dst_page, int dv) {
+    tex_alias.on = on;
+    tex_alias.page = page & 0x1Fu; tex_alias.dst_page = dst_page & 0x1Fu;
+    tex_alias.u0 = u0; tex_alias.v0 = v0; tex_alias.u1 = u1; tex_alias.v1 = v1;
+    tex_alias.cx0 = clut_x0; tex_alias.cy0 = clut_y0;
+    tex_alias.cx1 = clut_x1; tex_alias.cy1 = clut_y1;
+    tex_alias.dv = dv;
+}
+
+static int tex_alias_clut(uint32_t word) {
+    unsigned clut = word >> 16, x = (clut & 63u) * 16u, y = (clut >> 6) & 511u;
+    return x >= tex_alias.cx0 && x <= tex_alias.cx1 &&
+           y >= tex_alias.cy0 && y <= tex_alias.cy1;
+}
+
+static int tex_alias_uv(unsigned u, unsigned v) {
+    return u >= tex_alias.u0 && u <= tex_alias.u1 &&
+           v >= tex_alias.v0 && v <= tex_alias.v1;
+}
+
+static void gp0_execute_command_now(void);
+
+#define HIVRAM_SOURCES 8
+static uint16_t *s_hivram;
+static struct { uint32_t lo, hi; } s_hivram_src[HIVRAM_SOURCES];
+static int s_hivram_nsrc;
+static unsigned s_hivram_sprite_page;
+static uint64_t s_hivram_prims;
+
+int psx_mod_gpu_high_vram_enable(void) {
+    if (!s_hivram) s_hivram = (uint16_t *)calloc(1024u * 512u, sizeof *s_hivram);
+    return s_hivram != NULL;
+}
+
+int psx_mod_gpu_high_vram_ready(void) {
+    if (!s_hivram) return 0;
+    int ok = gr_set_high_vram(s_hivram, 1, 1);
+    gr_set_high_vram(s_hivram, 0, 0);
+    return ok;
+}
+
+const uint16_t *gpu_high_vram_pixels(void) { return s_hivram; }
+uint64_t gpu_high_vram_primitives(void) { return s_hivram_prims; }
+
+int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h, const uint16_t *pixels) {
+    if (!s_hivram || !pixels || w <= 0 || h <= 0 || x < 0 || y < 512 ||
+        x + w > 1024 || y + h > 1024)
+        return 0;
+    for (int row = 0; row < h; row++)
+        memcpy(s_hivram + (size_t)(y - 512 + row) * 1024u + (unsigned)x,
+               pixels + (size_t)row * (unsigned)w, (size_t)w * sizeof *pixels);
+    gr_high_vram_written(x, y - 512, w, h);
+    return 1;
+}
+
+int gpu_high_vram_restore(const uint16_t *pixels) {
+    if (!s_hivram) return 0;
+    memcpy(s_hivram, pixels, 1024u * 512u * sizeof *s_hivram);
+    gr_high_vram_written(0, 0, 1024, 512);
+    return 1;
+}
+
+int psx_mod_gpu_high_vram_source(uint32_t address, uint32_t size) {
+    uint32_t lo = address & 0x00FFFFFFu;
+    if (!s_hivram || !size || s_hivram_nsrc >= HIVRAM_SOURCES ||
+        lo < PSX_MOD_GPU_DMA_APERTURE_BASE ||
+        size > PSX_MOD_GPU_DMA_APERTURE_BASE + PSX_MOD_GPU_DMA_APERTURE_SIZE - lo)
+        return 0;
+    s_hivram_src[s_hivram_nsrc].lo = lo;
+    s_hivram_src[s_hivram_nsrc].hi = lo + size;
+    s_hivram_nsrc++;
+    return 1;
+}
+
+static int hivram_trusted(void) {
+    uint32_t a = gp0_cmd_source_addr & 0x00FFFFFFu;
+    for (int i = 0; i < s_hivram_nsrc; i++)
+        if (a >= s_hivram_src[i].lo && a < s_hivram_src[i].hi) return 1;
+    return 0;
+}
+
+static void hivram_execute_command(uint8_t opcode) {
+    unsigned tex = 0, clut = 0;
+    if (opcode == 0xE1u) {
+        s_hivram_sprite_page = (gp0_cmd_buf[0] >> 11) & 1u;
+        gp0_cmd_buf[0] &= ~(1u << 11);
+        gp0_execute_command_now();
+        return;
+    }
+    if (opcode >= 0x20u && opcode < 0x40u && (opcode & 4u)) {
+        unsigned step = (opcode & 0x10u) ? 3u : 2u;
+        clut = (gp0_cmd_buf[2] >> 31) & 1u;
+        tex = s_hivram_sprite_page = (gp0_cmd_buf[2u + step] >> 27) & 1u;
+    } else if (opcode >= 0x60u && opcode < 0x80u && (opcode & 4u)) {
+        clut = (gp0_cmd_buf[2] >> 31) & 1u;
+        tex = s_hivram_sprite_page;
+    }
+    if (!tex && !clut) {
+        gp0_execute_command_now();
+        return;
+    }
+    if (gr_set_high_vram(s_hivram, (int)tex, (int)clut)) {
+        s_hivram_prims++;
+        gp0_execute_command_now();
+    }
+    gr_set_high_vram(s_hivram, 0, 0);
+}
+
 /* Execute a fully-collected GP0 command */
 static void gp0_execute_command(void) {
+    uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
+    if (s_hivram_nsrc && s_hivram_in_list && hivram_trusted()) {
+        hivram_execute_command(opcode);
+        return;
+    }
+    if (!tex_alias.on || opcode < 0x20u || opcode >= 0x80u || !(opcode & 4u)) {
+        gp0_execute_command_now();
+        return;
+    }
+    uint32_t saved[12];
+    memcpy(saved, gp0_cmd_buf, sizeof saved);
+    const uint32_t tx = texpage_x, ty = texpage_y;
+    if (opcode < 0x40u) {
+        unsigned n = (opcode & 8u) ? 4u : 3u, step = (opcode & 0x10u) ? 3u : 2u;
+        uint32_t tpage = gp0_cmd_buf[2u + step] >> 16;
+        int hit = (tpage & 0x1Fu) == tex_alias.page && !((tpage >> 7) & 3u) &&
+                  tex_alias_clut(gp0_cmd_buf[2]);
+        for (unsigned i = 0; hit && i < n; i++) {
+            uint32_t uv = gp0_cmd_buf[2u + step * i];
+            hit = tex_alias_uv(uv & 255u, (uv >> 8) & 255u);
+        }
+        if (!hit) { gp0_execute_command_now(); return; }
+        for (unsigned i = 0; i < n; i++) {
+            uint32_t *w = &gp0_cmd_buf[2u + step * i];
+            unsigned v = (unsigned)((int)((*w >> 8) & 255u) + tex_alias.dv) & 255u;
+            *w = (*w & 0xFFFF00FFu) | (v << 8);
+        }
+        gp0_cmd_buf[2u + step] = (gp0_cmd_buf[2u + step] & ~(0x1Fu << 16)) |
+                                 (tex_alias.dst_page << 16);
+        gp0_execute_command_now();
+        memcpy(gp0_cmd_buf, saved, sizeof saved);
+        texpage_x = tpage & 0xFu; texpage_y = (tpage >> 4) & 1u;
+        return;
+    }
+    static const unsigned side[4] = {0, 1, 8, 16};
+    uint32_t uv = gp0_cmd_buf[2];
+    unsigned u = uv & 255u, v = (uv >> 8) & 255u;
+    unsigned w = side[(opcode >> 3) & 3u], h = w;
+    if (!w) { w = gp0_cmd_buf[3] & 0x3FFu; h = (gp0_cmd_buf[3] >> 16) & 0x1FFu; }
+    if (!w || !h || (texpage_x | (texpage_y << 4)) != tex_alias.page ||
+        texpage_colors != 0 || !tex_alias_clut(uv) ||
+        !tex_alias_uv(u, v) || !tex_alias_uv(u + w - 1u, v + h - 1u)) {
+        gp0_execute_command_now();
+        return;
+    }
+    v = (unsigned)((int)v + tex_alias.dv) & 255u;
+    gp0_cmd_buf[2] = (uv & 0xFFFF00FFu) | (v << 8);
+    texpage_x = tex_alias.dst_page & 0xFu; texpage_y = (tex_alias.dst_page >> 4) & 1u;
+    gp0_execute_command_now();
+    memcpy(gp0_cmd_buf, saved, sizeof saved);
+    texpage_x = tx; texpage_y = ty;
+}
+
+static void gp0_execute_command_now(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     int selector_fade_side = 0;
     int selector_fade_y = 0;

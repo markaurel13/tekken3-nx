@@ -2846,6 +2846,10 @@ uint64_t cdrom_debug_get_trace(const CDROMTraceEntry** out_entries) {
     return cdrom_trace_seq;
 }
 
+int cdrom_host_read_sector(uint32_t lba, uint8_t *out) {
+    return iso_handle && iso_read_sector(iso_handle, lba, out, SECTOR_SIZE);
+}
+
 void cdrom_debug_clear_trace(void) {
     memset(cdrom_trace, 0, sizeof(cdrom_trace));
     cdrom_trace_seq = 0;

@@ -6,24 +6,6 @@
     "png_sha256": "dc07042e75e0cdb3647892fe1d3f2332fa1b4db0fb51036cd42f4ea14e8759f5"
   },
   {
-    "path": "mods/assets/forest-hd/background.rgba",
-    "size": 4708912,
-    "sha256": "8fe3025ec6b3b66c6773002f0d875a977bda6d312b4d46e8c08c45066509fa4a",
-    "png_sha256": "588a1bdaa7c6c43fc52510a99c805baf5bdc854518843a01a3df80a78aa47dce",
-    "crop": [
-      0,
-      91,
-      2172,
-      633
-    ]
-  },
-  {
-    "path": "mods/assets/forest-hd/ground.rgba",
-    "size": 6290080,
-    "sha256": "a7402685b18769b32f225a7cb71dae45047aa8f89d5b6aa78a3579d7b0ee9367",
-    "png_sha256": "23cd5d218c4061b8625839164c6fbb0a8bed486bc3c6872ac65066f73a336f4f"
-  },
-  {
     "path": "mods/assets/kuma-polar-bear/kuma.rgba",
     "size": 5308432,
     "sha256": "ef0f27ec54fba40ed3fc5fd3897601e687b1802b38809668ec7e323c6ca263f6",

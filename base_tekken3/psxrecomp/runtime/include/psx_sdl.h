@@ -6,7 +6,73 @@
  * PSXRecomp uses SDL3 by default, while PSX_SDL_BACKEND=SDL2 keeps the
  * previous implementation available for comparison and older platforms.
  */
-#if defined(PSX_SDL3)
+#if defined(__SWITCH__)
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include "host_time.h"
+
+typedef uint32_t Uint32;
+typedef struct SDL_Renderer SDL_Renderer;
+typedef struct SDL_Texture SDL_Texture;
+typedef struct SDL_Rect { int x, y, w, h; } SDL_Rect;
+typedef int SDL_Scancode;
+
+#define SDL_PIXELFORMAT_ARGB8888 0
+#define SDL_TEXTUREACCESS_STATIC 0
+#define SDL_SCANCODE_UNKNOWN 0
+
+static inline Uint32 SDL_GetTicks(void)
+{
+    return (Uint32)psx_host_mono_ms();
+}
+
+static inline char *SDL_GetBasePath(void)
+{
+    return strdup("sdmc:/switch/tekken3/");
+}
+
+static inline void SDL_free(void *ptr)
+{
+    free(ptr);
+}
+
+static inline void SDL_RenderGetLogicalSize(SDL_Renderer *r, int *w, int *h)
+{
+    (void)r; (void)w; (void)h;
+}
+
+static inline void SDL_GetRendererOutputSize(SDL_Renderer *r, int *w, int *h)
+{
+    (void)r; (void)w; (void)h;
+}
+
+static inline SDL_Texture *SDL_CreateTexture(
+    SDL_Renderer *r, int fmt, int access, int w, int h)
+{
+    (void)r; (void)fmt; (void)access; (void)w; (void)h;
+    return NULL;
+}
+
+static inline void SDL_UpdateTexture(
+    SDL_Texture *t, const void *rect, const void *pixels, int pitch)
+{
+    (void)t; (void)rect; (void)pixels; (void)pitch;
+}
+
+static inline void SDL_RenderCopy(
+    SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *src, const SDL_Rect *dst)
+{
+    (void)r; (void)t; (void)src; (void)dst;
+}
+
+static inline void SDL_DestroyTexture(SDL_Texture *t)
+{
+    (void)t;
+}
+
+#elif defined(PSX_SDL3)
 
 #define SDL_ENABLE_OLD_NAMES
 #define SDL_FUNCTION_POINTER_IS_VOID_POINTER

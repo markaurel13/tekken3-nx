@@ -46,6 +46,9 @@ public:
     static constexpr uint32_t HandheldHeight = 720;
     static constexpr uint32_t VramWidth = 1024;
     static constexpr uint32_t VramHeight = 512;
+    static constexpr uint32_t RawVramHeight = 1024; // 0..511: PS1 VRAM, 512..1023: High VRAM (Tekken 3 Expanded)
+    static constexpr uint32_t OsdMaxWidth = 1024;
+    static constexpr uint32_t OsdMaxHeight = 1024;
     static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
     static constexpr unsigned CmdPoolTotalSize = 16 * 1024 * 1024;   // 16 MB pool total para comandos
     static constexpr unsigned MaxVerticesPerFrame = 131072;          // 128K vértices por frame (~3.5 MB)
@@ -98,6 +101,8 @@ public:
 
     // Transferencia de texturas/CLUTs desde CPU/DMA a GPU
     void VramTransferIn(int x, int y, int w, int h, const uint16_t* data);
+    int SetHighVram(const uint16_t* high, int tex_high, int clut_high);
+    void HighVramWritten(int x, int y, int w, int h);
 
     // Presentación directa sin conversión en CPU
     int RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh);
@@ -137,8 +142,16 @@ private:
     void PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2);
     void FlushBatch();
     void SyncRawVram();
+    void DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
+                      int vx, int vy, int dw, int dh,
+                      uint32_t outW, uint32_t outH,
+                      dk::ImageView& colorTarget);
 
     uint16_t* m_vram = nullptr;
+    const uint16_t* m_highVram = nullptr;
+    int m_texHigh = 0;
+    int m_clutHigh = 0;
+    bool m_highVramDirty = false;
     int m_offsetX = 0;
     int m_offsetY = 0;
     int m_clipX1 = 0, m_clipY1 = 0, m_clipX2 = 1024, m_clipY2 = 512;
@@ -166,7 +179,8 @@ private:
 
     dk::Image m_framebuffers[NumFramebuffers];
     dk::Image m_vramTexture;   // 1024x512 RGBA8 Render Target y Display Source
-    dk::Image m_rawVramImage;   // 1024x512 R16_Uint Fuente de texturas PS1
+    dk::Image m_rawVramImage;  // 1024x1024 R16_Uint Fuente de texturas PS1 + High VRAM
+    dk::Image m_osdImage;      // 1024x1024 RGBA8_Unorm Superposición OSD (carrusel de trajes/retratos y avisos)
 
     dk::Shader m_vsh;
     dk::Shader m_fsh;

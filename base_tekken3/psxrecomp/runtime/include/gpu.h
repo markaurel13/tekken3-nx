@@ -32,6 +32,8 @@ void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated v
 /* Display presentation accessors (Phase 3). */
 const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */
 uint16_t*       gpu_get_vram_ptr(void);
+const uint16_t* gpu_high_vram_pixels(void);
+uint64_t        gpu_high_vram_primitives(void);
 
 typedef struct {
     uint32_t display_x, display_y;     /* VRAM start of display area (GP1(05h)) */
@@ -216,6 +218,7 @@ int  gpu_ws_present_native_43(void);
 /* Per-side X cull-margin (screen/world units) emitted into the game's draw-
  * cull immediates by the recompiler ([widescreen.cull]); 0 unless stretching. */
 int  psx_ws_x_margin(void);
+void gpu_ws_set_nw_world_history(int on);
 void gpu_ws_set_cull_guard_pixels(int pixels);
 void gpu_ws_set_background_guard_pixels(int pixels);
 /* Bias/range activation-window margin. This may include an additional

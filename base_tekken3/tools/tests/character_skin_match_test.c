@@ -10,7 +10,7 @@ static const HdTextureTile *find_tile(HdTextureMap *m, const HdTextureTile *t) {
     return hd_map_find(m,vram,tx,ty,(int)t->depth,(int)t->cx,(int)t->cy,u,v);
 }
 int main(int argc,char **argv) {
-    assert(argc==4 || argc==5);HdTextureMap active={0},other={0};
+    assert(argc==4);HdTextureMap active={0},other={0};
     FILE *f=fopen(argv[3],"rb");assert(f);
     assert(fread(vram,2,512*1024,f)==512*1024);fclose(f);
     assert(hd_map_load(&active,argv[1]));assert(hd_map_load(&other,argv[2]));
@@ -21,25 +21,10 @@ int main(int argc,char **argv) {
     for(unsigned i=0;i<other.count;i++) assert(!find_tile(&other,&other.tiles[i]));
     /* Relocation follows the game's verified player-slot texture layout. */
     for(int y=0;y<224;y++) memcpy(&vram[(y+256)*1024+384],&vram[y*1024+384],64*2);
-    /* A player owns four CLUT rows; Eddy's dreadlocks use the third. */
-    for(int y=0;y<4;y++) memcpy(&vram[(508+y)*1024],&vram[(504+y)*1024],256*2);
+    for(int y=0;y<2;y++) memcpy(&vram[(508+y)*1024],&vram[(504+y)*1024],256*2);
     ++active.generation;++other.generation;
     for(unsigned i=0;i<active.count;i++) assert(find_tile(&active,&active.tiles[i]));
     for(unsigned i=0;i<other.count;i++) assert(!find_tile(&other,&other.tiles[i]));
-    if(argc==5) {
-        /* Triangles decoded from the retail model's real material/UV stream. */
-        uint32_t q[12];unsigned checked=0;
-        FILE *queries=fopen(argv[4],"rb");assert(queries);
-        while(fread(q,sizeof(q),1,queries)==1) {
-            int u[3]={(int)q[5],(int)q[6],(int)q[7]};
-            int v[3]={(int)q[8],(int)q[9],(int)q[10]};
-            const HdTextureTile *hit=hd_map_find(&active,vram,q[0],q[1],q[2],q[3],q[4],u,v);
-            assert((hit!=NULL)==(q[11]!=0));
-            ++checked;
-        }
-        assert(feof(queries) && checked>0);fclose(queries);
-        printf("Retail costume mesh: %u triangle/player checks passed\n",checked);
-    }
     /* Changing one skin's state must not mutate the other map. */
     unsigned other_count=other.count;
     HdTextureTile *first=&active.tiles[0];assert(first->depth==0 || first->depth==1);

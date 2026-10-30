@@ -1,0 +1,23 @@
+{
+  "about": "Tekken Tag Tournament (PS2) endings in Tekken 3: the T3 arena each ending plays in (the user's mapping, 2026-09-27). arena = a T3 fighter record's byte 10 (TIPS: Paul 0, Law 1, Yoshimitsu 2, Xiaoyu 3, Hwoarang 4, Lei 5, Ogre / True Ogre 6, Jin 8, Nina 9, Eddy 10, King 11, Julia / Heihachi 12, Gon 13). dark: Ogre's temple as True Ogre's fight has it (dark background: 0x800AFAA0 = 2, only the floor drawn), for the endings set in Unknown's stage. kind: engine (converted in-engine cutscene, TEKKEN3_ENDING) or fmv (a movie to convert and play in place of the stock one). done: plays in the Arcade.",
+  "endings": {
+    "alex":      {"stage": "Paul",      "arena": 0,  "kind": "engine"},
+    "angel":     {"stage": "Unknown",   "arena": 6,  "dark": true, "kind": "engine"},
+    "armorking": {"stage": "King",      "arena": 11, "kind": "engine"},
+    "baek":      {"stage": "Hwoarang",  "arena": 4,  "kind": "engine"},
+    "bruce":     {"stage": "Heihachi",  "arena": 12, "kind": "engine"},
+    "devil":     {"stage": "Unknown",   "arena": 6,  "dark": true, "kind": "engine"},
+    "ganryu":    {"stage": "Xiaoyu",    "arena": 3,  "kind": "engine"},
+    "jack2":     {"stage": "Gon",       "arena": 13, "kind": "engine"},
+    "jun":       {"stage": "Unknown",   "arena": 6,  "dark": true, "kind": "engine"},
+    "kazuya":    {"stage": "Ogre",      "arena": 6,  "kind": "engine", "done": true},
+    "kunimitsu": {"stage": "Yoshimitsu","arena": 2,  "kind": "engine"},
+    "lee":       {"stage": "Jin",       "arena": 8,  "kind": "engine"},
+    "michelle":  {"stage": "Gon",       "arena": 13, "kind": "engine"},
+    "pjack":     {"stage": "Paul",      "arena": 0,  "kind": "engine"},
+    "roger":     {"stage": "Paul",      "arena": 0,  "kind": "engine"},
+    "tetsujin":  {"stage": "Hwoarang",  "arena": 4,  "kind": "engine"},
+    "unknown":   {"stage": null,        "arena": null, "kind": "fmv"},
+    "wang":      {"stage": "Hwoarang",  "arena": 4,  "kind": "engine"}
+  }
+}

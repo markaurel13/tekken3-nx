@@ -1,6 +1,7 @@
 /* SLUS-00402's native Options renderer consumes data-only menu descriptors.
  * Reuse that renderer/input code for Sounds; no guest instructions or pad
  * routing are replaced. Navigation actions keep their original page IDs. */
+#include "mod_memory.h"
 #include "tekken3_sound_options.h"
 #include "mod_plugins.h"
 #include "spu.h"
@@ -166,7 +167,8 @@ void tekken3_sound_options_tick(void) {
     /* Expansion memory is host-owned, so a state loaded in a fresh process
      * may contain our descriptor but no allocation yet. Recognize the full
      * descriptor shape and rebuild from the intact original navigation rows. */
-    int foreign_arena=rows>=0x9F000000u && rows<0x9F100000u &&
+    int foreign_arena=rows>=PSX_MOD_GUEST_MEMORY_BASE &&
+        rows<PSX_MOD_GUEST_MEMORY_BASE+PSX_MOD_GUEST_MEMORY_SIZE &&
         (!arena || (rows!=arena+ROOT_ROWS && rows!=arena+SOUND_ROWS));
     int restored_root=foreign_arena && rd(DESC+40)==7 &&
         rd(DESC+36)==0x800B9298u && rd(DESC+44)==PAGE && rd(DESC+24)==34;
