@@ -31,6 +31,7 @@
 /* Memory access — defined in memory.c */
 extern uint32_t psx_read_word(uint32_t addr);
 extern void     psx_write_word(uint32_t addr, uint32_t val);
+extern uint8_t *g_psx_ram;
 
 /* Interrupt status — defined in memory.c */
 extern uint32_t i_stat;
@@ -747,6 +748,9 @@ static uint32_t execute_ch2_gpu(void) {
         /* Mirror gpu.c empty-node OT rank (0 after first empty header). */
         uint32_t ot_rank = 0xffffffffu;
 
+        uint32_t dma_used = 0;
+        const uint8_t *dma_base = psx_mod_memory_region(1, &dma_used);
+
         uint32_t addr = start_addr;
         uint32_t slow_addr = start_addr;
         uint32_t safety = 0;
@@ -764,11 +768,18 @@ static uint32_t execute_ch2_gpu(void) {
                 break;
             }
 
-            uint32_t header = psx_read_word(addr);
+            uint32_t can_addr = addr & 0x00FFFFFFu;
+            uint32_t header;
+            if (can_addr + 4u <= 0x00200000u) {
+                header = *(const uint32_t *)(g_psx_ram + can_addr);
+            } else if (dma_base && can_addr >= PSX_MOD_GPU_DMA_APERTURE_BASE && (can_addr - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)) {
+                header = *(const uint32_t *)(dma_base + (can_addr - PSX_MOD_GPU_DMA_APERTURE_BASE));
+            } else {
+                header = psx_read_word(addr);
+            }
+
             uint32_t num_words = (header >> 24) & 0xFF;
             uint32_t next = header & 0xFFFFFFu;
-            uint32_t word_addr =
-                psx_mod_gpu_dma_resolve_address(addr + 4u);
 
             cur_total_nodes++;
             if (num_words == 0u) {
@@ -779,9 +790,23 @@ static uint32_t execute_ch2_gpu(void) {
             }
 
             int emit = 1;
+            uint32_t word_addr = 0;
+            const uint32_t *fast_words = NULL;
+            if (num_words > 0) {
+                word_addr = (addr + 4u >= PSX_MOD_GPU_DMA_APERTURE_BASE && (addr + 4u - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used))
+                    ? ((addr + 4u) & 0x00FFFFFCu)
+                    : ((addr + 4u) & 0x001FFFFCu);
+                uint32_t can_w = word_addr & 0x00FFFFFFu;
+                if (can_w + num_words * 4u <= 0x00200000u) {
+                    fast_words = (const uint32_t *)(g_psx_ram + can_w);
+                } else if (dma_base && can_w >= PSX_MOD_GPU_DMA_APERTURE_BASE && (can_w - PSX_MOD_GPU_DMA_APERTURE_BASE + num_words * 4u <= dma_used)) {
+                    fast_words = (const uint32_t *)(dma_base + (can_w - PSX_MOD_GPU_DMA_APERTURE_BASE));
+                }
+            }
+
             if (s_nd_flap_last && num_words >= 6u &&
                 ot_rank >= 1600u && ot_rank < 2100u) {
-                uint32_t cmd = psx_read_word(word_addr);
+                uint32_t cmd = fast_words ? fast_words[0] : psx_read_word(word_addr);
                 uint32_t op = (cmd >> 24) & 0xFFu;
                 if (op == 0x36u) {
                     /* Match gpu.c parse_vertex: signed 11-bit SX. Digit-rain
@@ -790,7 +815,7 @@ static uint32_t execute_ch2_gpu(void) {
                      * reaches the sibling right-flap band (sx_max >= 280). */
                     int32_t sx_max = -0x8000;
                     for (uint32_t vi = 1; vi <= 5; vi += 2) {
-                        uint32_t xy = psx_read_word(
+                        uint32_t xy = fast_words ? fast_words[vi] : psx_read_word(
                             psx_mod_gpu_dma_resolve_address(word_addr +
                                                             vi * 4u));
                         int32_t sx = (int32_t)(xy & 0x7FFu);
@@ -804,15 +829,22 @@ static uint32_t execute_ch2_gpu(void) {
                 }
             }
 
-            if (emit) {
+            if (emit && num_words > 0) {
                 gpu_set_gp0_linked_list_node(addr, num_words);
                 actual_words += 1u;
-                for (uint32_t i = 0; i < num_words; i++) {
-                    uint32_t word = psx_read_word(word_addr);
-                    gpu_set_gp0_source(word_addr);
-                    gpu_write_gp0(word);
-                    word_addr =
-                        psx_mod_gpu_dma_resolve_address(word_addr + 4u);
+                if (fast_words) {
+                    for (uint32_t i = 0; i < num_words; i++) {
+                        gpu_set_gp0_source(word_addr + i * 4u);
+                        gpu_write_gp0(fast_words[i]);
+                    }
+                } else {
+                    for (uint32_t i = 0; i < num_words; i++) {
+                        uint32_t word = psx_read_word(word_addr);
+                        gpu_set_gp0_source(word_addr);
+                        gpu_write_gp0(word);
+                        word_addr =
+                            psx_mod_gpu_dma_resolve_address(word_addr + 4u);
+                    }
                 }
                 actual_words += num_words;
             }
@@ -821,10 +853,23 @@ static uint32_t execute_ch2_gpu(void) {
                 last_addr = 0x00FFFFFFu;
                 break;
             }
-            addr = psx_mod_gpu_dma_resolve_address(next);
+            addr = (next >= PSX_MOD_GPU_DMA_APERTURE_BASE && next - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)
+                ? (next & 0x00FFFFFCu)
+                : (next & 0x001FFFFCu);
             if ((cur_total_nodes & 1) == 0 && (slow_addr & 0xFFFFFFu) != 0xFFFFFFu) {
-                uint32_t slow_hdr = psx_read_word(slow_addr);
-                slow_addr = psx_mod_gpu_dma_resolve_address(slow_hdr & 0xFFFFFFu);
+                uint32_t can_slow = slow_addr & 0x00FFFFFFu;
+                uint32_t slow_hdr;
+                if (can_slow + 4u <= 0x00200000u) {
+                    slow_hdr = *(const uint32_t *)(g_psx_ram + can_slow);
+                } else if (dma_base && can_slow >= PSX_MOD_GPU_DMA_APERTURE_BASE && (can_slow - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)) {
+                    slow_hdr = *(const uint32_t *)(dma_base + (can_slow - PSX_MOD_GPU_DMA_APERTURE_BASE));
+                } else {
+                    slow_hdr = psx_read_word(slow_addr);
+                }
+                uint32_t s_next = slow_hdr & 0xFFFFFFu;
+                slow_addr = (s_next >= PSX_MOD_GPU_DMA_APERTURE_BASE && s_next - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)
+                    ? (s_next & 0x00FFFFFCu)
+                    : (s_next & 0x001FFFFCu);
             }
             if (addr == slow_addr) {
                 hit_limit = 1;

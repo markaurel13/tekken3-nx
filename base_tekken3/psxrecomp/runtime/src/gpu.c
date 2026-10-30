@@ -4864,12 +4864,18 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     t3_selector_prepass_count = 0;
     t3_selector_fade_emitted = 0;
     memset(&t3_selector_frame, 0, sizeof(t3_selector_frame));
-    if (!ws_engaged() && !tekken3_outfits_available()) {
-        t3_selector_forget_frame();
-        memset(&t3_loading_frame, 0, sizeof(t3_loading_frame));
-        t3_force_reveal_count = 0;
-        t3_force_background_active = 0;
-        return;
+    if (!ws_engaged()) {
+        extern int fntrace_is_game_started(void);
+        int screenState = fntrace_is_game_started() ? (int)(int16_t)psx_read_half(0x800AE204u) : -1;
+        // States 9 and 10 are Character Selector and VS Loading Screen.
+        // In any other state (combat state 8/6, menus), skip the expensive prepass linked-list walk.
+        if (!tekken3_outfits_available() || (screenState != 9 && screenState != 10)) {
+            t3_selector_forget_frame();
+            memset(&t3_loading_frame, 0, sizeof(t3_loading_frame));
+            t3_force_reveal_count = 0;
+            t3_force_background_active = 0;
+            return;
+        }
     }
 
     uint32_t addr = psx_mod_gpu_dma_resolve_address(start_addr);
@@ -5546,16 +5552,20 @@ static void gp0_execute_command_now(void) {
     __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_diag0));
 #endif
     gp0_opcode_count[opcode]++;
+#ifndef NDEBUG
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
-    extern void ws_bg_phase_note(uint32_t op);
-    ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
+#endif
+    if (__builtin_expect(ws_engaged(), 0)) {
+        extern void ws_bg_phase_note(uint32_t op);
+        ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
 
-    /* Draw-census: capture every drawing primitive's first vertex + camera. */
-    if (opcode >= 0x20 && opcode <= 0x7F) {
-        int32_t cvx, cvy;
-        parse_vertex(gp0_cmd_buf[1], &cvx, &cvy);
-        ws_census_record(opcode, cvx, cvy);
-        ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
+        /* Draw-census: capture every drawing primitive's first vertex + camera. */
+        if (opcode >= 0x20 && opcode <= 0x7F) {
+            int32_t cvx, cvy;
+            parse_vertex(gp0_cmd_buf[1], &cvx, &cvy);
+            ws_census_record(opcode, cvx, cvy);
+            ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
+        }
     }
 #if defined(__aarch64__) || defined(__SWITCH__)
     __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_diag1));

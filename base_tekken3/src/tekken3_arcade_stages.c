@@ -189,6 +189,26 @@ static int s_t3_on, s_ttt_on;           /* Arcade Stages / TTT Stages activated 
 static int s_shadow;                    /* probe: computed and logged, the PS1 frame untouched */
 static FILE *s_probe;
 static uint32_t s_memory;               /* 2 x BUFFER_BYTES of GPU-DMA memory */
+static uint8_t *s_memory_host = NULL;
+
+static inline void fast_mod_write_word(uint32_t a, uint32_t v) {
+    if (s_memory_host && a >= s_memory && a < s_memory + (2 * BUFFER_BYTES)) {
+        *(uint32_t *)(s_memory_host + (a - s_memory)) = v;
+    } else {
+        psx_mod_write_word(a, v);
+    }
+}
+static inline uint32_t fast_mod_read_word(uint32_t a) {
+    if (s_memory_host && a >= s_memory && a < s_memory + (2 * BUFFER_BYTES)) {
+        return *(const uint32_t *)(s_memory_host + (a - s_memory));
+    } else {
+        return psx_mod_read_word(a);
+    }
+}
+#undef psx_mod_write_word
+#define psx_mod_write_word(a, v) fast_mod_write_word((a), (v))
+#undef psx_mod_read_word
+#define psx_mod_read_word(a)     fast_mod_read_word(a)
 static Pack s_pack;
 static int s_tried = -1;                /* arena whose pack was last looked for (T3) */
 static int s_tried_ttt = -1;            /* TTT stage whose pack was last looked for */
@@ -4714,6 +4734,12 @@ static int engine_up(void) {
     if (!s_memory || !psx_mod_gpu_high_vram_source(s_memory, 2 * BUFFER_BYTES)) {
         fprintf(stdout, "arcade stages: no packet memory, PS1 stages kept\n");
         return 0;
+    }
+    extern const uint8_t *psx_mod_memory_region(int which, uint32_t *used);
+    uint32_t dma_used = 0;
+    const uint8_t *dma_base = psx_mod_memory_region(1, &dma_used);
+    if (dma_base && s_memory >= 0x80E00000u) {
+        s_memory_host = (uint8_t *)dma_base + (s_memory - 0x80E00000u);
     }
     unr_init();
     s_pack.stage = -1;
