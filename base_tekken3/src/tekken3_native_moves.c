@@ -19,6 +19,7 @@
 #include "tekken3_moveset_draw.h"
 #include "tekken3_game_options.h"
 #include "tekken3_stage_select.h"
+#include "tekken3_outfits.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -240,9 +241,26 @@ uint16_t tekken3_native_moves_input(int player,uint16_t buttons) {
      * the third costume there. */
     uint16_t picks=edges&PICK;
     unsigned under=cursor_character(slot);
+
+    static unsigned last_under[2] = { ABSENT, ABSENT };
+    if(under != last_under[slot]) {
+        if(last_under[slot] < NATIVES) picked[slot][last_under[slot]] = -1;
+        last_under[slot] = under;
+    }
+    if(edges & (PAD_CIRCLE | PAD_SELECT)) {
+        if(under < NATIVES) picked[slot][under] = -1;
+    }
+
+    /* If the costume / outfit selector is active or consuming input on this pad,
+     * do not intercept buttons as character picks or re-open the MOVESET card. */
+    if(tekken3_outfits_captures_input((int)p)) {
+        return buttons | hold[p];
+    }
+
     if(team_grid_open() || (under<NATIVES && !(psx_mod_read_word(0x80097ef4)>>(under&31)&1)))
         picks&=(uint16_t)~PAD_START;
-    if(!confirmed(slot) && picks && !leaving && tekken3_native_moves_available(under)) {
+    if(!confirmed(slot) && picks && !leaving && tekken3_native_moves_available(under) &&
+       (under >= NATIVES || picked[slot][under] < 0)) {
         uint16_t pick=picks;
         card[slot]=(uint16_t)(pick&-pick);         /* one button: its costume */
         hold[p]=CARD_KEYS;
