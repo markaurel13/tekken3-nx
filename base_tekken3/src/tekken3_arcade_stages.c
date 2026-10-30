@@ -2337,7 +2337,7 @@ static void anim_tick(void) {
         fprintf(s_probe, "\n");
     }
     if (p->stage == 3) stage3_step();
-    else if (p->stage == 11 && over) stage11_step((int)psx_mod_read_word(CAMERA + 4));
+    else if (p->stage == 11) stage11_step((int)psx_mod_read_word(CAMERA + 4));
 }
 
 /* RotMatrix (0x801F0D64) and RotMatrixYXZ (0x801F0034), table 0x8021688C:
@@ -2414,7 +2414,8 @@ static void objects(const Gte *tile) {
     static int32_t px[256], py[256];
     uint32_t ots[8] = {0};
     unsigned sizes[8] = {0}, ranks[8] = {0}, nots = 0;
-    if (p->stage == 11 && !s_was_over) return;      /* round_over() of this frame's tick */
+    /* El helicoptero del stage 11 vuela y se renderiza desde el inicio del round */
+    (void)s_was_over;
     for (unsigned c = 0; c < p->nlayout; c++) {
         const Layout *l = &p->layout[c];
         const Model *m = &p->models[l->model];
