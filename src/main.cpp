@@ -90,6 +90,10 @@ static GameConfig g_config;
 extern const char* g_dirty_ram_last_unsupported_reason;
 void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
 
+extern "C" void psx_overlay_static_get_stats(uint64_t *checks, uint64_t *hits,
+                                              uint64_t *variant_misses,
+                                              uint64_t *address_misses);
+
 int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
                                     uint32_t count,
                                     uint32_t expected_crc) {
@@ -113,6 +117,9 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
 // Variables globales requeridas por el runtime generado
 int g_psx_cps_mode = 0;
 uint64_t s_frame_count = 0;
+extern "C" uint64_t get_current_frame_count(void) {
+    return s_frame_count;
+}
 int debug_server_fmv_quiet = 0;
 uint32_t g_debug_last_store_pc = 0;
 uint32_t g_debug_current_func_addr = 0;
@@ -125,8 +132,67 @@ void card_data_writes_arm(int a) { (void)a; }
 // Stubs de debug server / telemetry para Switch release
 int g_ram_read_watch_active = 0;
 volatile uint32_t g_psx_last_fn_entry = 0;
+#define FN_RING_CAP 64
+static volatile uint32_t s_fn_ring[FN_RING_CAP] = {0};
+static volatile uint32_t s_fn_ring_idx = 0;
+
+struct DispatchLogEntry {
+    uint32_t frame;
+    uint32_t target;
+    uint32_t ra;
+    uint32_t sp;
+    uint32_t a0;
+    uint32_t a1;
+};
+
+void dump_openbios_panic_state(void);
+extern "C" void dump_watch_store_ring(void);
+
+#define DISPATCH_RING_CAP 64
+static DispatchLogEntry s_dispatch_ring[DISPATCH_RING_CAP];
+static uint32_t s_dispatch_ring_idx = 0;
+
+extern "C" void record_dispatch_call(uint32_t target, uint32_t ra, uint32_t sp, uint32_t a0, uint32_t a1) {
+    uint32_t idx = s_dispatch_ring_idx++;
+    DispatchLogEntry* e = &s_dispatch_ring[idx & (DISPATCH_RING_CAP - 1)];
+    e->frame = (uint32_t)s_frame_count;
+    e->target = target;
+    e->ra = ra;
+    e->sp = sp;
+    e->a0 = a0;
+    e->a1 = a1;
+}
+
+extern "C" void bios_tty_putc(char c) {
+    static char s_tty_buf[512];
+    static size_t s_tty_len = 0;
+    if (c == '\r') return;
+    if (c == '\n' || s_tty_len >= sizeof(s_tty_buf) - 2) {
+        s_tty_buf[s_tty_len] = '\0';
+        printf("[OpenBIOS TTY] %s\n", s_tty_buf);
+        if (strstr(s_tty_buf, "=== halting ===") || strstr(s_tty_buf, "Unimplemented")) {
+            dump_openbios_panic_state();
+        }
+        s_tty_len = 0;
+    } else {
+        s_tty_buf[s_tty_len++] = c;
+    }
+}
+
 #ifndef PSX_NO_DEBUG_TOOLS
-void debug_server_log_call_entry(uint32_t func_addr) { g_psx_last_fn_entry = func_addr; }
+void debug_server_log_call_entry(uint32_t func_addr) {
+    g_psx_last_fn_entry = func_addr;
+    s_fn_ring[s_fn_ring_idx & (FN_RING_CAP - 1)] = func_addr;
+    s_fn_ring_idx++;
+    uint32_t p = func_addr & 0x1FFFFFFFu;
+    if (p >= 0x1FC05C80u && p <= 0x1FC05E10u) {
+        static bool s_panic_dumped = false;
+        if (!s_panic_dumped) {
+            s_panic_dumped = true;
+            dump_openbios_panic_state();
+        }
+    }
+}
 #endif
 void debug_server_cyc_observe(uint32_t block_leader_phys) { (void)block_leader_phys; }
 void debug_server_trace_mmio_read(uint32_t a, uint32_t b, int c) { (void)a; (void)b; (void)c; }
@@ -179,7 +245,16 @@ void card_data_writes_check(uint32_t a, uint32_t b) { (void)a; (void)b; }
 void debug_server_trace_dispatch(uint32_t a) { (void)a; }
 void debug_server_trace_mmio_write(uint32_t a, uint32_t b, uint8_t c) { (void)a; (void)b; (void)c; }
 void debug_server_trace_write_check(uint32_t a, uint32_t b, uint32_t c, uint8_t d) { (void)a; (void)b; (void)c; (void)d; }
-void debug_server_log_sio_write(uint32_t a, uint32_t b, uint8_t c) { (void)a; (void)b; (void)c; }
+void debug_server_log_sio_write(uint32_t a, uint32_t b, uint8_t c) {
+    (void)c;
+    if (a == 0x1F801050u || a == 0x1F801040u) {
+        if (b >= 32 && b <= 126) {
+            bios_tty_putc((char)b);
+        } else if (b == '\n' || b == '\r') {
+            bios_tty_putc((char)b);
+        }
+    }
+}
 void debug_server_log_restore_event(uint32_t a, uint32_t b, uint32_t c) { (void)a; (void)b; (void)c; }
 int debug_server_dirty_break_maybe_pause(uint32_t a, CPUState* b) { (void)a; (void)b; return 0; }
 void debug_server_wait_if_paused(void) {}
@@ -456,6 +531,9 @@ static uint64_t s_last_dirty_clean_rejects = 0;
 static uint64_t s_last_dirty_native_handoffs = 0;
 static uint64_t s_last_dirty_aborts = 0;
 static uint64_t s_last_dirty_guard_yields = 0;
+static uint64_t s_last_ov_checks = 0;
+static uint64_t s_last_ov_hits = 0;
+static uint64_t s_last_ov_vmiss = 0;
 static uint32_t s_last_mismatch_info[5] = {0};
 static uint64_t s_last_mismatch_count = 0;
 
@@ -862,6 +940,122 @@ extern uint32_t g_mesh_3d_prim_calls_frame;
 extern uint32_t g_mesh_3d_prim_emitted_frame;
 }
 
+void dump_openbios_panic_state(void) {
+    static bool s_panic_already_dumped = false;
+    if (s_panic_already_dumped) return;
+    s_panic_already_dumped = true;
+
+    printf("[PANIC] OpenBIOS Halt/Panic state dump! last_fn=0x%08X\n", g_psx_last_fn_entry);
+
+    // 1. Recent function call entry ring buffer (from record_dispatch_call)
+    uint32_t d_total = s_dispatch_ring_idx;
+    uint32_t d_count = d_total < DISPATCH_RING_CAP ? d_total : DISPATCH_RING_CAP;
+    printf("  [Recent Function Dispatches / Calls (last %u)]:\n", d_count);
+    for (uint32_t i = d_total - d_count; i < d_total; i++) {
+        const DispatchLogEntry* e = &s_dispatch_ring[i & (DISPATCH_RING_CAP - 1)];
+        printf("    #%u [f=%u] tgt=0x%08X ra=0x%08X sp=0x%08X a0=0x%08X a1=0x%08X\n",
+               i, e->frame, e->target, e->ra, e->sp, e->a0, e->a1);
+    }
+
+    // 2. Exception frame from [0x110]
+    uint32_t raw_frame = psx_read_word(0x00000110u);
+    uint32_t frame_ptr = (raw_frame & 0x1FFFFFu) | 0x80000000u;
+    printf("  [Exception Frame ptr at [0x110] = 0x%08X (norm=0x%08X)]:\n", raw_frame, frame_ptr);
+    if (raw_frame != 0 && (raw_frame < 0x00200000u || (raw_frame >= 0x80000000u && raw_frame < 0x80200000u))) {
+        uint32_t epc   = psx_read_word(frame_ptr + 136);
+        uint32_t cause = psx_read_word(frame_ptr + 148);
+        uint32_t badv  = psx_read_word(frame_ptr + 152);
+        uint32_t sr    = psx_read_word(frame_ptr + 140);
+        uint32_t s_ra  = psx_read_word(frame_ptr + 124);
+        uint32_t s_sp  = psx_read_word(frame_ptr + 116);
+        uint32_t s_a0  = psx_read_word(frame_ptr + 16);
+        uint32_t s_a1  = psx_read_word(frame_ptr + 20);
+        uint32_t s_a2  = psx_read_word(frame_ptr + 24);
+        uint32_t s_a3  = psx_read_word(frame_ptr + 28);
+        uint32_t s_v0  = psx_read_word(frame_ptr + 8);
+        uint32_t s_v1  = psx_read_word(frame_ptr + 12);
+        printf("    EPC=0x%08X Cause=0x%08X BadV=0x%08X SR=0x%08X\n", epc, cause, badv, sr);
+        printf("    saved GPRs: ra=0x%08X sp=0x%08X a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X v0=0x%08X v1=0x%08X\n",
+               s_ra, s_sp, s_a0, s_a1, s_a2, s_a3, s_v0, s_v1);
+
+        if ((epc & 0x1FFFFFFFu) < 0x00200000u) {
+            uint32_t epc_norm = (epc & 0x1FFFFFu) | 0x80000000u;
+            printf("    Instructions at EPC-8..EPC+16 (norm=0x%08X):\n", epc_norm);
+            for (int32_t off = -8; off <= 16; off += 4) {
+                uint32_t insn = psx_read_word(epc_norm + off);
+                printf("      0x%08X: 0x%08X%s\n", epc_norm + off, insn, off == 0 ? " <== [FAULT/SYSCALL]" : "");
+            }
+        }
+
+        // Backtrace por stack scanning saved s_sp:
+        if ((s_sp & 0x1FFFFFFFu) < 0x00200000u) {
+            uint32_t sp_norm = (s_sp & 0x1FFFFFu) | 0x80000000u;
+            printf("  [Stack Backtrace scan from saved sp=0x%08X (norm=0x%08X)]:\n", s_sp, sp_norm);
+            int found = 0;
+            for (uint32_t off = 0; off < 1024; off += 4) {
+                uint32_t val = psx_read_word(sp_norm + off);
+                if ((val >= 0x80010000u && val < 0x80200000u) || (val >= 0xBFC00000u && val < 0xBFC10000u)) {
+                    printf("    [sp+0x%03X] = 0x%08X\n", off, val);
+                    found++;
+                    if (found >= 48) break;
+                }
+            }
+        }
+    }
+
+    if (debug_cpu_ptr) {
+        printf("  [Current CPUState]: pc=0x%08X ra=0x%08X sp=0x%08X a0=0x%08X a1=0x%08X\n",
+               debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29],
+               debug_cpu_ptr->gpr[4], debug_cpu_ptr->gpr[5]);
+        uint32_t cur_sp = debug_cpu_ptr->gpr[29];
+        if (cur_sp < 0x80200000u) {
+            printf("  [Code pointers on current sp=0x%08X]:\n", cur_sp);
+            for (uint32_t off = 0; off < 256; off += 4) {
+                uint32_t val = psx_read_word(cur_sp + off);
+                if ((val >= 0x80010000u && val < 0x80200000u) || (val >= 0xBFC00000u && val < 0xBFC10000u)) {
+                    printf("    [sp+0x%02X] = 0x%08X\n", off, val);
+                }
+            }
+        }
+    }
+
+    // 3. Dump Structure 0x800AC340..0x800AC480 (+0x140 bytes)
+    printf("  [Dump Structure 0x800AC340..0x800AC480 (+0x140 bytes)]:\n");
+    for (uint32_t off = 0; off <= 0x140; off += 16) {
+        printf("    +0x%03X: %08X %08X %08X %08X\n", off,
+               psx_read_word(0x800AC340u + off),
+               psx_read_word(0x800AC340u + off + 4),
+               psx_read_word(0x800AC340u + off + 8),
+               psx_read_word(0x800AC340u + off + 12));
+    }
+
+    // 4. Dump Array 0x800AAAB4 entries of 0x13C
+    printf("  [Dump Array 0x800AAAB4 entries of 0x13C (entries 0..3)]:\n");
+    for (uint32_t ent = 0; ent < 4; ent++) {
+        uint32_t base = 0x800AAAB4u + ent * 0x13Cu;
+        printf("    Entry #%u at 0x%08X: [+0x00]=%08X [+0x20]=%08X [+0x54]=%08X [+0x84]=%08X\n",
+               ent, base,
+               psx_read_word(base + 0x00),
+               psx_read_word(base + 0x20),
+               psx_read_word(base + 0x54),
+               psx_read_word(base + 0x84));
+    }
+
+    // 5. Actor pointers
+    uint32_t p1_ptr = psx_read_word(0x800ADC20u);
+    uint32_t p2_ptr = psx_read_word(0x800ADC24u);
+    printf("  [Actor pointers]: P1=0x%08X P2=0x%08X\n", p1_ptr, p2_ptr);
+
+    // 6. Dump exact watch store ring from memory.c
+    dump_watch_store_ring();
+
+    fflush(stdout);
+    if (s_sd_log) {
+        fflush(s_sd_log);
+        fsync(fileno(s_sd_log));
+    }
+}
+
 static void check_combat_stall_diagnostic(uint32_t frame) {
     static bool s_combat_ever_seen = false;
     static uint32_t s_stall_frames = 0;
@@ -934,6 +1128,12 @@ static void check_combat_stall_diagnostic(uint32_t frame) {
                 printf("    #%llu f=%u tgt=0x%08X ra=0x%08X a0=0x%08X a1=0x%08X sp=0x%08X\n",
                        (unsigned long long)(seq - i), e.frame, e.target, e.ra, e.a0, e.a1, e.sp);
             }
+            if (s_stall_frames == 1) {
+                if (debug_cpu_ptr && (debug_cpu_ptr->pc == 0xBFC05E08u ||
+                    (debug_cpu_ptr->gpr[31] >= 0xBFC05C80u && debug_cpu_ptr->gpr[31] <= 0xBFC05E10u))) {
+                    dump_openbios_panic_state();
+                }
+            }
         }
     } else {
         s_stall_frames = 0;
@@ -963,6 +1163,16 @@ static void switch_vblank_callback(void) {
     memory_log_frame_prim_diag((uint32_t)s_frame_count);
     check_combat_stall_diagnostic((uint32_t)s_frame_count);
     fmv_diag_vblank(s_frame_count);
+    {
+        static uint32_t s_prev_c394 = 0xFFFFFFFFu;
+        uint32_t c394 = psx_read_word(0x800AC394u);
+        uint32_t c340 = psx_read_word(0x800AC340u);
+        if (c394 != s_prev_c394) {
+            printf("[WATCH_C394] f=%llu c394: 0x%08X -> 0x%08X (c340=0x%08X)\n",
+                   (unsigned long long)s_frame_count, s_prev_c394, c394, c340);
+            s_prev_c394 = c394;
+        }
+    }
     static bool s_game_started_logged = false;
     if (!s_game_started_logged && fntrace_is_game_started()) {
         s_game_started_logged = true;
@@ -1010,11 +1220,16 @@ static void switch_vblank_callback(void) {
         uint64_t d_dirty_native_handoffs = g_dirty_ram_native_handoffs - s_last_dirty_native_handoffs;
         uint64_t d_dirty_aborts = g_dirty_ram_aborts - s_last_dirty_aborts;
         uint64_t d_dirty_guard_yields = g_dirty_ram_guard_yields - s_last_dirty_guard_yields;
+        uint64_t ov_checks = 0, ov_hits = 0, ov_vmiss = 0, ov_amiss = 0;
+        psx_overlay_static_get_stats(&ov_checks, &ov_hits, &ov_vmiss, &ov_amiss);
+        uint64_t d_ov_checks = ov_checks - s_last_ov_checks;
+        uint64_t d_ov_hits = ov_hits - s_last_ov_hits;
+        uint64_t d_ov_vmiss = ov_vmiss - s_last_ov_vmiss;
         uint64_t mism_cnt = 0;
         uint32_t mism_info[5] = {0};
         dirty_ram_text_exact_mismatch_stats(&mism_cnt, mism_info);
 
-        printf("[VBlank] frame=%llu fps=%.1f (%.2f ms/f) static_d=%llu dirty_insns_d=%llu (tot=%llu) dirty_calls=%llu handled=%llu rejected=%llu dirty_ms=%.3f native(game h/m=%llu/%llu ovl=%llu handoff=%llu) abort=%llu yield=%llu clean_reject=%llu idle_skips=%llu mism=%llu\n",
+        printf("[VBlank] frame=%llu fps=%.1f (%.2f ms/f) static_d=%llu dirty_insns_d=%llu (tot=%llu) dirty_calls=%llu handled=%llu rejected=%llu dirty_ms=%.3f native(game h/m=%llu/%llu ovl=%llu handoff=%llu) ov_static(chk=%llu hit=%llu vm=%llu) abort=%llu yield=%llu clean_reject=%llu idle_skips=%llu mism=%llu\n",
                (unsigned long long)s_frame_count,
                fps, avg_ms,
                (unsigned long long)d_static,
@@ -1028,6 +1243,9 @@ static void switch_vblank_callback(void) {
                (unsigned long long)d_native_game_misses,
                (unsigned long long)d_native_overlay_hits,
                (unsigned long long)d_dirty_native_handoffs,
+               (unsigned long long)d_ov_checks,
+               (unsigned long long)d_ov_hits,
+               (unsigned long long)d_ov_vmiss,
                (unsigned long long)d_dirty_aborts,
                (unsigned long long)d_dirty_guard_yields,
                (unsigned long long)d_dirty_clean_rejects,
@@ -1148,6 +1366,9 @@ static void switch_vblank_callback(void) {
         s_last_dirty_native_handoffs = g_dirty_ram_native_handoffs;
         s_last_dirty_aborts = g_dirty_ram_aborts;
         s_last_dirty_guard_yields = g_dirty_ram_guard_yields;
+        s_last_ov_checks = ov_checks;
+        s_last_ov_hits = ov_hits;
+        s_last_ov_vmiss = ov_vmiss;
         s_last_mismatch_count = mism_cnt;
         if (s_sd_log) fflush(s_sd_log);
     }

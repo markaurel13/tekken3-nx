@@ -247,7 +247,11 @@ void ensure_outfit_catalog_loaded(void) {
     static int s_loaded = 0;
     if (s_loaded) return;
     s_loaded = 1;
-    (void)tekken3_outfits_load_catalog("sdmc:/switch/tekken3/mods/outfit-menu/catalog.txt");
+    if (tekken3_outfits_load_catalog("sdmc:/switch/tekken3/mods/outfit-menu/catalog.txt") <= 0) {
+        if (tekken3_outfits_load_catalog("sdmc:/switch/tekken3/mods/assets/outfit-menu/catalog.txt") <= 0) {
+            (void)tekken3_outfits_load_catalog("mods/outfit-menu/catalog.txt");
+        }
+    }
 }
 
 void gl_renderer_set_skin_texture_pack(const char *directory) {

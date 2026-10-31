@@ -1,7 +1,7 @@
 #include "switch_file_io.h"
 
 typedef struct SwitchFileCacheEntry {
-    char path[256];
+    char path[512];
     unsigned char *data;
     size_t size;
     struct SwitchFileCacheEntry *next;

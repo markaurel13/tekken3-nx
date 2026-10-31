@@ -6,15 +6,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#ifdef __SWITCH__
-#include "switch_audio.h"
-#else
-static inline void switch_audio_pump_if_needed(void) {}
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+void switch_audio_pump_if_needed(void);
 
 /**
  * @brief Lee de un stream en bloques de 64 KB bombeando audio si transcurren >= 16.6 ms.

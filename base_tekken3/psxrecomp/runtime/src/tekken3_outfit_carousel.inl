@@ -61,6 +61,10 @@ static OutfitArt *outfit_load_art(const char *name) {
 #endif
     snprintf(path,sizeof path,"%smods/outfit-menu/%s.rgba",base?base:"",name);
     FILE *f=fopen(path,"rb");
+    if(!f) {
+        snprintf(path,sizeof path,"%smods/assets/outfit-menu/%s.rgba",base?base:"",name);
+        f=fopen(path,"rb");
+    }
     if(!f && !strncmp(name,"jun-arcade-",11))outfit_jun_portrait(a,base);
 #if !defined(PSX_SDL3)
     SDL_free(base);

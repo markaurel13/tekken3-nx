@@ -2248,7 +2248,14 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x21: { /* LH */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
-        if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
+        if (addr & 1) {
+            if (addr < 0x1000u) {
+                cpu->gpr[rt] = 0;
+                cpu->gpr[0] = 0;
+                return 0;
+            }
+            return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
+        }
         cpu->gpr[rt] = (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
         cpu->gpr[0] = 0;
         return 0;
@@ -2262,7 +2269,14 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x23: { /* LW */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
-        if (addr & 3) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
+        if (addr & 3) {
+            if (addr < 0x1000u) {
+                cpu->gpr[rt] = 0;
+                cpu->gpr[0] = 0;
+                return 0;
+            }
+            return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
+        }
         if (psx_ws_is_cull_plane_nx_site(pc))
             /* Side-plane normal-X: inverse-aspect scale while revealed. */
             cpu->gpr[rt] = (uint32_t)psx_ws_plane_nx(
@@ -2283,7 +2297,14 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x25: { /* LHU */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
-        if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
+        if (addr & 1) {
+            if (addr < 0x1000u) {
+                cpu->gpr[rt] = 0;
+                cpu->gpr[0] = 0;
+                return 0;
+            }
+            return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
+        }
         cpu->gpr[rt] = (uint32_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
         cpu->gpr[0] = 0;
         return 0;
@@ -2303,7 +2324,10 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x29: { /* SH */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
-        if (addr & 1) return interp_exception(cpu, 5, addr, pc);  /* StoreAddressError */
+        if (addr & 1) {
+            if (addr < 0x1000u) return 0;
+            return interp_exception(cpu, 5, addr, pc);  /* StoreAddressError */
+        }
         uint16_t val  = (uint16_t)cpu->gpr[rt];
         /* Widescreen backdrop screenX squash on the interpreter path: mirrors
          * the recompiler emit at [widescreen.backdrop] x_sites. Overlay code
@@ -2324,7 +2348,10 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x2B: { /* SW */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
-        if (addr & 3) return interp_exception(cpu, 5, addr, pc);  /* StoreAddressError */
+        if (addr & 3) {
+            if (addr < 0x1000u) return 0;
+            return interp_exception(cpu, 5, addr, pc);  /* StoreAddressError */
+        }
         g_debug_last_store_pc = pc;
         cpu->write_word(addr, cpu->gpr[rt]);
         return 0;

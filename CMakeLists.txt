@@ -340,6 +340,7 @@ set(TEKKEN3_WRAP_SYMBOLS
     func_8002CC28
     func_8002EE94
     func_800449B4
+    func_80044A8C
     func_800458C8
     func_8002CD7C
     func_80059890

@@ -44,6 +44,7 @@
 #include "tekken3_stage_source.h"
 #include "tekken3_bgm_select.h"
 #include "audio_limiter.h"
+#include "switch_file_io.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,15 +160,17 @@ static int load(void) {
     if (fread(head, 1, 12, f) == 12 && !memcmp(head, "TTTM", 4) && u32(head + 4) == FORMAT) {
         raw = u32(head + 8);
         fseek(f, 0, SEEK_END); size = ftell(f) - 12; fseek(f, 12, SEEK_SET);
-        packed = size > 0 ? malloc((size_t)size) : NULL;
-        if (packed && fread(packed, 1, (size_t)size, f) != (size_t)size) { free(packed); packed = NULL; }
+        packed = size > 0 ? (uint8_t *)malloc((size_t)size) : NULL;
+        if (packed && switch_fread_pump(packed, 1, (size_t)size, f) != (size_t)size) { free(packed); packed = NULL; }
     }
     fclose(f);
     if (!packed) { fprintf(stderr, "TTT music: %s is not a music file of format %d\n", path, FORMAT); return 0; }
-    lib.body = malloc(raw);
+    switch_audio_pump_if_needed();
+    lib.body = (uint8_t *)malloc(raw);
     uLong got = raw;
     int z = lib.body ? uncompress(lib.body, &got, packed, (uLong)size) : Z_MEM_ERROR;
     free(packed);
+    switch_audio_pump_if_needed();
     if (z != Z_OK || got != raw || raw < 16) { fprintf(stderr, "TTT music: %s does not inflate\n", path); return 0; }
     const uint8_t *p = lib.body, *end = lib.body + raw;
     lib.chip_start = u32(p); lib.out_start = u32(p + 4);
@@ -216,6 +219,7 @@ static struct {
     struct { uint32_t number, offset, sectors, loop, volume; } p[PS2_MAX];
     int data_piece;           /* the piece in data, -1: none */
     uint8_t *data;
+    uint8_t *cached_data[PS2_MAX];
 } ps2 = { .data_piece = -1 };
 
 static int ps2_load(void) {
@@ -269,19 +273,23 @@ static int ps2_of_stage(int stage) {
  * or RANDOM drew it for the fight (src/tekken3_bgm_select.c). */
 static int remixed(void) { return tekken3_bgm_select_version() == TEKKEN3_BGM_REMIXED; }
 
-/* The piece's sectors in memory, one piece at a time (5.5 MB at most). */
+/* The piece's sectors in memory, cached per piece (5.5 MB at most). */
 static int ps2_data(int i) {
-    if (ps2.data_piece == i) return 1;
-    free(ps2.data);
-    ps2.data = NULL;
-    ps2.data_piece = -1;
+    if (i < 0 || i >= ps2.count) return 0;
+    if (ps2.cached_data[i]) {
+        ps2.data = ps2.cached_data[i];
+        ps2.data_piece = i;
+        return 1;
+    }
     size_t n = (size_t)ps2.p[i].sectors * SECTOR;
     FILE *f = fopen(ps2.path, "rb");
     if (!f) return 0;
-    ps2.data = malloc(n);
-    int ok = ps2.data && !fseek(f, (long)ps2.p[i].offset, SEEK_SET) && fread(ps2.data, 1, n, f) == n;
+    uint8_t *buf = (uint8_t *)malloc(n);
+    int ok = buf && !fseek(f, (long)ps2.p[i].offset, SEEK_SET) && (switch_fread_pump(buf, 1, n, f) == n);
     fclose(f);
-    if (!ok) { free(ps2.data); ps2.data = NULL; fprintf(stderr, "TTT music: %s unreadable\n", ps2.path); return 0; }
+    if (!ok) { free(buf); fprintf(stderr, "TTT music: %s unreadable\n", ps2.path); return 0; }
+    ps2.cached_data[i] = buf;
+    ps2.data = buf;
     ps2.data_piece = i;
     return 1;
 }
@@ -651,4 +659,8 @@ static int state_read(const uint8_t *p, uint32_t len) {
 void tekken3_ttt_music_state_reset(void) {
     register_state();
     pl.piece = pl.ps2 = -1;
+}
+
+int tekken3_ttt_music_preload(void) {
+    return load() && ps2_load();
 }

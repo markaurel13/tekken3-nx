@@ -1543,6 +1543,66 @@ void __wrap_func_800449B4(CPUState *cpu) {
     if(!damage)damage=(int16_t)psx_mod_read_half(a+0x5e);
     cpu->gpr[2]+=damage;
 }
+/* In Tekken Ball, the ball is Entity 2 at 0x800AC340. The overlay stores internal
+ * ball parameters in 0x800AC390..0x800AC39C (+84 = 0x217, not an actor/record pointer).
+ * When func_80044A8C evaluates combat hits between an actor and the ball, 0x80044AA8
+ * attempts to load halfword at [record + 52] to check counter properties.
+ * If 0x217 is dereferenced, 0x217+52 = 0x24B (unaligned) triggers a hardware AdEL exception.
+ * By temporarily placing a safe dummy record (where record[52] == 0) in 0x800AC394,
+ * func_80044A8C takes the branch to block_80044AEC (normal hit & guard evaluation
+ * against the ball's hit code at 0x800AC3A4) and completes cleanly. */
+extern void __real_func_80044A8C(CPUState *cpu);
+static uint32_t s_safe_ball_record = 0;
+
+void __wrap_func_80044A8C(CPUState *cpu) {
+    uint32_t victim = cpu->gpr[4];
+    uint32_t attacker = cpu->gpr[5];
+
+    int need_safe_att = 0;
+    int need_safe_vic = 0;
+    uint32_t old_att_rec = 0;
+    uint32_t old_vic_rec = 0;
+
+    if (attacker == 0x800AC340u) {
+        need_safe_att = 1;
+    } else if (attacker >= 0x80000000u && attacker < 0x80200000u) {
+        uint32_t r = psx_mod_read_word(attacker + 84);
+        if (r != 0 && (r < 0x80000000u || (r & 1))) need_safe_att = 1;
+    }
+
+    if (victim == 0x800AC340u) {
+        need_safe_vic = 1;
+    } else if (victim >= 0x80000000u && victim < 0x80200000u) {
+        uint32_t r = psx_mod_read_word(victim + 84);
+        if (r != 0 && (r < 0x80000000u || (r & 1))) need_safe_vic = 1;
+    }
+
+    if (need_safe_att || need_safe_vic) {
+        if (!s_safe_ball_record) {
+            s_safe_ball_record = psx_mod_alloc_guest_memory(128, 4);
+        }
+        if (need_safe_att) {
+            old_att_rec = psx_mod_read_word(attacker + 84);
+            psx_mod_write_word(attacker + 84, s_safe_ball_record);
+        }
+        if (need_safe_vic && victim != attacker) {
+            old_vic_rec = psx_mod_read_word(victim + 84);
+            psx_mod_write_word(victim + 84, s_safe_ball_record);
+        }
+
+        __real_func_80044A8C(cpu);
+
+        if (need_safe_att) {
+            psx_mod_write_word(attacker + 84, old_att_rec);
+        }
+        if (need_safe_vic && victim != attacker) {
+            psx_mod_write_word(victim + 84, old_vic_rec);
+        }
+        return;
+    }
+
+    __real_func_80044A8C(cpu);
+}
 /* Strong-hit effect. Each fighter's file carries a pack of 4-bit TIMs
  * (16-colour palette, 32 x 32 image) that the fight loader places in VRAM:
  * frame k in column 368/376 (player 1) or 496/504 (player 2), row 32*(k/2),

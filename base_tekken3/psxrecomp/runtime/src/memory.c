@@ -1536,6 +1536,10 @@ static void mmio_write8(uint32_t addr, uint8_t val) {
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
+        if (addr == 0x1F802080u || addr == 0x1F802082u) {
+            extern void bios_tty_putc(char c);
+            bios_tty_putc((char)val);
+        }
         return;
     }
     { /* open-bus (Beetle parity) */ g_io_openbus_writes++; return;; }
@@ -1736,6 +1740,56 @@ void psx_write_word(uint32_t addr, uint32_t val) {
     psx_write_word_raw(addr, val);
     s_ls_op_active = 0;
 }
+typedef struct {
+    uint32_t frame;
+    uint32_t pc;
+    uint32_t ra;
+    uint32_t addr;
+    uint32_t old_val;
+    uint32_t new_val;
+    uint8_t size;
+} WatchStoreEntry;
+
+#define WATCH_RING_CAP 16
+static WatchStoreEntry s_watch_ring[WATCH_RING_CAP];
+static uint32_t s_watch_ring_idx = 0;
+
+void dump_watch_store_ring(void) {
+    uint32_t total = s_watch_ring_idx;
+    uint32_t count = total < WATCH_RING_CAP ? total : WATCH_RING_CAP;
+    printf("  [Exact Watch Store Ring on 0x800AC390..0x800AC39F (total stores=%u, showing last %u)]:\n", total, count);
+    for (uint32_t i = total - count; i < total; i++) {
+        const WatchStoreEntry* e = &s_watch_ring[i & (WATCH_RING_CAP - 1)];
+        printf("    #%u [f=%u] PC=0x%08X RA=0x%08X addr=0x%08X old=0x%08X new=0x%08X sz=%u\n",
+               i, e->frame, e->pc, e->ra, e->addr, e->old_val, e->new_val, e->size);
+    }
+}
+
+static inline void watch_target_store_check(uint32_t phys, uint32_t new_val, uint8_t size, uint32_t addr) {
+    if (__builtin_expect(phys >= 0x000AC390u && phys <= 0x000AC39Fu, 0)) {
+        extern uint64_t get_current_frame_count(void);
+        uint32_t cur_f = (uint32_t)get_current_frame_count();
+        uint32_t cur_ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0;
+        uint32_t old_val = 0;
+        if (size == 4) old_val = read_ram_word(phys & ~3u);
+        else if (size == 2) old_val = (uint32_t)read_ram_half(phys & ~1u);
+        else old_val = (uint32_t)ram[phys];
+
+        uint32_t idx = s_watch_ring_idx++;
+        WatchStoreEntry* e = &s_watch_ring[idx & (WATCH_RING_CAP - 1)];
+        e->frame = cur_f;
+        e->pc = g_debug_last_store_pc;
+        e->ra = cur_ra;
+        e->addr = addr;
+        e->old_val = old_val;
+        e->new_val = new_val;
+        e->size = size;
+
+        printf("[WATCH_STORE] f=%u PC=0x%08X RA=0x%08X addr=0x%08X old=0x%08X new=0x%08X sz=%u\n",
+               cur_f, g_debug_last_store_pc, cur_ra, addr, old_val, new_val, size);
+    }
+}
+
 static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     g_guest_store_count++;
 #if !defined(__SWITCH__)
@@ -1753,6 +1807,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
+        watch_target_store_check(phys, val, 4, addr);
         if (g_debug_last_store_pc >= 0x80036000u && g_debug_last_store_pc <= 0x80038000u) {
             memory_track_prim_store(addr);
         }
@@ -2004,6 +2059,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
+        watch_target_store_check(phys, (uint32_t)val, 2, addr);
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, (uint32_t)val, 2);
         ram[phys]     = (uint8_t)(val);
@@ -2370,6 +2426,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
+        watch_target_store_check(phys, (uint32_t)val, 1, addr);
         dirty_ram_mark_kernel_write(phys);
         text_guard_note_write(phys, (uint32_t)val, 1);
         ram[phys] = val;

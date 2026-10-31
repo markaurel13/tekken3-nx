@@ -8,6 +8,7 @@
 #include "tekken3_ttt1_assets.h"
 #include "tekken3_stage_source.h"
 #include "tekken3_arcade_stages.h"
+#include "switch_file_io.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,18 +184,17 @@ static uint32_t word(const unsigned char *p) {
     return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24;
 }
 /* Reads "<root>/<data prefix>-<suffix>" whatever its length, up to `max`, and
- * returns the byte count. The old form demanded one character's exact size. */
+ * returns the byte count. Uses switch_cached_file_get for RAM caching and audio pumping. */
 static size_t read_asset(unsigned player, const char *root, const char *suffix, void *data, size_t max) {
     char path[4096];
     if (snprintf(path,sizeof(path),"%s/%s-%s",root,model_prefix(player),suffix)
         >=(int)sizeof(path)) return 0;
-    FILE *f=fopen(path,"rb");
-    if (!f) { fprintf(stderr,"%s model: missing %s\n",name_for(player),path); return 0; }
-    size_t n=fread(data,1,max,f);
-    int complete = fgetc(f)==EOF;          /* else the file exceeds the buffer */
-    fclose(f);
-    if (!complete) fprintf(stderr,"%s model: %s exceeds %zu bytes\n",name_for(player),path,max);
-    return complete ? n : 0;
+    size_t sz = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &sz);
+    if (!cached || sz == 0) { fprintf(stderr,"%s model: missing %s\n",name_for(player),path); return 0; }
+    if (sz > max) { fprintf(stderr,"%s model: %s exceeds %zu bytes\n",name_for(player),path,max); return 0; }
+    memcpy(data, cached, sz);
+    return sz;
 }
 static uint16_t half(const unsigned char *p);
 /* Offset in the .tim of the pixels of the w x h image at (x, y), 0 if none. */
@@ -215,14 +215,12 @@ static unsigned tim_image(const GuestModel *m,unsigned x,unsigned y,unsigned w,u
  * (Jin's in the TTT endings, tools/ttt1_devil_jin.py --eyes). */
 static void read_face(unsigned player,const char *root,unsigned costume) {
     GuestModel *m=&models[player];
-    unsigned char b[4+2*(6+2*FACE_MAX+2)];
     char path[4096];
     m->face_count=0;m->face_image[0]=0;
     if(snprintf(path,sizeof path,"%s/%s-arcade-P%u.face",root,model_prefix(player),costume)>=(int)sizeof path)return;
-    FILE *f=fopen(path,"rb");
-    if(!f)return;
-    size_t n=fread(b,1,sizeof b,f);fclose(f);
-    if(n<16 || memcmp(b,"FACE",4))return;
+    size_t n=0;
+    const unsigned char *b=switch_cached_file_get(path, &n);
+    if(!b || n<16 || memcmp(b,"FACE",4))return;
     unsigned count=half(b+14);
     if(count>FACE_MAX || n<16+4*count)return;
     m->face_x=half(b+4);m->face_y=half(b+6);m->face_w=half(b+8);m->face_h=half(b+10);m->face_blink=half(b+12);
@@ -242,13 +240,12 @@ static void read_face(unsigned player,const char *root,unsigned costume) {
  * file (an import before F03, Tetsujin, Devil Jin): every accessory is rigid. */
 static void read_accessories(unsigned player,const char *root,unsigned costume) {
     GuestModel *m=&models[player];
-    unsigned char b[8+4*28];char path[4096];
+    char path[4096];
     memset(m->swings,0,sizeof m->swings);m->accessories_changed=1;
     if(snprintf(path,sizeof path,"%s/%s-arcade-P%u.acc",root,model_prefix(player),costume)>=(int)sizeof path)return;
-    FILE *f=fopen(path,"rb");
-    if(!f)return;
-    size_t n=fread(b,1,sizeof b,f);fclose(f);
-    if(n<8+4*28 || memcmp(b,"ACC1",4) || half(b+4)!=4 || half(b+6)!=28)return;
+    size_t n=0;
+    const unsigned char *b=switch_cached_file_get(path, &n);
+    if(!b || n<8+4*28 || memcmp(b,"ACC1",4) || half(b+4)!=4 || half(b+6)!=28)return;
     for(unsigned i=0;i<4;i++) {
         const unsigned char *e=b+8+i*28;
         if(half(e)==0xffff)continue;
@@ -264,13 +261,12 @@ static void read_accessories(unsigned player,const char *root,unsigned costume) 
 static void read_hilt(unsigned player,const char *root,unsigned costume) {
     GuestModel *m=&models[player];
     enum { STYLE=4+6*HILT_POINTS, QUAD=4+8, SIZE=12+2*STYLE+HILT_QUADS*QUAD };
-    unsigned char b[SIZE];char path[4096];
+    char path[4096];
     m->hilt_styles=0;
     if(snprintf(path,sizeof path,"%s/%s-arcade-P%u.hilt",root,model_prefix(player),costume)>=(int)sizeof path)return;
-    FILE *f=fopen(path,"rb");
-    if(!f)return;
-    size_t n=fread(b,1,sizeof b,f);fclose(f);
-    if(n<SIZE || memcmp(b,"HLT1",4) || half(b+4)!=2 || half(b+6)!=HILT_QUADS)return;
+    size_t n=0;
+    const unsigned char *b=switch_cached_file_get(path, &n);
+    if(!b || n<SIZE || memcmp(b,"HLT1",4) || half(b+4)!=2 || half(b+6)!=HILT_QUADS)return;
     m->hilt_material=half(b+8);
     for(unsigned s=0;s<2;s++) {
         const unsigned char *e=b+12+s*STYLE;
@@ -330,13 +326,17 @@ static int read_model(unsigned player) {
     char model[32],relocs[32],textures[32];
     unsigned costume=m->costume+1;
     snprintf(model,sizeof model,"arcade-P%u.3dm",costume);
-    FILE *probe=NULL;char path[4096];
-    if(costume>1 && (snprintf(path,sizeof path,"%s/%s-%s",root,model_prefix(player),model)>=(int)sizeof path ||
-                     !(probe=fopen(path,"rb")))) {
-        fprintf(stderr,"%s model: no costume %u, costume 1 instead\n",name_for(player),costume);
-        costume=1;snprintf(model,sizeof model,"arcade-P1.3dm");
+    char path[4096];
+    if(costume>1) {
+        size_t probe_sz = 0;
+        const unsigned char *probe = NULL;
+        if(snprintf(path,sizeof path,"%s/%s-%s",root,model_prefix(player),model)<(int)sizeof path)
+            probe = switch_cached_file_get(path, &probe_sz);
+        if(!probe || probe_sz == 0) {
+            fprintf(stderr,"%s model: no costume %u, costume 1 instead\n",name_for(player),costume);
+            costume=1;snprintf(model,sizeof model,"arcade-P1.3dm");
+        }
     }
-    if(probe)fclose(probe);
     snprintf(relocs,sizeof relocs,"arcade-P%u.relocs",costume);
     snprintf(textures,sizeof textures,"arcade-P%u.tim",costume);
     if (!(m->size=read_asset(player,root,model,m->file,sizeof(m->file))) ||
@@ -387,6 +387,7 @@ static void install_model(unsigned player) {
     TRACE("T4|control=%08X|guest=%08X|arena0=%08X|arena1=%08X|model_bytes=%u\n",
           control,m->memory,arena[0],arena[1],m->size);
 }
+extern int tekken3_ttt_music_preload(void);
 static void load_assets(void) {
     control=psx_mod_alloc_guest_memory(32,16);
     arena[0]=psx_mod_alloc_gpu_dma_memory(262144,16);
@@ -394,6 +395,7 @@ static void load_assets(void) {
     for(unsigned p=0;p<2;p++)models[p].memory=psx_mod_alloc_guest_memory(sizeof models[p].file,16);
     if (!control || !arena[0] || !arena[1] || !models[0].memory || !models[1].memory) { control=0; return; }
     fprintf(stderr,"TTT1 characters: control=%08X, models at %08X and %08X\n",control,models[0].memory,models[1].memory);
+    tekken3_ttt_music_preload();
 }
 /* A player's guest changed at the selector, or none was read yet: the next
  * fight's Jin envelope of that player is replaced by the new model. A model
@@ -652,13 +654,17 @@ static void movelist_tick(unsigned player) {
     if(strcmp(prefix,movelist_prefix[player])) {
         snprintf(movelist_prefix[player],sizeof movelist_prefix[player],"%s",prefix);
         const char *root=tekken3_ttt1_asset_root();
-        char path[4096];FILE *f=NULL;
-        if(root && snprintf(path,sizeof path,"%s/%s-movelist.bin",root,prefix)<(int)sizeof path)f=fopen(path,"rb");
-        if(f) {
-            movelist_size[player]=fread(movelist[player],1,MOVELIST_SIZE,f);
-            if(fgetc(f)!=EOF)movelist_size[player]=0;
-            fclose(f);
-        } else movelist_size[player]=root?read_asset(player,root,"movelist.bin",movelist[player],MOVELIST_SIZE):0;
+        char path[4096];
+        movelist_size[player]=0;
+        if(root && snprintf(path,sizeof path,"%s/%s-movelist.bin",root,prefix)<(int)sizeof path) {
+            size_t n = 0;
+            const unsigned char *c = switch_cached_file_get(path, &n);
+            if(c && n > 0 && n <= MOVELIST_SIZE) {
+                memcpy(movelist[player], c, n);
+                movelist_size[player] = n;
+            }
+        }
+        if(!movelist_size[player] && root) movelist_size[player]=read_asset(player,root,"movelist.bin",movelist[player],MOVELIST_SIZE);
         if(movelist_size[player] && !movelist_valid(movelist[player],movelist_size[player])) {
             fprintf(stderr,"%s: move list rejected\n",name_for(player));
             movelist_size[player]=0;
@@ -735,14 +741,17 @@ static void combo_load(unsigned player) {
     snprintf(combo_prefix[player],sizeof combo_prefix[player],"%s",prefix);
     combo_generation[player]++;
     const char *root=tekken3_ttt1_asset_root();
-    char path[4096];FILE *f=NULL;
+    char path[4096];
     combo_size[player]=0;
-    if(*prefix && root && snprintf(path,sizeof path,"%s/%s-combos.bin",root,prefix)<(int)sizeof path &&
-       (f=fopen(path,"rb"))) {
-        combo_size[player]=fread(combo_file[player],1,COMBO_FILE,f);
-        if(fgetc(f)!=EOF)combo_size[player]=0;
-        fclose(f);
-    } else if(*prefix && root)combo_size[player]=read_asset(player,root,"combos.bin",combo_file[player],COMBO_FILE);
+    if(*prefix && root && snprintf(path,sizeof path,"%s/%s-combos.bin",root,prefix)<(int)sizeof path) {
+        size_t n = 0;
+        const unsigned char *c = switch_cached_file_get(path, &n);
+        if(c && n > 0 && n <= COMBO_FILE) {
+            memcpy(combo_file[player], c, n);
+            combo_size[player] = n;
+        }
+    }
+    if(!combo_size[player] && *prefix && root) combo_size[player]=read_asset(player,root,"combos.bin",combo_file[player],COMBO_FILE);
     if(combo_size[player] && !combos_valid(combo_file[player],combo_size[player])) {
         fprintf(stderr,"%s: training combos rejected\n",tekken3_guest_name_for(player));
         combo_size[player]=0;
