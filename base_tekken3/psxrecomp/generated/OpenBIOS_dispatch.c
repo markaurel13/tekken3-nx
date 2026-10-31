@@ -9113,6 +9113,15 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
                 found = 1;
             }
         }
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+        if (!found && fntrace_is_game_started()) {
+            extern int psx_overlay_dispatch(CPUState* cpu, uint32_t addr);
+            if (psx_overlay_dispatch(cpu, addr)) {
+                g_dispatch_static_hits++;
+                found = 1;
+            }
+        }
+#endif
         /* Fast path on Switch/production: once the game has started, route ALL
          * game-text addresses directly to psx_dispatch_game_compiled before
          * running the 3989-entry OpenBIOS binary search! */

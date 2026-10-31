@@ -50,6 +50,16 @@ void fmv_diag_pre_dispatch(CPUState* cpu, uint32_t addr) {
                     psx_advance_cycles(dist);
                     s_win.vsync_would_skip_cycles += dist;
                 }
+            } else if (ra == 0x800E1D64u) {
+                /* Espera activa de "Once Again": VSync(-1) + getter 0x8008F74C hasta
+                 * que un callback IRQ cambie el flag; saltar al siguiente evento. */
+                s_win.vsync_ra_other++;
+                s_win.vsync_last_other_ra = ra;
+                uint32_t dist = cycles_to_next_event();
+                if (dist > 64u && dist != 0xFFFFFFFFu && dist <= 564480u) {
+                    psx_advance_cycles(dist);
+                    s_win.vsync_would_skip_cycles += dist;
+                }
             } else {
                 s_win.vsync_ra_other++;
                 s_win.vsync_last_other_ra = ra;

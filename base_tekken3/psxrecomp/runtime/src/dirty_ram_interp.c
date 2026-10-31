@@ -1434,6 +1434,14 @@ static int interp_enter_compiled(CPUState *cpu, uint32_t target) {
             return 1;
         }
     }
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+    {
+        extern int psx_overlay_dispatch(CPUState *cpu, uint32_t addr);
+        if (psx_overlay_dispatch(cpu, target)) {
+            return 1;
+        }
+    }
+#endif
     /* Decline when the target page no longer matches the static game image.
      * Returning 0 lets the JAL/JALR handler fall through to local-flow interp
      * of the live RAM bytes instead of running stale compiled code. */

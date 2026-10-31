@@ -1328,13 +1328,16 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     if (h == 0) h = 1;
 
     int screenState = psx_mod_game_started() ? (int)(int16_t)psx_mod_read_half(0x800AE204u) : -1;
-    bool inCombat = (w == 368 && h == 480) && (screenState == 8 || screenState == 6 || m_clipY1 == 20);
+    int phase = psx_mod_game_started() ? (int)(uint16_t)psx_mod_read_half(0x800AE224u) : -1;
+    bool inCombat = (w == 368 && h == 480) &&
+                    (screenState == 8 || screenState == 6) &&
+                    (phase >= 4);
 
     static bool s_last_in_combat_state = false;
     if (inCombat != s_last_in_combat_state) {
-        printf("[CombatTransition] Present #%llu: inCombat=%d->%d (w=%u h=%u screenState=%d clipY1=%d clipY2=%d)\n",
+        printf("[CombatTransition] Present #%llu: inCombat=%d->%d (w=%u h=%u screenState=%d phase=%d clipY1=%d clipY2=%d vtx=%u)\n",
                (unsigned long long)s_present_count, (int)s_last_in_combat_state, (int)inCombat,
-               w, h, screenState, m_clipY1, m_clipY2);
+               w, h, screenState, phase, m_clipY1, m_clipY2, m_vtxAllocated);
         fflush(stdout);
         s_last_in_combat_state = inCombat;
     }
@@ -1483,14 +1486,20 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 
             static bool s_wasInCombat = false;
             if (inCombat && !s_wasInCombat) {
-                // Al entrar a combate desde la pantalla VS o menú de carga:
-                // Limpiar toda la textura de renderizado m_vramTexture a negro puro
-                // para garantizar que ningún remanente de retratos o texto estático de la pantalla VS quede en VRAM.
+                // Al entrar a combate, limpiar únicamente las bandas de overscan CRT superior (y=0..19)
+                // e inferior (y=468..479) a negro puro para que no queden restos de la pantalla de carga previa,
+                // sin alterar las proporciones de aspecto 4:3 ni estirar la imagen verticalmente.
                 dk::ImageView vramTarget{ m_vramTexture };
                 m_cmdBuf.bindRenderTargets(&vramTarget);
-                DkScissor fullScissor{ 0, 0, m_hrVramWidth, m_hrVramHeight };
-                m_cmdBuf.setScissors(0, { fullScissor });
+
+                DkScissor topScissor{ 0, 0, m_hrVramWidth, 20u * m_internalScale };
+                m_cmdBuf.setScissors(0, { topScissor });
                 m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+
+                DkScissor bottomScissor{ 0, 468u * m_internalScale, m_hrVramWidth, 12u * m_internalScale };
+                m_cmdBuf.setScissors(0, { bottomScissor });
+                m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+
                 m_cmdBuf.bindRenderTargets({});
                 m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
             }
@@ -1501,13 +1510,12 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             // con el texel adyacente fuera del framebuffer (memoria de texturas/UI en VRAM a x >= 368),
             // lo cual provocaba una línea semi-transparente clara en el borde derecho.
             // Restar 1 al ancho fuente mantiene el rango de muestreo estrictamente dentro del framebuffer renderizado.
-            // En combate 480i, las 448 líneas activas renderizadas por la GPU son [20..467]; las líneas 0..19 y 468..479
-            // corresponden al overscan de televisores CRT de la época y nunca se dibujan en combate. Muestrear [20..467]
-            // evita mostrar líneas no refrescadas de la pantalla previa.
+            // La altura de muestreo permanece en la resolución nativa constante del modo de video (480i o 240p)
+            // tanto en menús como en combate, preservando la relación de aspecto natural 4:3 sin estiramientos verticales.
             uint32_t blitSrcX = dispX * m_internalScale;
-            uint32_t blitSrcY = (inCombat ? 20u : (uint32_t)dispY) * m_internalScale;
+            uint32_t blitSrcY = (uint32_t)dispY * m_internalScale;
             uint32_t blitSrcW = (w * m_internalScale > 1) ? (w * m_internalScale - 1) : 1;
-            uint32_t blitSrcH = (inCombat ? 448u : (uint32_t)h) * m_internalScale;
+            uint32_t blitSrcH = (uint32_t)h * m_internalScale;
             m_cmdBuf.blitImage(vramTexView, { blitSrcX, blitSrcY, 0, blitSrcW, blitSrcH, 1 },
                                colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
                                DkBlitFlag_FilterLinear);
