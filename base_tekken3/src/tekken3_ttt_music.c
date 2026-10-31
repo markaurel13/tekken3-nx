@@ -285,7 +285,7 @@ static int ps2_data(int i) {
     FILE *f = fopen(ps2.path, "rb");
     if (!f) return 0;
     uint8_t *buf = (uint8_t *)malloc(n);
-    int ok = buf && !fseek(f, (long)ps2.p[i].offset, SEEK_SET) && (switch_fread_pump(buf, 1, n, f) == n);
+    int ok = buf && !fseek(f, (long)ps2.p[i].offset, SEEK_SET) && (fread(buf, 1, n, f) == n);
     fclose(f);
     if (!ok) { free(buf); fprintf(stderr, "TTT music: %s unreadable\n", ps2.path); return 0; }
     ps2.cached_data[i] = buf;
@@ -663,4 +663,12 @@ void tekken3_ttt_music_state_reset(void) {
 
 int tekken3_ttt_music_preload(void) {
     return load() && ps2_load();
+}
+
+void tekken3_ttt_music_stage_preload(int stage) {
+    if (stage < 0) return;
+    int ps2_piece = remixed() ? ps2_of_stage(stage) : -1;
+    if (ps2_piece >= 0) {
+        ps2_data(ps2_piece);
+    }
 }

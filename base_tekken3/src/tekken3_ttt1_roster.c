@@ -478,6 +478,10 @@ static unsigned tag_x0(void){return 11+(10-tag_cols())*GRID_PITCH_X/2;}
 /* Guest k for a character ID, else -1. */
 extern void tekken3_ranking_tick(void);
 extern int tekken3_ranking_guest_slot(unsigned id);
+int tekken3_guest_has_third_costume(unsigned id) {
+    int k=tekken3_guest_character(id);
+    return k>=0 ? roster[k].third_costume : 0;
+}
 int tekken3_guest_character(unsigned id) {
     return id>=GUEST_ID && id<GUEST_ID+roster_count?(int)(id-GUEST_ID):-1;
 }
@@ -1567,6 +1571,8 @@ uint16_t tekken3_guest_selector_input(int player,uint16_t buttons) {
         return buttons|PAD_L2|PAD_R2;
     }
     if(!selector_open())return buttons;
+    extern int tekken3_outfits_captures_input(int pad);
+    if(tekken3_outfits_captures_input(player))return buttons;
     if((edges&(PAD_R2|PAD_L2)) && stock_saved)switch_page();
     return buttons|PAD_L2|PAD_R2;
 }

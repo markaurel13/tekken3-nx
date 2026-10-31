@@ -4,6 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#define T3_OUTFIT_MAX_CHARS 64
 enum { T3_SKIN_NINA, T3_SKIN_XIAOYU, T3_SKIN_ANNA, T3_SKIN_KUMA,
        T3_SKIN_EDDY, T3_SKIN_JULIA, T3_SKIN_HEIHACHI, T3_SKIN_COUNT };
 typedef struct Tekken3OutfitEntry {

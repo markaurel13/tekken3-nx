@@ -42,20 +42,34 @@ static uint32_t imported_characters;
 static int character_override[2]={-1,-1};
 static const int skin_characters[T3_SKIN_COUNT]={5,7,18,11,8,10,13};
 static int selecting,character[2]={-1,-1},connected[2],locked[2];
-static int choice[2][24],committed[2]={-1,-1},pending[2];
+static int choice[2][T3_OUTFIT_MAX_CHARS],committed[2]={-1,-1},pending[2];
 static uint16_t confirmation[2],previous[2]={0xffff,0xffff},suppress[2];
 static int menu=-1; /* Legacy debug API; there is no modal owner anymore. */
 static int browsing[2],team_select,team_count[2]={-1,-1};
-static int team_skins[2][24],team_session;
+static int team_skins[2][T3_OUTFIT_MAX_CHARS],team_session;
 static uint32_t borrowed_flags;
 static int owner[2]={0,1},can_select[2],native_phase[2]={-1,-1},cpu_panel[2];
-static Tekken3OutfitEntry stock[21][3];
+static Tekken3OutfitEntry stock[T3_OUTFIT_MAX_CHARS][3];
 static int stock_initialized;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+int tekken3_guest_has_third_costume(unsigned id) {
+ (void)id;
+ return 0;
+}
 static const Tekken3OutfitEntry *stock_entry(int cid,int index) {
- if(cid<0 || cid>=21 || index<0 || index>=3)return NULL;
- if(index==2 && !(psx_mod_read_word(0x80097ef4u)&(1u<<cid)))return NULL;
+ if(cid<0 || cid>=T3_OUTFIT_MAX_CHARS || index<0 || index>=3)return NULL;
+ if(cid==21 || cid==22)return NULL;
+ if(index==2) {
+  if(cid<21) {
+   if(!(psx_mod_read_word(0x80097ef4u)&(1u<<cid)))return NULL;
+  } else {
+   if(!tekken3_guest_has_third_costume((unsigned)cid))return NULL;
+  }
+ }
  if(!stock_initialized) {
-  for(int c=0;c<21;c++)for(int i=0;i<3;i++) {
+  for(int c=0;c<T3_OUTFIT_MAX_CHARS;c++)for(int i=0;i<3;i++) {
    Tekken3OutfitEntry *e=&stock[c][i];e->character=c;e->skin=-1;
    e->confirm=i==0?0x8000:i==1?0x4000:8;
    snprintf(e->id,sizeof e->id,"stock-%d-%d",c,i+1);
@@ -66,7 +80,7 @@ static const Tekken3OutfitEntry *stock_entry(int cid,int index) {
  return &stock[cid][index];
 }
 static int valid_entry(const Tekken3OutfitEntry *e) {
- if(e->character<0 || e->character>=24 || e->skin < -1 || e->skin>=T3_SKIN_COUNT)return 0;
+ if(e->character<0 || e->character>=T3_OUTFIT_MAX_CHARS || e->skin < -1 || e->skin>=T3_SKIN_COUNT)return 0;
  if(e->skin>=0 && skin_characters[e->skin]!=e->character)return 0;
  if(e->confirm!=0x8000 && e->confirm!=0x4000 && e->confirm!=8)return 0;
  if(!e->id[0] || !e->name[0])return 0;
@@ -95,7 +109,7 @@ int tekken3_outfits_load_catalog(const char *path) {
  free(catalog);catalog=rows;catalog_count=count;memset(choice,0,sizeof choice);return count;
 }
 const Tekken3OutfitEntry *tekken3_outfits_entry(int cid,int index) {
- if(cid>=21 && (cid>=24 || !(imported_characters&(1u<<cid))))return NULL;
+ if(cid<0 || cid>=T3_OUTFIT_MAX_CHARS || cid==21 || cid==22)return NULL;
  const Tekken3OutfitEntry *rows=catalog_count?catalog:defaults;
  int n=catalog_count?catalog_count:(int)(sizeof defaults/sizeof *defaults);
  if(index<0)return NULL;
@@ -118,11 +132,13 @@ int tekken3_outfits_total_entries(void) {
 int tekken3_outfits_count(int cid) {int n=0;while(tekken3_outfits_entry(cid,n))n++;return n;}
 void tekken3_outfits_set_available(int skin,int on) {if(skin>=0 && skin<T3_SKIN_COUNT)available[skin]=!!on;}
 void tekken3_outfits_set_character_available(int cid,int on) {
- if(cid<21 || cid>=24)return;
- if(on)imported_characters|=1u<<cid;else imported_characters&=~(1u<<cid);
+ if(cid<0 || cid>=T3_OUTFIT_MAX_CHARS)return;
+ if(cid<32) {
+  if(on)imported_characters|=1u<<cid;else imported_characters&=~(1u<<cid);
+ }
 }
 void tekken3_outfits_set_character_override(int player,int cid) {
- if(player>=0 && player<2)character_override[player]=cid>=0 && cid<24?cid:-1;
+ if(player>=0 && player<2)character_override[player]=cid>=0 && cid<T3_OUTFIT_MAX_CHARS?cid:-1;
 }
 int tekken3_outfits_available(void) {
 #ifdef TEKKEN3_LAUNCHER
@@ -142,7 +158,7 @@ void tekken3_outfits_update(int active,int c1,int c2) {
   for(int p=0;p<2;p++) {
    if(ids[p]!=character[p]){locked[p]=0;pending[p]=0;browsing[p]=0;}
    character[p]=ids[p];
-   if(ids[p]>=0 && ids[p]<24 && choice[p][ids[p]]>=tekken3_outfits_count(ids[p]))choice[p][ids[p]]=0;
+   if(ids[p]>=0 && ids[p]<T3_OUTFIT_MAX_CHARS && choice[p][ids[p]]>=tekken3_outfits_count(ids[p]))choice[p][ids[p]]=0;
   }
  }
 }
@@ -170,7 +186,7 @@ void tekken3_outfits_sync(void) {
  team_select=screen==10 && psx_mod_read_word(0x80053000u)==0x27bdffd0u;
  active=(cabinet && psx_mod_read_half(0x800ae224u)<=1) || team_select;
  if(team_select && !was_team) {
-   for(int p=0;p<2;p++){team_count[p]=-1;for(int c=0;c<24;c++)team_skins[p][c]=-1;}
+   for(int p=0;p<2;p++){team_count[p]=-1;for(int c=0;c<T3_OUTFIT_MAX_CHARS;c++)team_skins[p][c]=-1;}
    team_session=1;
  } else if(cabinet)team_session=0;
 #endif
@@ -200,7 +216,7 @@ void tekken3_outfits_sync(void) {
      if(manual && x<(unsigned)columns && y<3 &&
         (table==0x80022768u || (table>=0x9f000000u && table<0xa0000000u))) {
        int cid=psx_mod_read_half(table+(y*columns+x)*6+4)/4;
-       if(cid<24 && (psx_mod_read_word(state+36)&(1u<<cid)))ids[p]=cid;
+       if(cid<T3_OUTFIT_MAX_CHARS && (cid<24 ? (psx_mod_read_word(state+36)&(1u<<cid)) : 1))ids[p]=cid;
      }
      int count=(int)psx_mod_read_word(state+44);
      if(count!=team_count[p]) {
@@ -220,7 +236,7 @@ void tekken3_outfits_sync(void) {
   * Start/costume 2. Borrow just that bit and restore it after selection. */
  uint32_t flags=psx_mod_read_word(0x80097ef4u);
  if(selecting) {
-  for(int p=0;p<2;p++)if(pending[p] && (confirmation[p]==8 || (team_select && confirmation[p]==0x1000)) && character[p]>=0 && character[p]<24){uint32_t bit=1u<<character[p];borrowed_flags|=bit & ~flags;flags|=bit;}
+  for(int p=0;p<2;p++)if(pending[p] && (confirmation[p]==8 || (team_select && confirmation[p]==0x1000)) && character[p]>=0 && character[p]<32){uint32_t bit=1u<<character[p];borrowed_flags|=bit & ~flags;flags|=bit;}
   if(flags!=psx_mod_read_word(0x80097ef4u))psx_mod_write_word(0x80097ef4u,flags);
  }else if(borrowed_flags){psx_mod_write_word(0x80097ef4u,flags & ~borrowed_flags);borrowed_flags=0;}
 }
@@ -287,7 +303,7 @@ uint16_t tekken3_outfits_input(int pad,uint16_t buttons) {
      confirmation[p]=team_select && e->confirm==8?0x1000:e->confirm;
      /* Unlock before returning this first injected sample. Waiting until
       * next sync lets Team Battle consume Triangle as costume zero. */
-     if(e->confirm==8) {
+     if(e->confirm==8 && character[p]<32) {
        uint32_t bit=1u<<character[p],flags=psx_mod_read_word(0x80097ef4u);
        borrowed_flags|=bit&~flags;
        if(!(flags&bit))psx_mod_write_word(0x80097ef4u,flags|bit);
@@ -307,7 +323,7 @@ Tekken3OutfitView tekken3_outfits_view(int p) {
  v.character=character[p];v.visible=selecting && can_select[p] && connected[owner[p]] && browsing[p] && character[p]>=0;v.locked=locked[p];v.menu=0;
  v.owner=owner[p];v.cpu=cpu_panel[p];
  v.count=tekken3_outfits_count(v.character);v.has_extra=v.count>0;
- if(v.character>=0 && v.character<24)v.index=choice[p][v.character];
+ if(v.character>=0 && v.character<T3_OUTFIT_MAX_CHARS)v.index=choice[p][v.character];
  const Tekken3OutfitEntry *e=tekken3_outfits_entry(v.character,v.index);if(e){v.name=e->name;v.custom=e->skin>=0;}return v;
 }
 int tekken3_outfits_skin_enabled(int skin,int cy) {
@@ -317,7 +333,7 @@ int tekken3_outfits_skin_enabled(int skin,int cy) {
  if(p<0)return 0;
  if(team_session) {
    int cid=psx_mod_read_half(0x800a9240u+p*0x188cu);
-   return cid>=0 && cid<24 && team_skins[p][cid]==skin;
+   return cid>=0 && cid<T3_OUTFIT_MAX_CHARS && team_skins[p][cid]==skin;
  }
  return committed[p]==skin;
 }

@@ -32,6 +32,7 @@ const char *tekken3_guest_name_for(unsigned player);
 unsigned tekken3_guest_generation(unsigned player);
 /* 0 punch, 1 kick, 2 Start: selects <data prefix>-arcade-P1/P2/P3. */
 unsigned tekken3_guest_costume(unsigned player);
+int tekken3_guest_has_third_costume(unsigned id);
 /* The guest's TTT1 moveset key (0x29EF00), 32 when unknown: what the other
  * guest's opponent-specific hit rules test. */
 unsigned tekken3_guest_moveset(unsigned player);

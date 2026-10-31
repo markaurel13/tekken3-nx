@@ -448,9 +448,20 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
 }
 
 static u64 s_last_audio_update_tick = 0;
+static std::atomic<bool> s_in_audio_update{false};
 
 void SwitchAudio::Update() {
     if (!m_initialized) return;
+
+    bool expected = false;
+    if (!s_in_audio_update.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    struct UpdateGuard {
+        ~UpdateGuard() {
+            s_in_audio_update.store(false, std::memory_order_release);
+        }
+    } guard;
 
     u64 t_spu0 = armGetSystemTick();
     s_last_audio_update_tick = t_spu0;
@@ -558,6 +569,7 @@ void switch_audio_update(void) {
 
 void switch_audio_pump_if_needed(void) {
     if (!SwitchAudio::Instance().IsInitialized()) return;
+    if (s_in_audio_update.load(std::memory_order_relaxed)) return;
     u64 now = armGetSystemTick();
     if (s_last_audio_update_tick == 0) {
         s_last_audio_update_tick = now;

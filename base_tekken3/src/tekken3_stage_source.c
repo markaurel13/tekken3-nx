@@ -55,6 +55,8 @@
 #include <string.h>
 #include <time.h>
 
+extern void tekken3_ttt_music_stage_preload(int stage);
+
 enum { SCREEN = 0x800ae204, OPTIONS = 5, FIGHT = 8, LOADING = 11, MENU = 4, MODE = 0x800afa88,
        ARENA = 0x800adc84, ARENA_COPY = 0x800afaa2, DARK_ARENA = 0x800afaa0, NO_STAGE = 0x800adca4,
        HUMAN = 0x800ae1f8, LAST_ARCADE_ARENA = 12, GON_ARENA = 13, DR_B_ARENA = 14, ARCADE = 0, PRACTICE = 5, DEMO = 6,
@@ -214,6 +216,9 @@ void tekken3_stage_source_decide(unsigned mode, int player, const char *guest, i
         fprintf(stderr, "TTT Stages: %s fight, the STAGE line's %s stage %d in arena %d\n", mode_names[mode],
                 decided == TEKKEN3_STAGE_TTT ? "TTT" : "T3", decided == TEKKEN3_STAGE_TTT ? decided_stage : decided_arena,
                 decided_arena);
+        if (decided == TEKKEN3_STAGE_TTT && decided_stage >= 0) {
+            tekken3_ttt_music_stage_preload(decided_stage);
+        }
         return;
     }
     int s = effective(), stage = -1;
@@ -243,6 +248,9 @@ void tekken3_stage_source_decide(unsigned mode, int player, const char *guest, i
             mode_names[mode], arena, player + 1, guest ? "guest " : player < 0 ? "-" : "native",
             guest ? guest : "", boss ? " (True Ogre, Arcade's CPU)" : true_ogre ? " (True Ogre fights: at night)" : "", moved, words[s], stage >= 0 ? "TTT" : "T3",
             stage >= 0 ? stage : arena);
+    if (decided == TEKKEN3_STAGE_TTT && decided_stage >= 0) {
+        tekken3_ttt_music_stage_preload(decided_stage);
+    }
 }
 int tekken3_stage_source_load_arena(void) { return moving ? decided_arena : -1; }
 
