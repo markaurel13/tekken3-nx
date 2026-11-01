@@ -1,6 +1,9 @@
 /* Small, transparent 2:3 portrait strip shared by GL and software renderers.
  * No fullscreen backdrop, blur, modal input or guest VRAM writes. */
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 enum { OUTFIT_W=216, OUTFIT_H=156, PORTRAIT_W=72, PORTRAIT_H=108 };
 typedef struct OutfitArt {
     char name[64];
@@ -65,37 +68,60 @@ static OutfitArt *outfit_load_art(const char *name) {
     char *base=SDL_GetBasePath();
 #endif
     snprintf(path,sizeof path,"%smods/outfit-menu/%s.rgba",base?base:"",file_name);
-    FILE *f=fopen(path,"rb");
-    if(!f) {
+    int fd = open(path, O_RDONLY);
+    if(fd < 0) {
         snprintf(path,sizeof path,"%smods/assets/outfit-menu/%s.rgba",base?base:"",file_name);
-        f=fopen(path,"rb");
+        fd = open(path, O_RDONLY);
     }
-    if(!f && !strncmp(name,"jun-arcade-",11))outfit_jun_portrait(a,base);
+    if(fd < 0 && !strncmp(name,"jun-arcade-",11))outfit_jun_portrait(a,base);
 #if !defined(PSX_SDL3)
     SDL_free(base);
 #endif
-    if(!f) {
-        printf("[OutfitArt] AVISO: no se encontro '%s' (intentado file_name='%s', path='%s')\n", name, file_name, path);
+    if(fd < 0) return a;
+
+    struct stat st;
+    if(fstat(fd, &st) != 0 || st.st_size < 16) { close(fd); return a; }
+    size_t file_sz = (size_t)st.st_size;
+    unsigned char *data = (unsigned char *)malloc(file_sz);
+    if(!data) { close(fd); return a; }
+
+    size_t rd = 0;
+    while(rd < file_sz) {
+        ssize_t n = read(fd, data + rd, file_sz - rd);
+        if(n <= 0) break;
+        rd += (size_t)n;
+    }
+    close(fd);
+
+    if(rd != file_sz || memcmp(data, "HDRGBA01", 8) != 0) { free(data); return a; }
+    uint32_t w = *(uint32_t*)(data + 8);
+    uint32_t h = *(uint32_t*)(data + 12);
+    if(!w || !h || w > 8192 || h > 8192 || (uint64_t)w * h > 16777216 ||
+       file_sz < 16 + (size_t)w * h * 4 ||
+       outfit_art_pixels + (size_t)w * h > 64u * 1024u * 1024u) {
+        free(data);
         return a;
     }
-    char magic[8];uint32_t w=0,h=0;
-    if(fread(magic,1,8,f)!=8 || memcmp(magic,"HDRGBA01",8) ||
-       fread(&w,4,1,f)!=1 || fread(&h,4,1,f)!=1 || !w || !h ||
-       w>8192 || h>8192 || (uint64_t)w*h>16777216 ||
-       outfit_art_pixels+(size_t)w*h>64u*1024u*1024u) {fclose(f);return a;}
-    size_t size=(size_t)w*h*4;unsigned char *data=(unsigned char*)malloc(size);
-    if(data && fread(data,1,size,f)==size && fgetc(f)==EOF) {
-        a->pixels=(uint32_t*)data;a->width=(int)w;a->height=(int)h;
-        for(size_t i=0;i<(size_t)w*h;i++) {
-            unsigned char *p=data+i*4;
-            uint32_t c=0xff000000u|((uint32_t)p[0]<<16)|((uint32_t)p[1]<<8)|p[2];
-            a->pixels[i]=c;
-        }
-        outfit_art_pixels+=(size_t)w*h;a->loaded=1;data=NULL;
-        printf("[OutfitArt] Retrato '%s' cargado desde '%s' (mapeado file='%s', %ux%u)\n",
-               name, path, file_name, w, h);
+
+    size_t pixel_bytes = (size_t)w * h * 4;
+    uint32_t *pix = (uint32_t *)malloc(pixel_bytes);
+    if(!pix) { free(data); return a; }
+
+    const uint32_t *src_pix = (const uint32_t *)(data + 16);
+    size_t count = (size_t)w * h;
+    for(size_t i = 0; i < count; i++) {
+        uint32_t p = src_pix[i];
+        uint32_t r = p & 0xFF;
+        uint32_t b = (p >> 16) & 0xFF;
+        pix[i] = 0xFF000000u | (p & 0x0000FF00u) | (r << 16) | b;
     }
-    free(data);fclose(f);return a;
+    free(data);
+    a->pixels = pix;
+    a->width = (int)w;
+    a->height = (int)h;
+    outfit_art_pixels += (size_t)w * h;
+    a->loaded = 1;
+    return a;
 }
 
 void host_osd_outfit_preload(void) {

@@ -533,6 +533,14 @@ static int apply_speed(int delay) {
 }
 
 static int apply_read_speed(int delay) {
+    /* During initial boot before game entry (fntrace_is_game_started == 0),
+     * accelerate loading the binary sectors so the initial black screen finishes quickly.
+     * As soon as the game starts, revert to authentic speed to guarantee audio sync. */
+    extern int fntrace_is_game_started(void);
+    if (!fntrace_is_game_started()) {
+        int d = delay / 4;
+        return d < CDROM_MIN_DELAY ? CDROM_MIN_DELAY : d;
+    }
     /* A route is an explicit DATA-read allowlist, never a blanket drive-speed
      * change. Keep FMV/STR authentic: XA-ADPCM (0x40), filter (0x08), and
      * Form2/0x924 (0x20) — MotK sets mode 0xa2 (Form2+2×) before the XA bit,

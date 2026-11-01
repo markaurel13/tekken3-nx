@@ -93,37 +93,9 @@ void psx_mod_function_entry(CPUState* cpu, uint32_t address) {
     }
 }
 
-static void log_dir_contents(const char *dir_path, int max_items) {
-    DIR *d = opendir(dir_path);
-    if (!d) {
-        fprintf(stdout, "[ModDiag] opendir('%s') FAILED: errno=%d (%s)\n",
-                dir_path, errno, strerror(errno));
-        fflush(stdout);
-        return;
-    }
-    fprintf(stdout, "[ModDiag] Contenido de '%s':", dir_path);
-    int count = 0;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        if (count < max_items) {
-            fprintf(stdout, " [%s]", ent->d_name);
-        }
-        count++;
-    }
-    closedir(d);
-    fprintf(stdout, " (total=%d entradas)\n", count);
-    fflush(stdout);
-}
-
 void mod_runtime_activate_plugins(void) {
     if (s_plugins_activated) return;
     s_plugins_activated = 1;
-    log_dir_contents("sdmc:/switch", 20);
-    log_dir_contents("sdmc:/switch/tekken3", 25);
-    log_dir_contents("sdmc:/switch/tekken3/mods", 25);
-    log_dir_contents("sdmc:/switch/tekken3/mods/ttt1", 15);
-    log_dir_contents("sdmc:/switch/tekken3/mods/arcade-stages", 15);
     for (int i = 0; i < s_act_count; i++) {
         if (is_plugin_enabled_on_switch(s_act_plugins[i].id)) {
             s_act_plugins[i].callback();
