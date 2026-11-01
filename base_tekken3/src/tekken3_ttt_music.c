@@ -575,7 +575,7 @@ static int gain_percent(void) {
 }
 
 /* Returns 1 while a piece replaces T3's music (then mute T3's). */
-int tekken3_ttt_music_mix(int16_t *out, int frames, int audible, const int16_t main_volume[2], int gain) {
+int tekken3_ttt_music_mix(int32_t *out32, int frames, int audible, const int16_t main_volume[2], int gain) {
     int stage = wanted_stage();
     int cur = (int16_t)psx_mod_read_half(0x800a0620), state = psx_mod_read_half(0x800a05d8);
     int round = psx_mod_read_half(0x800add08), xa = (int16_t)psx_mod_read_half(0x800a061c);
@@ -627,17 +627,14 @@ int tekken3_ttt_music_mix(int16_t *out, int frames, int audible, const int16_t m
         if (!audible || !cd_on || xa != 1) continue;
         int32_t x[2];
         for (int ch = 0; ch < 2; ch++) {
-            int32_t v = s[ch] * scale / unit;
-            x[ch] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+            x[ch] = s[ch] * scale / unit;
         }
         int32_t l = mono ? ((x[0] * mix) >> 7) + ((x[1] * mix) >> 7) : (x[0] * mix) >> 7;
         int32_t r = mono ? l : (x[1] * mix) >> 7;
-        int32_t y[2] = { l > 32767 ? 32767 : l < -32768 ? -32768 : l, r > 32767 ? 32767 : r < -32768 ? -32768 : r };
-        y[0] = (y[0] * cd_l) >> 15;
-        y[1] = (y[1] * cd_r) >> 15;
+        int32_t y[2] = { (l * cd_l) >> 15, (r * cd_r) >> 15 };
         for (int ch = 0; ch < 2; ch++) {
-            int32_t v = y[ch] * gain / 100 * main_volume[ch] / 32768, m = out[f * 2 + ch] + v;
-            out[f * 2 + ch] = audio_soft_limit(m);
+            int32_t v = y[ch] * gain / 100 * main_volume[ch] / 32768;
+            out32[f * 2 + ch] += v;
         }
     }
     return 1;

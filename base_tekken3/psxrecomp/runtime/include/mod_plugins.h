@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,7 @@ uint16_t psx_mod_read_half(uint32_t address);
 void psx_mod_write_half(uint32_t address, uint16_t value);
 uint32_t psx_mod_read_word(uint32_t address);
 void psx_mod_write_word(uint32_t address, uint32_t value);
+void psx_mod_write_bytes(uint32_t address, const void* src, size_t size);
 /*
  * Replace one guest instruction and route that address through the runtime's
  * executable-RAM path. Use this instead of psx_mod_write_word for code so a

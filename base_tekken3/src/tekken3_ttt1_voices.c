@@ -20,7 +20,7 @@ extern void __real_spu_set_host_mix_volume(int sfx, int music);
 extern void __real_spu_init(void);
 extern int __real_spu_snapshot_read(const uint8_t *p, uint32_t len);
 /* TTT1 sounds other than voices: tekken3_ttt1_sfx.c. */
-extern void tekken3_ttt1_sfx_mix(int16_t *out,int frames,int audible,const int16_t main_volume[2],int gain);
+extern void tekken3_ttt1_sfx_mix(int32_t *out,int frames,int audible,const int16_t main_volume[2],int gain);
 extern void tekken3_ttt1_sfx_stop(void);
 extern void tekken3_ttt1_sfx_tick(void);
 
@@ -57,9 +57,9 @@ static GuestBank banks[2];
 static GuestVoice voices[2][2];
 static int sfx_gain = 100, music_gain = 100, music_muted;
 /* A cinematic's music (src/tekken3_cine.c) mutes the game's. */
-extern int tekken3_cine_music_mix(int16_t *out,int frames,int audible,int gain,int *mute);
+extern int tekken3_cine_music_mix(int32_t *out,int frames,int audible,int gain,int *mute);
 /* So does a TTT stage's music (tekken3_ttt_music.c, TTT Stages). */
-extern int tekken3_ttt_music_mix(int16_t *out,int frames,int audible,const int16_t main_volume[2],int gain);
+extern int tekken3_ttt_music_mix(int32_t *out,int frames,int audible,const int16_t main_volume[2],int gain);
 extern void tekken3_ttt_music_state_reset(void);
 static uint32_t telemetry;
 
@@ -227,48 +227,67 @@ void __wrap_func_80040C90(CPUState *cpu) {
     __real_func_80040C90(cpu);
 }
 
+/* Telemetria de audio (src/platform/switch_audio.cpp): salida cruda del SPU antes de las mezclas del mod. */
+extern void switch_audio_telem_raw(const int16_t *out,int frames) __attribute__((weak));
 void __wrap_spu_render(int16_t *out,int frames) {
     __real_spu_render(out,frames);
     if(!out || frames<=0)return;
+    if(switch_audio_telem_raw)switch_audio_telem_raw(out,frames);
+
+    int total_samples = frames * 2;
+    int32_t stack_buf[2048 * 2];
+    int32_t *mix32 = (total_samples <= (int)(sizeof(stack_buf)/sizeof(stack_buf[0]))) ? stack_buf : (int32_t*)malloc(total_samples * sizeof(int32_t));
+    if(!mix32) return;
+
+    /* Headroom ligero (x 7 / 8, -1.1 dB) sobre la salida cruda de SPU */
+    for(int i = 0; i < total_samples; i++) {
+        mix32[i] = ((int32_t)out[i] * 7) / 8;
+    }
+
     SpuGlobalState g;spu_get_global_state(&g);
     int audible=(g.ctrl&0xc000)==0xc000;
     int16_t main_volume[2]={(int16_t)spu_read(0x1f801db8),(int16_t)spu_read(0x1f801dba)};
-    tekken3_ttt1_sfx_mix(out,frames,audible,main_volume,sfx_gain);
+    tekken3_ttt1_sfx_mix(mix32,frames,audible,main_volume,sfx_gain);
     /* TTT stage 4's thunder (src/tekken3_arcade_stages.c), with the sounds. */
-    tekken3_arcade_stages_thunder_mix(out,frames,audible,main_volume,sfx_gain);
+    tekken3_arcade_stages_thunder_mix(mix32,frames,audible,main_volume,sfx_gain);
     int embu_music=0;
-    if(!tekken3_cine_music_mix(out,frames,audible,music_gain,&embu_music))embu_music=0;
-    if(!embu_music)embu_music=tekken3_ttt_music_mix(out,frames,audible,main_volume,music_gain);
+    if(!tekken3_cine_music_mix(mix32,frames,audible,music_gain,&embu_music))embu_music=0;
+    if(!embu_music)embu_music=tekken3_ttt_music_mix(mix32,frames,audible,main_volume,music_gain);
     if(embu_music!=music_muted) {
         music_muted=embu_music;
         __real_spu_set_host_mix_volume(sfx_gain,embu_music?0:music_gain);
     }
-    if(!banks[0].loaded && !banks[1].loaded)return;
-    for(unsigned p=0;p<2;p++)for(unsigned which=CRY_VOICE;which<=KO_VOICE;which++) {
-        GuestVoice *v=&voices[p][which];
-        if(!v->group || !banks[p].loaded)continue;
-        if(!guest_active(p) || psx_mod_read_half(0x800ae204)!=8){v->group=0;continue;}
-        const GuestSample *sample=&banks[p].samples[v->slot];
-        uint32_t echoes=v->group==GROUP_KO?2:0, end=sample->frames+echoes*ECHO_DELAY;
-        for(int f=0;f<frames && v->pos<end;f++,v->pos++) {
-            int32_t value=0;
-            /* Match the PS1 voice mix level, with a short attack ramp. PCM
-             * stays uncompressed; SFX and host master controls both apply. */
-            for(uint32_t e=0;e<=echoes && v->pos>=e*ECHO_DELAY;e++) {
-                uint32_t at=v->pos-e*ECHO_DELAY;
-                if(at>=sample->frames)continue;
-                int ramp=at<220?(int)at:220;
-                value+=(rd16(sample->pcm+at*2)*ramp/220)>>e;
+    if(banks[0].loaded || banks[1].loaded) {
+        for(unsigned p=0;p<2;p++)for(unsigned which=CRY_VOICE;which<=KO_VOICE;which++) {
+            GuestVoice *v=&voices[p][which];
+            if(!v->group || !banks[p].loaded)continue;
+            if(!guest_active(p) || psx_mod_read_half(0x800ae204)!=8){v->group=0;continue;}
+            const GuestSample *sample=&banks[p].samples[v->slot];
+            uint32_t echoes=v->group==GROUP_KO?2:0, end=sample->frames+echoes*ECHO_DELAY;
+            for(int f=0;f<frames && v->pos<end;f++,v->pos++) {
+                int32_t value=0;
+                /* Match the PS1 voice mix level, with a short attack ramp. PCM
+                 * stays uncompressed; SFX and host master controls both apply. */
+                for(uint32_t e=0;e<=echoes && v->pos>=e*ECHO_DELAY;e++) {
+                    uint32_t at=v->pos-e*ECHO_DELAY;
+                    if(at>=sample->frames)continue;
+                    int ramp=at<220?(int)at:220;
+                    value+=(rd16(sample->pcm+at*2)*ramp/220)>>e;
+                }
+                value=value*sfx_gain/100/4;
+                if(!audible)value=0;
+                for(unsigned ch=0;ch<2;ch++) {
+                    mix32[f*2+ch] += value*main_volume[ch]/32768;
+                }
             }
-            value=value*sfx_gain/100/4;
-            if(!audible)value=0;
-            for(unsigned ch=0;ch<2;ch++) {
-                int32_t mixed=(int32_t)out[f*2+ch]+value*main_volume[ch]/32768;
-                out[f*2+ch]=audio_soft_limit(mixed);
-            }
+            if(v->pos==end)v->group=0;
         }
-        if(v->pos==end)v->group=0;
     }
+    /* Una sola etapa de limitador suave al final sobre el acumulador int32_t */
+    for(int i = 0; i < total_samples; i++) {
+        out[i] = audio_soft_limit(mix32[i]);
+    }
+    if(mix32 != stack_buf) free(mix32);
 }
 void __wrap_spu_set_host_mix_volume(int sfx,int music) {
     sfx_gain=sfx<0?0:sfx>100?100:sfx;

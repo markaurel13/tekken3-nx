@@ -29,6 +29,7 @@ extern "C" {
 extern void mod_runtime_activate_plugins(void);
 extern void ensure_outfit_catalog_loaded(void);
 extern void host_osd_outfit_preload(void);
+extern void tekken3_ttt1_precach_kazuya(void);
 extern void cd_prefetch_shutdown(void);
 extern uint32_t g_game_entry_hits[];
 extern uint32_t psx_game_entry_addr(uint32_t);
@@ -491,8 +492,7 @@ static ssize_t log_devoptab_write(struct _reent *r, void *fd, const char *ptr, s
     (void)r; (void)fd;
     if (s_sd_log) {
         fwrite(ptr, 1, len, s_sd_log);
-        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ERROR", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5) ||
-            memmem(ptr, len, "[Outfit", 7) || memmem(ptr, len, "[MOD", 4) || memmem(ptr, len, "TTT1", 4) || memmem(ptr, len, "Kazuya", 6)) {
+        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ERROR", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
             fflush(s_sd_log);
             fsync(fileno(s_sd_log));
         }
@@ -770,7 +770,7 @@ static bool s_prof_thread_started = false;
 
 static void prof_start(void) {
     s_prof_run = true;
-    if (R_SUCCEEDED(threadCreate(&s_prof_thread, prof_thread_fn, NULL, NULL, 0x4000, 0x3B, 2))) {
+    if (R_SUCCEEDED(threadCreate(&s_prof_thread, prof_thread_fn, NULL, NULL, 0x4000, 0x3B, 1))) {
         threadStart(&s_prof_thread);
         s_prof_thread_started = true;
     } else {
@@ -785,6 +785,70 @@ static void prof_stop(void) {
         threadClose(&s_prof_thread);
         s_prof_thread_started = false;
     }
+}
+
+/* ===== Telemetria Fase 0: reloj de CPU/GPU/EMC (clkrst en 8.0.0+, pcv antes) ===== */
+static bool s_clk_ready = false;
+static bool s_clk_use_clkrst = false;
+static ClkrstSession s_clk_cpu, s_clk_gpu, s_clk_emc;
+
+static void clock_telem_init(void) {
+    Result rc;
+    if (hosversionAtLeast(8, 0, 0)) {
+        rc = clkrstInitialize();
+        if (R_SUCCEEDED(rc)) {
+            Result r1 = clkrstOpenSession(&s_clk_cpu, PcvModuleId_CpuBus, 3);
+            Result r2 = clkrstOpenSession(&s_clk_gpu, PcvModuleId_GPU, 3);
+            Result r3 = clkrstOpenSession(&s_clk_emc, PcvModuleId_EMC, 3);
+            s_clk_use_clkrst = true;
+            s_clk_ready = R_SUCCEEDED(r1);
+            printf("[Clocks] clkrst listo (open cpu=0x%X gpu=0x%X emc=0x%X)\n", r1, r2, r3);
+        } else {
+            printf("[Clocks] clkrstInitialize fallo: 0x%X\n", rc);
+        }
+    } else {
+        rc = pcvInitialize();
+        if (R_SUCCEEDED(rc)) { s_clk_ready = true; printf("[Clocks] pcv listo\n"); }
+        else printf("[Clocks] pcvInitialize fallo: 0x%X\n", rc);
+    }
+}
+
+static void clock_telem_report(void) {
+    if (!s_clk_ready) return;
+    u32 cpu = 0, gpu = 0, emc = 0;
+    Result rc1, rc2, rc3;
+    if (s_clk_use_clkrst) {
+        rc1 = clkrstGetClockRate(&s_clk_cpu, &cpu);
+        rc2 = clkrstGetClockRate(&s_clk_gpu, &gpu);
+        rc3 = clkrstGetClockRate(&s_clk_emc, &emc);
+    } else {
+        rc1 = pcvGetClockRate(PcvModule_CpuBus, &cpu);
+        rc2 = pcvGetClockRate(PcvModule_GPU, &gpu);
+        rc3 = pcvGetClockRate(PcvModule_EMC, &emc);
+    }
+    printf("[Clocks] cpu=%.1fMHz gpu=%.1fMHz emc=%.1fMHz (rc=0x%X/0x%X/0x%X; CPU maximo=1785MHz, GPU maximo=921MHz)\n",
+           cpu / 1e6, gpu / 1e6, emc / 1e6, rc1, rc2, rc3);
+}
+
+/* ===== Telemetria Fase 0: FPS reales con reloj de pared ===== */
+static void fps_wall_report(uint64_t frame) {
+    static u64 s_win_tick = 0, s_base_tick = 0;
+    static uint64_t s_win_frame = 0, s_base_frame = 0;
+    u64 now = armGetSystemTick();
+    if (s_win_tick && frame > s_win_frame + 30) {
+        double wall = (double)armTicksToNs(now - s_win_tick) / 1e9;
+        double fps = (double)(frame - s_win_frame) / wall;
+        double base_fps = 0.0, base_wall = 0.0;
+        if (s_base_tick) {
+            base_wall = (double)armTicksToNs(now - s_base_tick) / 1e9;
+            base_fps = (double)(frame - s_base_frame) / base_wall;
+        }
+        printf("[FpsWall] frame=%llu ventana: %llu frames en %.3fs = %.3f fps (periodo %.3fms) | acumulado desde frame %llu: %.3f fps en %.1fs\n",
+               (unsigned long long)frame, (unsigned long long)(frame - s_win_frame), wall, fps, 1000.0 / fps,
+               (unsigned long long)s_base_frame, base_fps, base_wall);
+    }
+    if (!s_win_tick || frame > s_win_frame + 30) { s_win_tick = now; s_win_frame = frame; }
+    if (!s_base_tick && frame >= 240) { s_base_tick = now; s_base_frame = frame; }
 }
 
 static void prof_report(uint64_t frame) {
@@ -1643,11 +1707,16 @@ static void switch_vblank_callback(void) {
         s_win_guest_ns = 0;
         s_win_samples = 0;
     }
-    // Volcado de perfiles periódico desactivado durante combate para evitar micro-tirones
-    // if ((s_frame_count % report_interval) == 0) {
-    //     prof_report(s_frame_count);
-    //     tek_block_prof_report_and_reset(s_frame_count);
-    // }
+    // Telemetria Fase 0: volcado acumulado SOLO al cerrar la ventana (cada 120 frames), nunca por frame.
+    if ((s_frame_count % report_interval) == 0) {
+        fps_wall_report(s_frame_count);
+        clock_telem_report();
+        switch_audio_telemetry_report();
+        prof_report(s_frame_count);
+        // tek_block_prof_report_and_reset(s_frame_count);   // sigue desactivado (muy verboso)
+    } else if (s_frame_count == 5) {
+        switch_audio_telemetry_report();   // fija la linea base de la telemetria de audio
+    }
 }
 
 // ============================================================================
@@ -2172,8 +2241,11 @@ int main(int argc, char* argv[]) {
     mod_runtime_activate_plugins();
     ensure_outfit_catalog_loaded();
     host_osd_outfit_preload();
+    tekken3_ttt1_precach_kazuya();
 
     // 9. Arrancar el planificador y la recompilación
+    clock_telem_init();
+    clock_telem_report();
     prof_start();
     u64 sched_start = armGetSystemTick();
     psx_scheduler_run(&cpu);

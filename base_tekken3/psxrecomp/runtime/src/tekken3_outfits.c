@@ -309,6 +309,10 @@ uint16_t tekken3_outfits_input(int pad,uint16_t buttons) {
      confirmation[p]=team_select && e->confirm==8?0x1000:e->confirm;
      printf("[OutfitConfirm] P%d selecciono traje: cid=%d idx=%d id=%s art=%s confirm=0x%04X\n",
             p + 1, character[p], choice[p][character[p]], e->id, e->art, confirmation[p]);
+     {
+       extern void tekken3_ttt1_preload_player(unsigned player);
+       tekken3_ttt1_preload_player((unsigned)p);
+     }
      /* Unlock before returning this first injected sample. Waiting until
       * next sync lets Team Battle consume Triangle as costume zero. */
      if(e->confirm==8 && character[p]<32) {

@@ -283,6 +283,135 @@ uint64_t g_prof_audio_audren_ns = 0;
 uint64_t g_prof_audio_underruns = 0;
 }
 
+// ---------------------------------------------------------------------------
+// TELEMETRIA DE AUDIO (Fase 0). El hilo de audio NO imprime nada: solo actualiza
+// estos contadores atomicos/planos; el hilo principal los vuelca una vez por
+// ventana en switch_audio_telemetry_report().
+// ---------------------------------------------------------------------------
+extern "C" {
+uint64_t g_audio_limiter_calls = 0;
+uint64_t g_audio_limiter_active = 0;
+}
+
+namespace {
+struct AudioTelem {
+    // --- Escritos por el hilo principal (Update / spu_render) ---
+    uint64_t produced_frames = 0;   // frames de audio (por canal) generados, acumulado
+    uint64_t produced_blocks = 0;
+    uint64_t ring_overflow = 0;     // bloques descartados por anillo lleno (productor)
+    int32_t  raw_peak = 0;          // salida cruda de __real_spu_render (ya con clamp16 del SPU)
+    uint64_t raw_clip = 0;          // muestras |x| >= 32700 en la salida cruda
+    uint64_t raw_samples = 0;
+    int32_t  pre_peak = 0;          // mezcla final antes del limitador de Update()
+    uint64_t pre_clip = 0;
+    uint64_t pre_over24576 = 0;
+    int32_t  post_peak = 0;         // despues del limitador de Update()
+    uint64_t post_clip = 0;
+    // --- Escritos por el hilo de audio ---
+    std::atomic<uint64_t> consumed_blocks{0};
+    std::atomic<uint64_t> trim_drops{0};      // bloques descartados por exceso de ocupacion (consumidor)
+    std::atomic<uint64_t> ticks{0};
+    std::atomic<uint64_t> dt_sum_us{0};
+    std::atomic<uint64_t> dt_over8{0};
+    std::atomic<uint32_t> dt_max_us{0};
+    std::atomic<uint32_t> occ_min{0xFFFFFFFFu};
+    std::atomic<uint32_t> occ_max{0};
+    std::atomic<uint32_t> occ_cur{0};
+    std::atomic<uint32_t> played_samples{0};  // audrvVoiceGetPlayedSampleCount (u32, con wrap)
+    std::atomic<uint32_t> voice_drops{0};
+};
+AudioTelem g_at;
+
+inline void telem_scan(const int16_t* pcm, size_t n, int32_t& peak, uint64_t& clip, uint64_t* over = nullptr) {
+    int32_t pk = peak;
+    uint64_t cl = clip, ov = 0;
+    for (size_t i = 0; i < n; i++) {
+        int32_t a = pcm[i];
+        if (a < 0) a = -a;
+        if (a > pk) pk = a;
+        if (a >= 32700) cl++;
+        if (a > 24576) ov++;
+    }
+    peak = pk;
+    clip = cl;
+    if (over) *over += ov;
+}
+} // namespace
+
+extern "C" void switch_audio_telem_raw(const int16_t* out, int frames) {
+    if (!out || frames <= 0) return;
+    telem_scan(out, (size_t)frames * 2, g_at.raw_peak, g_at.raw_clip);
+    g_at.raw_samples += (uint64_t)frames * 2;
+}
+
+extern "C" void switch_audio_telemetry_report(void) {
+    static u64 s_last_tick = 0;
+    static uint64_t l_prod = 0, l_cons = 0, l_prodb = 0, l_ticks = 0, l_dtsum = 0, l_over8 = 0;
+    static uint64_t l_underrun = 0, l_lim_calls = 0, l_lim_active = 0, l_ovf = 0, l_trim = 0;
+    static uint32_t l_played = 0;
+    u64 now = armGetSystemTick();
+    if (!s_last_tick) {
+        // Primera llamada: solo fija la linea base.
+        s_last_tick = now;
+        l_played = g_at.played_samples.load(std::memory_order_relaxed);
+        l_underrun = g_prof_audio_underruns;
+        l_lim_calls = g_audio_limiter_calls; l_lim_active = g_audio_limiter_active;
+        g_at.occ_min.store(0xFFFFFFFFu); g_at.occ_max.store(0); g_at.dt_max_us.store(0);
+        g_at.raw_peak = g_at.pre_peak = g_at.post_peak = 0;
+        g_at.raw_clip = g_at.raw_samples = g_at.pre_clip = g_at.pre_over24576 = g_at.post_clip = 0;
+        return;
+    }
+    double wall = (double)armTicksToNs(now - s_last_tick) / 1e9;
+    if (wall < 0.25) return;   // ventana demasiado corta (frames 1..5 del arranque)
+    s_last_tick = now;
+
+    uint64_t prod = g_at.produced_frames, prodb = g_at.produced_blocks;
+    uint64_t cons = g_at.consumed_blocks.load(std::memory_order_relaxed);
+    uint64_t ticks = g_at.ticks.load(std::memory_order_relaxed);
+    uint64_t dtsum = g_at.dt_sum_us.load(std::memory_order_relaxed);
+    uint64_t over8 = g_at.dt_over8.load(std::memory_order_relaxed);
+    uint32_t played = g_at.played_samples.load(std::memory_order_relaxed);
+    uint32_t dtmax = g_at.dt_max_us.exchange(0);
+    uint32_t omin = g_at.occ_min.exchange(0xFFFFFFFFu);
+    uint32_t omax = g_at.occ_max.exchange(0);
+    uint32_t ocur = g_at.occ_cur.load(std::memory_order_relaxed);
+    uint64_t trim = g_at.trim_drops.load(std::memory_order_relaxed);
+    uint64_t underrun = g_prof_audio_underruns;
+    uint64_t lcalls = g_audio_limiter_calls, lact = g_audio_limiter_active;
+
+    uint64_t d_ticks = ticks - l_ticks;
+    AppletOperationMode opm = appletGetOperationMode();
+    ApmPerformanceMode perf = appletGetPerformanceMode();
+    printf("[AudioTelem] wall=%.3fs produced=%.0f/s played=%.0f/s (diff=%+.0f/s, esperado 44100) blocks(prod=%llu cons=%llu) "
+           "underruns=%llu ring[min=%u max=%u cur=%u/48] overflow(prod=%llu trim=%llu) voice_drops=%u | "
+           "audren_ticks=%llu dt[avg=%.2fms max=%.2fms >8ms=%llu] | modo=%s perf=%s\n",
+           wall, (double)(prod - l_prod) / wall, (double)(uint32_t)(played - l_played) / wall,
+           ((double)(uint32_t)(played - l_played) - (double)(prod - l_prod)) / wall,
+           (unsigned long long)(prodb - l_prodb), (unsigned long long)(cons - l_cons),
+           (unsigned long long)(underrun - l_underrun),
+           omin == 0xFFFFFFFFu ? 0u : omin, omax, ocur,
+           (unsigned long long)g_at.ring_overflow, (unsigned long long)(trim - l_trim),
+           g_at.voice_drops.load(std::memory_order_relaxed),
+           (unsigned long long)d_ticks,
+           d_ticks ? (double)(dtsum - l_dtsum) / (double)d_ticks / 1000.0 : 0.0,
+           (double)dtmax / 1000.0, (unsigned long long)(over8 - l_over8),
+           opm == AppletOperationMode_Console ? "DOCK" : "HANDHELD",
+           perf == ApmPerformanceMode_Boost ? "Boost" : "Normal");
+    printf("[AudioLevels] raw_spu(post-clamp16): peak=%d clip>=32700=%llu/%llu | pre_limiter(mezcla final): peak=%d clip>=32700=%llu >24576=%llu | "
+           "post_limiter: peak=%d clip>=32700=%llu | soft_limit calls=%llu activas(>=24576)=%llu (%.2f%%)\n",
+           g_at.raw_peak, (unsigned long long)g_at.raw_clip, (unsigned long long)g_at.raw_samples,
+           g_at.pre_peak, (unsigned long long)g_at.pre_clip, (unsigned long long)g_at.pre_over24576,
+           g_at.post_peak, (unsigned long long)g_at.post_clip,
+           (unsigned long long)(lcalls - l_lim_calls), (unsigned long long)(lact - l_lim_active),
+           (lcalls - l_lim_calls) ? 100.0 * (double)(lact - l_lim_active) / (double)(lcalls - l_lim_calls) : 0.0);
+
+    l_prod = prod; l_prodb = prodb; l_cons = cons; l_ticks = ticks; l_dtsum = dtsum; l_over8 = over8;
+    l_played = played; l_underrun = underrun; l_lim_calls = lcalls; l_lim_active = lact; l_trim = trim;
+    (void)l_ovf;
+    g_at.raw_peak = g_at.pre_peak = g_at.post_peak = 0;
+    g_at.raw_clip = g_at.raw_samples = g_at.pre_clip = g_at.pre_over24576 = g_at.post_clip = 0;
+}
+
 void SwitchAudio::AudioThreadEntry(void* arg) {
     SwitchAudio* self = static_cast<SwitchAudio*>(arg);
     alignas(64) int16_t last_block[BufferSamples] = {0};
@@ -330,9 +459,19 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             dt_sum_ms += dt;
             if (dt > 8.0) dt_over8++;
         }
+        if (prev_tick) {
+            uint32_t dt_us = (uint32_t)(armTicksToNs(t0 - prev_tick) / 1000ULL);
+            g_at.dt_sum_us.fetch_add(dt_us, std::memory_order_relaxed);
+            g_at.ticks.fetch_add(1, std::memory_order_relaxed);
+            if (dt_us > 8000) g_at.dt_over8.fetch_add(1, std::memory_order_relaxed);
+            if (dt_us > g_at.dt_max_us.load(std::memory_order_relaxed))
+                g_at.dt_max_us.store(dt_us, std::memory_order_relaxed);
+        }
         prev_tick = t0;
 
         audrvUpdate(&self->m_drv);
+        g_at.played_samples.store(audrvVoiceGetPlayedSampleCount(&self->m_drv, 0), std::memory_order_relaxed);
+        g_at.voice_drops.store(audrvVoiceGetVoiceDropsCount(&self->m_drv, 0), std::memory_order_relaxed);
 
         int activeBuffers = 0;
         for (int i = 0; i < NumBuffers; i++) {
@@ -349,6 +488,11 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
 
         if (occupancy < min_occ_win) min_occ_win = occupancy;
         if (occupancy > max_occ_win) max_occ_win = occupancy;
+        if (primed && occupancy < g_at.occ_min.load(std::memory_order_relaxed))
+            g_at.occ_min.store(occupancy, std::memory_order_relaxed);
+        if (occupancy > g_at.occ_max.load(std::memory_order_relaxed))
+            g_at.occ_max.store(occupancy, std::memory_order_relaxed);
+        g_at.occ_cur.store(occupancy, std::memory_order_relaxed);
 
 #if 0
         if (++health_tick_cnt >= 200) {
@@ -376,10 +520,10 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         }
 #endif
 
-        // 1. Priming inicial: acumular al menos 16 bloques (~266 ms) antes de comenzar a alimentar audren.
-        // Al entregar 3 a audren, quedan 13 buffers completos de colchón elástico (~216 ms).
+        // 1. Priming: acumular al menos 16 bloques (~266 ms) al inicio, o 8 bloques (~133 ms) tras un underrun
         if (!primed) {
-            if (occupancy >= 16) {
+            uint32_t target_prime = has_last_block ? 8 : 16;
+            if (occupancy >= target_prime) {
                 primed = true;
             } else {
                 continue;
@@ -396,6 +540,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         // cortar el audio ni producir chasquidos o saltos perceptibles.
         if (occupancy >= 44) {
             uint32_t drop_count = occupancy - 36;
+            g_at.trim_drops.fetch_add(drop_count, std::memory_order_relaxed);
             r += drop_count;
             self->m_ringReadIdx.store(r, std::memory_order_release);
         }
@@ -457,9 +602,13 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
                 memcpy(last_block, s_ptr, BufferSizeBytes);
                 has_last_block = true;
                 self->m_ringReadIdx.store(r + 1, std::memory_order_release);
+                g_at.consumed_blocks.fetch_add(1, std::memory_order_relaxed);
             } else {
                 g_prof_audio_underruns++;
                 had_underrun = true;
+                if (occupancy == 0) {
+                    primed = false;
+                }
 
                 // Independent ambient continuity synthesis on Core 2:
                 // Instead of abruptly decaying into dead silence during synchronous file loads,
@@ -549,9 +698,10 @@ void SwitchAudio::Update() {
     s_last_audio_update_tick = t_spu0;
     alignas(64) int16_t tempPcm[BufferSamples];
     spu_render(tempPcm, FramesPerStep);
-    for (size_t s = 0; s < BufferSamples; s++) {
-        tempPcm[s] = audio_soft_limit(tempPcm[s]);
-    }
+    telem_scan(tempPcm, BufferSamples, g_at.pre_peak, g_at.pre_clip, &g_at.pre_over24576);
+    telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip);
+    g_at.produced_frames += FramesPerStep;
+    g_at.produced_blocks++;
     u64 t_spu1 = armGetSystemTick();
     uint64_t spu_ns = armTicksToNs(t_spu1 - t_spu0);
     g_prof_audio_spu_ns += spu_ns;
@@ -563,6 +713,7 @@ void SwitchAudio::Update() {
 
         if (w - r >= (uint32_t)RingSlots) {
             m_ringReadIdx.store(r + 1, std::memory_order_release);
+            g_at.ring_overflow++;
         }
 
         uint32_t slot = w % RingSlots;
@@ -659,8 +810,11 @@ void switch_audio_pump_if_needed(void) {
     }
     // 320.000 ticks = 1 frame a 60 Hz (19.2 MHz / 60)
     constexpr u64 TICKS_PER_AUDIO_FRAME = 320000;
-    if (now - s_last_audio_update_tick >= TICKS_PER_AUDIO_FRAME) {
+    int pumped = 0;
+    while (now - s_last_audio_update_tick >= TICKS_PER_AUDIO_FRAME && pumped < 4) {
         SwitchAudio::Instance().Update();
+        pumped++;
+        now = armGetSystemTick();
     }
 }
 

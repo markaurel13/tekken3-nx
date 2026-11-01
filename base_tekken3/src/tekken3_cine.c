@@ -337,7 +337,7 @@ static int fade_level(int *on) {
  * own muted for the whole cinematic, dimmed by fades to black. Returns
  * whether the engine answers (then *mute: mute the game's music). */
 static int16_t *music; static uint32_t music_frames,music_pos; static int music_from=-2;
-int tekken3_cine_music_mix(int16_t *out,int frames,int audible,int gain,int *mute) {
+int tekken3_cine_music_mix(int32_t *out32,int frames,int audible,int gain,int *mute) {
     if(!playing) { music_pos=0; return 0; }
     if(music_from==-2) {
         music_from=-1;
@@ -359,8 +359,8 @@ int tekken3_cine_music_mix(int16_t *out,int frames,int audible,int gain,int *mut
     int scale=gain*(level<0?level+256:256)/256;
     for(int i=0;i<frames && music_pos<music_frames;i++,music_pos++)
         for(int ch=0;ch<2;ch++) {
-            int32_t v=audible?music[music_pos*2+ch]*scale/200:0, mixed=out[i*2+ch]+v;
-            out[i*2+ch]=(int16_t)(mixed>32767?32767:mixed<-32768?-32768:mixed);
+            int32_t v=audible?music[music_pos*2+ch]*scale/200:0;
+            out32[i*2+ch] += v;
         }
     return 1;
 }

@@ -102,6 +102,10 @@ static inline double tek_ticks_to_ms(uint64_t ticks) {
 #define DARK_ARENA   0x800AFAA0u
 #define FIXED_STAGE  0x800AFAA1u
 #define NO_STAGE     0x800ADCA4u
+#define PHASE        0x800AE224u
+#define LIFE_P1      0x800A961Eu
+#define LIFE_P2      0x800AAEAAu
+#define TIMER        0x800ADBCCu
 #define P1_X 0x800AA190u
 #define P1_Z 0x800AA198u
 #define P2_X 0x800ABA1Cu
@@ -225,6 +229,8 @@ static inline uint32_t fast_mod_read_word(uint32_t a) {
 #undef psx_mod_read_word
 #define psx_mod_read_word(a)     fast_mod_read_word(a)
 static Pack s_pack;
+static int s_combat_active_stage = -1;  /* escenario fijado durante el combate en curso */
+static int s_combat_active_source = -1; /* source (T3 / TTT) fijado */
 static int s_tried = -1;                /* arena whose pack was last looked for (T3) */
 static int s_tried_ttt = -1;            /* TTT stage whose pack was last looked for */
 static int s_force = -1;                /* TTT stage forced by a cinematic (tekken3_ttt_stage_force) */
@@ -731,6 +737,8 @@ static void pack_free(void) {
     free(s_pack.hivram);
     memset(&s_pack, 0, sizeof s_pack);
     s_pack.stage = -1;
+    s_combat_active_stage = -1;
+    s_combat_active_source = -1;
     s_pack_generation++;
 }
 
@@ -1133,8 +1141,40 @@ static int pack_load_from(int source, int stage) {
 
 static int pack_load(int arena) { return pack_load_from(TEKKEN3_STAGE_T3, arena); }
 
+static int round_over(void) {
+    if ((int16_t)psx_mod_read_half(LIFE_P1) <= 0 || (int16_t)psx_mod_read_half(LIFE_P2) <= 0
+        || psx_mod_read_half(TIMER) == 0) return 1;
+    int phase = (uint16_t)psx_mod_read_half(PHASE);
+    return phase > 8 || phase == 2;
+}
+
+extern uint32_t deko3d_get_last_frame_vtx(void);
+static int s_vtx_zero_counter = 0;
+static int s_pending_preload_source = -1;
+static int s_pending_preload_stage = -1;
+
+static int stage_is_active(void) {
+    int screen = (int16_t)psx_mod_read_half(0x800AE204u);
+    int phase = (uint16_t)psx_mod_read_half(PHASE);
+    return (s_pack.file != NULL) && ((screen == 8 || screen == 6) || (screen == 11 && phase == 0 && s_combat_active_stage >= 0));
+}
+
 void tekken3_arcade_stages_preload(int source, int stage) {
     if (!s_on || !psx_mod_gpu_high_vram_ready()) return;
+    int screen = (int16_t)psx_mod_read_half(0x800AE204u);
+    int phase = (uint16_t)psx_mod_read_half(PHASE);
+    /* En combate, demo o transición inicial a carga (screen 11, phase 0) con escenario anclado:
+     * APLAZAR la precarga para no destruir ni sobreescribir el escenario aún visible en pantalla. */
+    if (screen == 8 || screen == 6 || (screen == 11 && phase == 0 && s_combat_active_stage >= 0)) {
+        s_pending_preload_source = source;
+        s_pending_preload_stage = stage;
+        fprintf(stdout, "[ArcadePreloadDiag] f=%u DEFERRED stg=%d src=%d (screen=%d phase=%d act=%d active_stage=%d)\n",
+                s_frames, stage, source, screen, phase, stage_is_active(), s_combat_active_stage);
+        fflush(stdout);
+        return;
+    }
+    s_pending_preload_source = -1;
+    s_pending_preload_stage = -1;
     if (source == TEKKEN3_STAGE_TTT && stage >= 0) {
         if (s_pack.source != TEKKEN3_STAGE_TTT || s_pack.stage != stage) {
             pack_load_from(TEKKEN3_STAGE_TTT, stage);
@@ -1147,6 +1187,47 @@ void tekken3_arcade_stages_preload(int source, int stage) {
             s_tried = stage;
             s_tried_ttt = -1;
         }
+    }
+}
+
+static void check_apply_pending_preload(void) {
+    if (s_pending_preload_stage < 0) return;
+    int screen = (int16_t)psx_mod_read_half(0x800AE204u);
+    int phase = (uint16_t)psx_mod_read_half(PHASE);
+    uint32_t vtx = deko3d_get_last_frame_vtx();
+    int act = stage_is_active();
+
+    if (vtx == 0 && !act) {
+        s_vtx_zero_counter++;
+    } else {
+        s_vtx_zero_counter = 0;
+    }
+
+    /* Durante combate o demo activa (screen 8 o 6), o en screen 11 con phase == 0
+     * mientras el escenario sigue anclado en pantalla: NO aplicar todavía. */
+    if (screen == 8 || screen == 6 || (screen == 11 && phase == 0 && s_combat_active_stage >= 0)) {
+        return;
+    }
+
+    /* Condición de carga segura (Pasos 2 y 4):
+     * 1. La pantalla de carga o VS ya está activa y en fade negro (screen 10 o screen 11 con phase >= 1)
+     *    y no hay vértices de la pelea en vuelo (s_vtx_zero_counter >= 1).
+     * 2. O el GPU ha emitido 0 vértices durante al menos 2 frames seguidos fuera de combate (s_vtx_zero_counter >= 2). */
+    if (((screen == 10 || screen == 11) && phase >= 1 && s_vtx_zero_counter >= 1) || s_vtx_zero_counter >= 2) {
+        int source = s_pending_preload_source;
+        int stage = s_pending_preload_stage;
+        int zeros = s_vtx_zero_counter;
+        s_pending_preload_source = -1;
+        s_pending_preload_stage = -1;
+        s_combat_active_stage = -1;
+        s_combat_active_source = -1;
+        s_vtx_zero_counter = 0;
+
+        fprintf(stdout, "[ArcadePreloadDiag] f=%u APPLIED stg=%d src=%d (screen=%d phase=%d act=%d vtx_zeros=%d)\n",
+                s_frames, stage, source, screen, phase, act, zeros);
+        fflush(stdout);
+
+        tekken3_arcade_stages_preload(source, stage);
     }
 }
 
@@ -1179,13 +1260,46 @@ static int active(void) {
     if (psx_mod_read_byte(NO_STAGE)) return 0;
     uint32_t mode = psx_mod_read_word(MODE);
     if (mode == 7 || mode == 8) return 0;
-    /* 3D stages only exist during a fight (screen 8) or the Embu attract demo (screen 6).
-     * Guard transitions to menus (screen 4), loading (screen 11), select (screen 9),
-     * transition state (screen 2), results/records (screen 14/16/17), etc. */
+
     int screen = (int16_t)psx_mod_read_half(0x800AE204u);
-    if (screen != 8 && screen != 6) return 0;
-    /* Guard uninitialized camera on frame 0 to avoid 1-frame stage glitch before zoom starts */
-    if (psx_mod_read_word(CAMERA + 0x14) == 0 && psx_mod_read_word(CAMERA + 0x1C) == 0) return 0;
+    int phase = (uint16_t)psx_mod_read_half(PHASE);
+
+    /* 3D stages exist during a fight (screen 8), Embu attract demo (screen 6),
+     * and during the win fade-out exit transition (screen 11, phase == 0) while combat stage is anchored. */
+    int in_combat_scene = (screen == 8 || screen == 6) || (screen == 11 && phase == 0 && s_combat_active_stage >= 0);
+    if (!in_combat_scene) {
+        s_combat_active_stage = -1;
+        s_combat_active_source = -1;
+        s_tried = -1;
+        s_tried_ttt = -1;
+        return 0;
+    }
+    /* Guard uninitialized camera on frame 0 of a new stage to avoid 1-frame stage glitch before zoom starts */
+    if (!round_over() && psx_mod_read_word(CAMERA + 0x14) == 0 && psx_mod_read_word(CAMERA + 0x1C) == 0) return 0;
+
+    /* Si ya tenemos un escenario cargado y anclado en este combate: */
+    if (s_pack.file) {
+        if (s_combat_active_stage >= 0) {
+            /* Durante TODO el combate o demo en curso y su fade-out (screen 11, phase 0),
+             * el escenario está fijado: renderizar siempre el pack activo y no permitir
+             * ninguna recarga aunque 0x8004F3B0 cambie ARENA en RAM para el siguiente combate. */
+            trig_ps1();
+            return 1;
+        }
+
+        int ttt = ttt_wanted();
+        int arena = psx_mod_read_half(ARENA);
+        int matches = (ttt >= 0) ? (s_pack.source == TEKKEN3_STAGE_TTT && s_pack.stage == ttt)
+                                 : (s_pack.source == TEKKEN3_STAGE_T3 && s_pack.stage == arena);
+
+        if (matches) {
+            s_combat_active_stage = s_pack.stage;
+            s_combat_active_source = s_pack.source;
+            trig_ps1();
+            return 1;
+        }
+    }
+
     /* The dark arena (True Ogre's fight) keeps the PS1's flat stage, unless
      * a TTT stage is wanted there: drawn at night (ttt_night). */
     int ttt = ttt_wanted();
@@ -1197,6 +1311,8 @@ static int active(void) {
             if (!pack_load_from(TEKKEN3_STAGE_TTT, ttt)) return 0;
             s_tried = -1;
         }
+        s_combat_active_stage = s_pack.stage;
+        s_combat_active_source = s_pack.source;
         trig_ps1();
         return 1;
     }
@@ -1208,6 +1324,8 @@ static int active(void) {
         s_tried = arena;
         if (!stage_supported(arena) || !pack_load(arena)) return 0;
     }
+    s_combat_active_stage = s_pack.stage;
+    s_combat_active_source = s_pack.source;
     trig_ps1();
     return 1;
 }
@@ -2336,21 +2454,10 @@ static void anim_reset(void) {
  * through the KO and the round winner's pose). The stage 11 objects show
  * as in the arcade (0x801E2A2C: 0x8021F0C0 >= 6, round decided, or a
  * replay): only after the fight, the user's choice (2026-10-13). */
-#define PHASE   0x800AE224u
 #define PAUSED  0x80095494u     /* 1 while the pause menu is open (measured; the TTT1 mod's wings read it) */
-#define LIFE_P1 0x800A961Eu
-#define LIFE_P2 0x800AAEAAu
-#define TIMER   0x800ADBCCu
 
 int tekken3_arcade_stages_t3_stage(void) {
     return !s_shadow && active() && s_pack.source == TEKKEN3_STAGE_T3 ? s_pack.stage : -1;
-}
-
-static int round_over(void) {
-    int phase = psx_mod_read_half(PHASE);
-    if (phase != 8) return phase > 8;           /* before 8: the round is set up, lives not given yet */
-    return (int16_t)psx_mod_read_half(LIFE_P1) <= 0 || (int16_t)psx_mod_read_half(LIFE_P2) <= 0
-        || psx_mod_read_half(TIMER) == 0;
 }
 
 /* Once per frame of the stage (0x801E2114 every 4th call; 0x801E3D0C),
@@ -3479,11 +3586,11 @@ static void storm_step(CPUState *cpu) {
  * (percent, default 200), the SPU's main volume. MAME's front output of
  * these sounds is L = -R; the pack keeps L, played on both sides
  * (TEKKEN3_TTT_THUNDER_PHASE=1: the right side inverted, as MAME). */
-void tekken3_arcade_stages_thunder_mix(int16_t *out, int frames, int audible, const int16_t main_volume[2], int gain) {
+void tekken3_arcade_stages_thunder_mix(int32_t *out32, int frames, int audible, const int16_t main_volume[2], int gain) {
     static int boost = -1, phase = -1;
     if (boost < 0) {
         const char *v = getenv("TEKKEN3_TTT1_SFX_VOLUME");
-        boost = v ? atoi(v) : 140;
+        boost = v ? atoi(v) : 115;
         if (boost < 0) boost = 0;
         if (boost > 800) boost = 800;
         const char *ph = getenv("TEKKEN3_TTT_THUNDER_PHASE");
@@ -3499,8 +3606,7 @@ void tekken3_arcade_stages_thunder_mix(int16_t *out, int frames, int audible, co
             if (!audible) value = 0;
             for (unsigned k = 0; k < 2; k++) {
                 int32_t side = k && phase ? -value : value;
-                int32_t mixed = (int32_t)out[f * 2 + k] + side * main_volume[k] / 32768;
-                out[f * 2 + k] = audio_soft_limit(mixed);
+                out32[f * 2 + k] += side * main_volume[k] / 32768;
             }
         }
         if (t->pos >= t->frames) memset(t, 0, sizeof *t);
@@ -4839,13 +4945,20 @@ static void tekken3_ttt_stages_activate(void) {
  * TTT1 Characters' tick (the CPU MOVESET row) before this one, so STAGES
  * comes after CPU MOVESET. */
 static void tekken3_ttt_stages_tick(void) {
+    check_apply_pending_preload();
     tekken3_stage_source_tick();
     light_tick();
+}
+
+static void tekken3_arcade_stages_tick(void) {
+    check_apply_pending_preload();
 }
 
 PSX_MOD_CONSTRUCTOR(tekken3_register_arcade_stages) {
     (void)psx_mod_register_activation_plugin("tekken3.arcade-stages",
                                              tekken3_arcade_stages_activate);
+    (void)psx_mod_register_vblank_plugin("tekken3.arcade-stages",
+                                         tekken3_arcade_stages_tick);
     (void)psx_mod_register_activation_plugin("tekken3.ttt-stages",
                                              tekken3_ttt_stages_activate);
     (void)psx_mod_register_vblank_plugin("tekken3.ttt-stages",

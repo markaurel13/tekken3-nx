@@ -867,9 +867,13 @@ static uint32_t execute_ch2_gpu(void) {
                     slow_hdr = psx_read_word(slow_addr);
                 }
                 uint32_t s_next = slow_hdr & 0xFFFFFFu;
-                slow_addr = (s_next >= PSX_MOD_GPU_DMA_APERTURE_BASE && s_next - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)
-                    ? (s_next & 0x00FFFFFCu)
-                    : (s_next & 0x001FFFFCu);
+                if (s_next == 0xFFFFFFu) {
+                    slow_addr = 0xFFFFFFu;
+                } else {
+                    slow_addr = (s_next >= PSX_MOD_GPU_DMA_APERTURE_BASE && s_next - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)
+                        ? (s_next & 0x00FFFFFCu)
+                        : (s_next & 0x001FFFFCu);
+                }
             }
             if (addr == slow_addr) {
                 hit_limit = 1;

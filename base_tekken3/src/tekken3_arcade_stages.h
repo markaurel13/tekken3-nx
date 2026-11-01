@@ -61,7 +61,7 @@ int tekken3_arcade_stages_t3_stage(void);
 /* The thunder's mixer, called by the spu_render wrapper
  * (src/tekken3_ttt1_voices.c) with the TTT1 sounds; stop: a reset of the
  * SPU or a save state loaded. */
-void tekken3_arcade_stages_thunder_mix(int16_t *out, int frames, int audible, const int16_t main_volume[2], int gain);
+void tekken3_arcade_stages_thunder_mix(int32_t *out32, int frames, int audible, const int16_t main_volume[2], int gain);
 void tekken3_arcade_stages_thunder_stop(void);
 
 #ifdef __cplusplus

@@ -228,4 +228,12 @@ private:
     uint64_t m_curFrameAcqWaitNs = 0;
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t deko3d_get_last_frame_vtx(void);
+#ifdef __cplusplus
+}
+#endif
+
 #endif

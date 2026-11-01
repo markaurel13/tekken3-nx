@@ -132,6 +132,26 @@ void memory_clear_low_boot_scratch(void) {
     memset(ram, 0, 0x10u);
 }
 
+void psx_write_byte(uint32_t addr, uint8_t val);
+
+void psx_mod_write_bytes(uint32_t addr, const void* src, size_t len) {
+    if (!src || len == 0) return;
+    uint32_t phys = psx_phys_addr(addr);
+    uint32_t off = 0;
+    if (mod_memory_offset(phys, (uint32_t)len, &off)) {
+        memcpy(mod_memory + off, src, len);
+        return;
+    }
+    if (mod_gpu_dma_memory_offset(phys, (uint32_t)len, &off)) {
+        memcpy(mod_gpu_dma_memory + off, src, len);
+        return;
+    }
+    const uint8_t* b = (const uint8_t*)src;
+    for (size_t i = 0; i < len; ++i) {
+        psx_write_byte(addr + (uint32_t)i, b[i]);
+    }
+}
+
 /* ---- Dirty-page tracking for install-at-runtime code (CLAUDE.md Rule 18) ----
  *
  * The PS1 BIOS writes 4-instruction dispatch stubs into kernel RAM at runtime

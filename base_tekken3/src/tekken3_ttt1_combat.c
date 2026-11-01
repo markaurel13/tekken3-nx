@@ -552,24 +552,27 @@ static int load_combat(unsigned s) {
         unsigned props=word(c->data+rp+32),j=0;
         do {compact+=4;} while(ttt1_pack_half(c->data+props+j++*4));
     }
+    switch_audio_pump_if_needed();
     c->guest=tekken3_guest_pool_alloc(s,compact,16);
     if(!c->guest){fprintf(stderr,"%s combat: cannot allocate %u guest bytes\n",tekken3_guest_name_for(s),compact);return 0;}
     c->guest_size=compact;
     uint32_t cursor=c->records+c->count*56;
-    for(unsigned i=0;i<cursor;i++)psx_mod_write_byte(c->guest+i,c->data[i]);
+    psx_mod_write_bytes(c->guest, c->data, cursor);
     for(unsigned i=0;i<c->count;i++) {
         uint32_t rp=c->records+i*56,cp=word(c->data+rp+12),n=word(c->data+32+i*16+12)*12;
         uint32_t clip=word(c->data+rp);
         if(cp>c->size || n>c->size-cp || clip>c->size-8)return 0;
         c->clip_addresses[i]=c->guest+cursor;c->clip_offsets[i]=clip;
-        for(unsigned j=0;j<8;j++)psx_mod_write_byte(c->guest+cursor+j,c->data[clip+j]);
+        psx_mod_write_bytes(c->guest+cursor, c->data+clip, 8);
         psx_mod_write_word(c->guest+rp,c->guest+cursor);cursor+=8;
         psx_mod_write_word(c->guest+rp+12,c->guest+cursor);
-        for(unsigned j=0;j<n;j++)psx_mod_write_byte(c->guest+cursor+j,c->data[cp+j]);
+        psx_mod_write_bytes(c->guest+cursor, c->data+cp, n);
         cursor+=n;
         uint32_t sounds=word(c->data+rp+28),props=word(c->data+rp+32);
         psx_mod_write_word(c->guest+rp+28,c->guest+cursor);
-        for(unsigned j=0;j<8;j++)psx_mod_write_byte(c->guest+cursor+j,j<6?c->data[sounds+j]:255);
+        uint8_t sound_buf[8];
+        for(unsigned j=0;j<8;j++) sound_buf[j] = j<6?c->data[sounds+j]:255;
+        psx_mod_write_bytes(c->guest+cursor, sound_buf, 8);
         cursor+=8;
         psx_mod_write_word(c->guest+rp+32,c->guest+cursor);
         unsigned j=0;
@@ -577,6 +580,7 @@ static int load_combat(unsigned s) {
             for(unsigned k=0;k<4;k++)psx_mod_write_byte(c->guest+cursor+k,c->data[props+j*4+k]);cursor+=4;}
         while(ttt1_pack_half(c->data+props+j++*4));
     }
+    switch_audio_pump_if_needed();
     uint32_t po=ro+rn*4;
     if(po>c->size-4)return 0;
     c->pattern_count=word(c->data+po);po+=4;if(c->pattern_count>1024)return 0;
@@ -585,7 +589,7 @@ static int load_combat(unsigned s) {
         unsigned command=c->data[po]|(unsigned)c->data[po+1]<<8,n=c->data[po+2]|(unsigned)c->data[po+3]<<8;po+=4;
         if(command!=0xe000+i || n<3 || n>65 || n*2>c->size-po)return 0;
         c->patterns[i]=tekken3_guest_pool_alloc(s,n*2,4);if(!c->patterns[i])return 0;
-        for(unsigned j=0;j<n*2;j++)psx_mod_write_byte(c->patterns[i]+j,c->data[po+j]);po+=n*2;
+        psx_mod_write_bytes(c->patterns[i], c->data+po, n*2);po+=n*2;
     }
     if(!load_tables(s,root)) {
         /* The fighter falls back to its T3 moves. Test builds (debug server
@@ -633,46 +637,69 @@ static void install_tables(void) {
     uint32_t row_at=merged,push_base=merged+rows*42,counter_base=push_base+push;
     uint32_t push_at=push_base,counter_at=counter_base;
     const unsigned char *native=first->tables;
-    for(unsigned i=0;i<NATIVE_ROWS*42;i++)psx_mod_write_byte(row_at++,native[i]);
-    for(unsigned i=0;i<NATIVE_PUSH;i++)psx_mod_write_byte(push_at++,native[first->nr*42+i]);
-    for(unsigned i=0;i<NATIVE_COUNTERS*4;i++)psx_mod_write_byte(counter_at++,native[first->nr*42+first->np+i]);
+    psx_mod_write_bytes(row_at, native, NATIVE_ROWS*42); row_at += NATIVE_ROWS*42;
+    psx_mod_write_bytes(push_at, native+first->nr*42, NATIVE_PUSH); push_at += NATIVE_PUSH;
+    psx_mod_write_bytes(counter_at, native+first->nr*42+first->np, NATIVE_COUNTERS*4); counter_at += NATIVE_COUNTERS*4;
+    switch_audio_pump_if_needed();
+    static uint16_t s_row_batch[2048 * 21];
+    static uint16_t s_cnt_batch[2048 * 2];
     for(unsigned s=0;s<2;s++) {
         if(!key[s])continue;
         const GuestCombat *c=&slots[s];
         const unsigned char *t=c->tables;
-        for(unsigned i=NATIVE_ROWS;i<c->nr;i++)for(unsigned k=0;k<21;k++) {
-            unsigned v=ttt1_pack_half(t+i*42+k*2);
-            /* Halfwords 15, 17, 19, 20: pushback offsets, in halfwords. */
-            if((k==15 || k==17 || k==19 || k==20) && v*2>=NATIVE_PUSH)v+=push_shift[s]/2;
-            psx_mod_write_half(row_at,(uint16_t)v);row_at+=2;
+        unsigned row_cnt = 0;
+        for(unsigned i=NATIVE_ROWS;i<c->nr && row_cnt + 21 <= sizeof(s_row_batch)/2;i++) {
+            for(unsigned k=0;k<21;k++) {
+                unsigned v=ttt1_pack_half(t+i*42+k*2);
+                /* Halfwords 15, 17, 19, 20: pushback offsets, in halfwords. */
+                if((k==15 || k==17 || k==19 || k==20) && v*2>=NATIVE_PUSH)v+=push_shift[s]/2;
+                s_row_batch[row_cnt++] = (uint16_t)v;
+            }
         }
-        for(unsigned i=NATIVE_PUSH;i<c->np;i++)psx_mod_write_byte(push_at++,t[c->nr*42+i]);
-        for(unsigned i=NATIVE_COUNTERS;i<c->nc;i++) {
+        if (row_cnt > 0) {
+            psx_mod_write_bytes(row_at, s_row_batch, row_cnt * 2);
+            row_at += row_cnt * 2;
+        }
+        if(c->np > NATIVE_PUSH) {
+            psx_mod_write_bytes(push_at, t+c->nr*42+NATIVE_PUSH, c->np-NATIVE_PUSH);
+            push_at += c->np-NATIVE_PUSH;
+        }
+        unsigned cnt_num = 0;
+        for(unsigned i=NATIVE_COUNTERS;i<c->nc && cnt_num + 2 <= sizeof(s_cnt_batch)/2;i++) {
             unsigned rx=ttt1_pack_half(t+c->nr*42+c->np+i*4),threshold=ttt1_pack_half(t+c->nr*42+c->np+i*4+2);
             if(rx>=NATIVE_ROWS)rx+=rx_shift[s];
-            psx_mod_write_half(counter_at,(uint16_t)rx);psx_mod_write_half(counter_at+2,(uint16_t)threshold);counter_at+=4;
+            s_cnt_batch[cnt_num++] = (uint16_t)rx;
+            s_cnt_batch[cnt_num++] = (uint16_t)threshold;
+        }
+        if (cnt_num > 0) {
+            psx_mod_write_bytes(counter_at, s_cnt_batch, cnt_num * 2);
+            counter_at += cnt_num * 2;
         }
     }
     /* Event scripts: native IDs below 470, then each guest's by TTT1 script
      * ID (a shared ID names the same script, the first slot's is kept). */
     uint32_t cursor=merged_events+4096*4;
     psx_mod_write_word(cursor,0);
-    for(unsigned i=0;i<4096;i++)psx_mod_write_word(merged_events+i*4,i<470?psx_mod_read_word(0x800971f8+i*4):cursor);
+    static uint32_t s_evt_table[4096];
+    for(unsigned i=0;i<4096;i++) s_evt_table[i] = i<470 ? psx_mod_read_word(0x800971f8+i*4) : cursor;
+    psx_mod_write_bytes(merged_events, s_evt_table, sizeof(s_evt_table));
     cursor+=4;
     for(unsigned s=0;s<2;s++) {
         if(!key[s])continue;
         const unsigned char *e=slots[s].events;
         for(unsigned i=0;i<slots[s].event_bytes;) {
             unsigned id=word(e+i),ne=word(e+i+4);i+=8;
-            if(psx_mod_read_word(merged_events+id*4)==merged_events+4096*4 &&
+            if(s_evt_table[id]==merged_events+4096*4 &&
                cursor+ne*4<=merged_events+EVENT_BYTES) {
                 psx_mod_write_word(merged_events+id*4,cursor);
-                for(unsigned k=0;k<ne;k++)psx_mod_write_word(cursor+k*4,word(e+i+k*4));
+                s_evt_table[id] = cursor;
+                psx_mod_write_bytes(cursor, e+i, ne*4);
                 cursor+=ne*4;
             }
             i+=ne*4;
         }
     }
+    switch_audio_pump_if_needed();
     patch_base(0x80041400,0x80041404,2,merged_events);
     patch_base(0x8002d7ac,0x8002d7b4,2,merged);
     patch_base(0x80044590,0x80044598,2,merged);
@@ -1874,14 +1901,15 @@ enum { PS2_HFX_MOST=32 };
 static const char *const ps2_hfx_names[]={"Jin","Heihachi","Kazuya","Devil","Angel"};
 enum { PS2_HFX=sizeof ps2_hfx_names/sizeof *ps2_hfx_names };
 static Hfx ps2_hfx[PS2_HFX];static int ps2_hfx_tried[PS2_HFX];
+static int s_in_hfx_preload = 0;
 static const Hfx *ps2_hfx_for(unsigned p) {
-    if(!hfx.on || psx_mod_read_word(0x800ae204)!=8 || !tekken3_ps2_effects_on() || tekken3_devil_jin_player(p))return NULL;
+    if(!hfx.on || !tekken3_ps2_effects_on() || tekken3_devil_jin_player(p))return NULL;
+    if(!s_in_hfx_preload && psx_mod_read_word(0x800ae204)!=8)return NULL;
     int which=-1;
-    if(hit_effect_in_fight[p]) {
-        const char *prefix=tekken3_guest_data_prefix_for(p);
-        for(int k=2;prefix && k<PS2_HFX;k++)
-            if(!strncmp(prefix,ps2_hfx_names[k],strlen(ps2_hfx_names[k])) && !strcmp(prefix+strlen(ps2_hfx_names[k]),"-TTT1"))which=k;
-    } else {
+    const char *prefix=tekken3_guest_data_prefix_for(p);
+    for(int k=2;prefix && k<PS2_HFX;k++)
+        if(!strncmp(prefix,ps2_hfx_names[k],strlen(ps2_hfx_names[k])) && !strcmp(prefix+strlen(ps2_hfx_names[k]),"-TTT1"))which=k;
+    if(which<0) {
         unsigned id=psx_mod_read_half(FX_IDS+p*0x188c);
         which=id==9?0:id==13?1:-1;
     }
@@ -2117,14 +2145,19 @@ static void sparks_place(void) {
 }
 static void preload_player_hit_effects(void) {
     if(!hfx.on || !psx_mod_gpu_high_vram_ready())return;
+    s_in_hfx_preload = 1;
     sparks_tick();
     sparks_place();
     for(unsigned p=0;p<2;p++) {
         const Hfx *h=hit_effect_64_pack(p);
         if(h) {
             place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
+            printf("[PS2_HFX_Diag] Preloaded hit effect for P%u: images=%u palettes=%u flags=%u\n",
+                   p+1, h->images, h->palettes, h->flags);
+            fflush(stdout);
         }
     }
+    s_in_hfx_preload = 0;
 }
 /* Image k of pack h in cell c, unless it is there already. */
 static void spark_stream(const HfxCell *c,const Hfx *h,unsigned k) {
@@ -2186,12 +2219,30 @@ static void hfx_swap(const HfxSwap *s,unsigned n,unsigned buffer,int trace) {
         psx_mod_write_word(o+20,page<<16|v<<8|ur);
         psx_mod_write_half(o+28,(uint16_t)((v+63)<<8|ul));
         psx_mod_write_half(o+36,(uint16_t)((v+63)<<8|ur));
-        if(s[k].fade)psx_mod_write_word(o+4,(psx_mod_read_word(prim+4)&0xff000000u)|0x808080);
+        if(s[k].fade) {
+            uint32_t cmd = psx_mod_read_word(prim+4) & 0xff000000u;
+            /* PS2 hit effect packs have pre-faded palettes (one per frame).
+             * Set raw texture bit (opcode 0x2D / 0x2F) and zero out vertex RGB,
+             * eliminating the 50% grey quad artifact completely. */
+            psx_mod_write_word(o+4, (cmd | 0x01000000u) & 0xff000000u);
+            static int s_logged_swap = 0;
+            if(!s_logged_swap) {
+                s_logged_swap = 1;
+                printf("[PS2_HFX_Diag] First PS2 swap: slot=%u prim=%08X -> ours=%08X cmd=%08X cell=(%u,%u) pal=(%u,%u)\n",
+                       s[k].slot, prim, o, (cmd | 0x01000000u) & 0xff000000u, cell->x, cell->y, s[k].pal_x, s[k].pal_y);
+                fflush(stdout);
+            }
+        }
     }
     for(unsigned k=0;k<n;k++) {
         if(!before[k])continue;
         uint32_t link=before[k];
         for(unsigned j=0;j<n;j++)if(before[j] && s[j].prim==link)link=ours[j];
+        if(link == ours[k])continue;
+        uint32_t o_next = psx_mod_read_word(ours[k]) & 0xffffffu;
+        if(o_next == (link & 0xffffffu) || o_next == (ours[k] & 0xffffffu)) {
+            psx_mod_write_word(ours[k], (psx_mod_read_word(ours[k]) & 0xff000000u) | 0xffffffu);
+        }
         psx_mod_write_word(link,(psx_mod_read_word(link)&0xff000000u)|(ours[k]&0xffffff));
     }
 }
@@ -2983,32 +3034,157 @@ void __wrap_func_800389C0(CPUState *cpu) {
     __real_func_800389C0(cpu);
 }
 
-void tekken3_ttt1_preload_fight(void) {
+void tekken3_ttt1_preload_player(unsigned p) {
+    if (p > 1) return;
     const char *root = tekken3_ttt1_asset_root();
     if (!root) return;
-    for (unsigned p = 0; p < 2; p++) {
-        const char *m_prefix = tekken3_guest_moves_prefix_for(p);
-        const char *d_prefix = tekken3_guest_data_prefix_for(p);
-        char path[4096];
-        if (m_prefix && m_prefix[0]) {
-            snprintf(path, sizeof path, "%s/%s-combat.jmv", root, m_prefix);
+    switch_audio_pump_if_needed();
+    const char *m_prefix = tekken3_guest_moves_prefix_for(p);
+    const char *d_prefix = tekken3_guest_data_prefix_for(p);
+    char path[4096];
+    if (m_prefix && m_prefix[0]) {
+        snprintf(path, sizeof path, "%s/%s-combat.jmv", root, m_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        snprintf(path, sizeof path, "%s/%s-tables.jst", root, m_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        snprintf(path, sizeof path, "%s/%s-sfx.jus", root, m_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        snprintf(path, sizeof path, "%s/%s-movelist.bin", root, m_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        snprintf(path, sizeof path, "%s/%s-combos.bin", root, m_prefix);
+        (void)switch_cached_file_get(path, NULL);
+    }
+    if (d_prefix && d_prefix[0]) {
+        snprintf(path, sizeof path, "%s/%s-voices.juv", root, d_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        snprintf(path, sizeof path, "%s/%s-hiteffect.tim", root, d_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        snprintf(path, sizeof path, "%s/%s-hiteffect64.hfx", root, d_prefix);
+        (void)switch_cached_file_get(path, NULL);
+        for (unsigned c = 1; c <= 2; c++) {
+            snprintf(path, sizeof path, "%s/%s-arcade-P%u.3dm", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-tables.jst", root, m_prefix);
+            snprintf(path, sizeof path, "%s/%s-arcade-P%u.relocs", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-sfx.jus", root, m_prefix);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-movelist.bin", root, m_prefix);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-combos.bin", root, m_prefix);
-            (void)switch_cached_file_get(path, NULL);
-        }
-        if (d_prefix && d_prefix[0]) {
-            snprintf(path, sizeof path, "%s/%s-voices.juv", root, d_prefix);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-hiteffect.tim", root, d_prefix);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-hiteffect64.hfx", root, d_prefix);
+            snprintf(path, sizeof path, "%s/%s-arcade-P%u.tim", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
         }
     }
+    switch_audio_pump_if_needed();
+}
+
+void tekken3_ttt1_preload_fight(void) {
+    for (unsigned p = 0; p < 2; p++) {
+        tekken3_ttt1_preload_player(p);
+    }
+}
+
+void tekken3_ttt1_precach_kazuya(void) {
+    const char *root = tekken3_ttt1_asset_root();
+    if (!root) return;
+    char path[4096];
+    size_t total_bytes = 0;
+    int loaded = 0;
+
+    // 1. Kazuya archivos específicos de combate y modelos P1/P2
+    static const char *kazuya_files[] = {
+        "Kazuya-TTT1-combat.jmv",
+        "Kazuya-TTT1-tables.jst",
+        "Kazuya-TTT1-sfx.jus",
+        "Kazuya-TTT1-voices.juv",
+        "Kazuya-TTT1-movelist.bin",
+        "Kazuya-TTT1-combos.bin",
+        "Kazuya-TTT1-hiteffect64.hfx",
+        "Kazuya-TTT1-hiteffect.tim",
+        "Kazuya-TTT1-arcade-P1.3dm",
+        "Kazuya-TTT1-arcade-P1.relocs",
+        "Kazuya-TTT1-arcade-P1.tim",
+        "Kazuya-TTT1-arcade-P2.3dm",
+        "Kazuya-TTT1-arcade-P2.relocs",
+        "Kazuya-TTT1-arcade-P2.tim",
+        "Kazuya-TTT1-idle.poses",
+        "Kazuya-TTT1-arcade-P1.acc",
+        "Kazuya-TTT1-arcade-P1.face",
+        "Kazuya-TTT1-arcade-P2.acc",
+        "Kazuya-TTT1-arcade-P2.face",
+        // Efectos globales TTT1
+        "Spark-TTT1-hiteffect64.hfx",
+        "Throw-TTT1-hiteffect64.hfx",
+        "Guard-TTT1-hiteffect64.hfx",
+        "Smoke-TTT1-hiteffect64.hfx",
+        "Mist-TTT1-hiteffect64.hfx",
+    };
+    for (size_t i = 0; i < sizeof(kazuya_files)/sizeof(kazuya_files[0]); i++) {
+        snprintf(path, sizeof path, "%s/%s", root, kazuya_files[i]);
+        size_t sz = 0;
+        const unsigned char *p = switch_cached_file_get(path, &sz);
+        if (p && sz > 0) {
+            total_bytes += sz;
+            loaded++;
+        }
+        switch_audio_pump_if_needed();
+    }
+
+    // 2. Todos los personajes comunes y oponentes arcade (evita congelamiento en VS/Stage 1)
+    static const char *common_fighters[] = {
+        "King", "Xiaoyu", "Paul", "Law", "Nina", "Yoshimitsu",
+        "Eddy", "Hwoarang", "Gunjack", "Bryan", "Jin", "Heihachi",
+        "Jun", "Kunimitsu", "Baek", "Bruce", "Wang", "Armorking",
+        "Ganryu", "Lee", "Roger", "Alex", "DevilJin", "Angel", "Devil",
+        "Jack2", "Pjack", "Trueogre", "Ogre", "Julia", "Kuma"
+    };
+    static const char *fighter_exts[] = {
+        "-combat.jmv", "-tables.jst", "-sfx.jus", "-voices.juv",
+        "-hiteffect64.hfx", "-hiteffect.tim", "-idle.poses"
+    };
+    for (size_t f = 0; f < sizeof(common_fighters)/sizeof(common_fighters[0]); f++) {
+        const char *name = common_fighters[f];
+        for (size_t e = 0; e < sizeof(fighter_exts)/sizeof(fighter_exts[0]); e++) {
+            snprintf(path, sizeof(path), "%s/%s-TTT1%s", root, name, fighter_exts[e]);
+            size_t sz = 0;
+            if (switch_cached_file_get(path, &sz)) {
+                total_bytes += sz;
+                loaded++;
+            }
+        }
+        switch_audio_pump_if_needed();
+    }
+
+    // 3. Todos los escenarios Arcade (stage00..stage12)
+    for (int i = 0; i <= 12; i++) {
+        char stg_path[256];
+        snprintf(stg_path, sizeof(stg_path), "sdmc:/switch/tekken3/mods/arcade-stages/stage%02d.ast", i);
+        size_t sz = 0;
+        if (switch_cached_file_get(stg_path, &sz)) {
+            total_bytes += sz;
+            loaded++;
+        }
+        switch_audio_pump_if_needed();
+    }
+
+    // 4. Efectos de impacto PS2 (precarga completa en RAM para cero latencia de lectura SD)
+    const char *ps2_dir = tekken3_ps2_effects_dir();
+    if (ps2_dir) {
+        static const char *ps2_files[] = {
+            "Kazuya-PS2-hiteffect64.hfx",
+            "Jin-PS2-hiteffect64.hfx",
+            "Heihachi-PS2-hiteffect64.hfx",
+            "Devil-PS2-hiteffect64.hfx",
+            "Angel-PS2-hiteffect64.hfx",
+            "Throw-PS2-hiteffect64.hfx",
+            "Spark-PS2-hiteffect64.hfx",
+            "Guard-PS2-hiteffect64.hfx",
+        };
+        for (size_t i = 0; i < sizeof(ps2_files)/sizeof(ps2_files[0]); i++) {
+            snprintf(path, sizeof path, "%s/%s", ps2_dir, ps2_files[i]);
+            size_t sz = 0;
+            if (switch_cached_file_get(path, &sz)) {
+                total_bytes += sz;
+                loaded++;
+            }
+            switch_audio_pump_if_needed();
+        }
+    }
+    printf("[Preload] Kazuya, oponentes, escenarios y tablas de combate precargados en RAM: %d archivos, %zu KB\n",
+           loaded, total_bytes / 1024);
 }

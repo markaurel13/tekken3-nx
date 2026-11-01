@@ -433,13 +433,13 @@ void tekken3_ttt1_sfx_tick(void) {
 
 /* Called by the voices' spu_render wrapper: out is the stereo output about
  * to be queued; gain as for the voices (host SFX volume, 0..100). */
-void tekken3_ttt1_sfx_mix(int16_t *out,int frames,int audible,const int16_t main_volume[2],int gain) {
+void tekken3_ttt1_sfx_mix(int32_t *out32,int frames,int audible,const int16_t main_volume[2],int gain) {
     /* SURVIVAL RESULTS (state 14) announces the fighter: a guest's name. */
     if(!in_fight() && psx_mod_read_half(0x800ae204)!=14){tekken3_ttt1_sfx_stop();return;}
     static int boost=-1;
     if(boost<0) {
         const char *v=getenv("TEKKEN3_TTT1_SFX_VOLUME");
-        boost=v?atoi(v):140;
+        boost=v?atoi(v):115;
         if(boost<0)boost=0;
         if(boost>800)boost=800;
     }
@@ -451,12 +451,11 @@ void tekken3_ttt1_sfx_mix(int16_t *out,int frames,int audible,const int16_t main
             int32_t value=(int16_t)(q[0]|(unsigned)q[1]<<8);
             /* The pack holds the arcade driver's level relative to the
              * voices; against T3's own sounds it plays quiet, so it gets a
-             * boost (TEKKEN3_TTT1_SFX_VOLUME, percent, default 140). */
+             * boost (TEKKEN3_TTT1_SFX_VOLUME, percent, default 115). */
             value=value*gain/100*boost/100;
             if(!audible)value=0;
             for(unsigned k=0;k<2;k++) {
-                int32_t mixed=(int32_t)out[f*2+k]+value*main_volume[k]/32768;
-                out[f*2+k]=audio_soft_limit(mixed);
+                out32[f*2+k] += value*main_volume[k]/32768;
             }
         }
         if(ch->pos>=ch->frames)memset(ch,0,sizeof *ch);

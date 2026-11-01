@@ -14,6 +14,9 @@ void switch_audio_update(void);
 void switch_audio_pump_if_needed(void);
 void switch_audio_queue(const int16_t* pcm_stereo, size_t frames);
 void switch_audio_shutdown(void);
+// Telemetria (Fase 0): el hilo principal vuelca los contadores una vez por ventana.
+void switch_audio_telemetry_report(void);
+void switch_audio_telem_raw(const int16_t* out, int frames);
 
 #ifdef __cplusplus
 }

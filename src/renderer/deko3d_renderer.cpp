@@ -1865,3 +1865,7 @@ static const GpuRenderBackend DEKO3D_BACKEND = {
 const GpuRenderBackend* deko3d_backend_get(void) {
     return &DEKO3D_BACKEND;
 }
+
+extern "C" uint32_t deko3d_get_last_frame_vtx(void) {
+    return Deko3DRenderer::Instance().GetLastFrameVtx();
+}

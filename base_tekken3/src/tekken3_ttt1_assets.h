@@ -54,4 +54,5 @@ uint32_t tekken3_guest_pool_alloc(unsigned slot, uint32_t size, uint32_t alignme
 void tekken3_guest_pool_reset(unsigned slot);
 /* The player's other area, emptied: the moves switched in the fight (Unknown). */
 void tekken3_guest_pool_flip(unsigned slot);
+void tekken3_ttt1_preload_player(unsigned player);
 void tekken3_ttt1_preload_fight(void);

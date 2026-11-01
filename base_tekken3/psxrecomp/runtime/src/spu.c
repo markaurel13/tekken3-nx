@@ -20,6 +20,7 @@
 #include "spu_gauss.h"
 #include "spu_shadow.h"
 #include "audio_trace.h"
+#include "audio_limiter.h"
 #include "crc32.h"
 #include "psx_cycles.h"
 
@@ -1249,13 +1250,13 @@ void spu_render(int16_t* out_stereo, int frames) {
                 host_mix[f * 2] = host_mix_sample(mix_l, music_l, main_l);
                 host_mix[f * 2 + 1] = host_mix_sample(mix_r, music_r, main_r);
             }
-            mix_l = clamp16(mix_l);
-            mix_r = clamp16(mix_r);
+            mix_l = audio_soft_limit(mix_l);
+            mix_r = audio_soft_limit(mix_r);
             mix_l = ((int32_t)mix_l * main_l) >> 15;
             mix_r = ((int32_t)mix_r * main_r) >> 15;
 
-            out_stereo[f * 2 + 0] = clamp16(mix_l);
-            out_stereo[f * 2 + 1] = clamp16(mix_r);
+            out_stereo[f * 2 + 0] = audio_soft_limit(mix_l);
+            out_stereo[f * 2 + 1] = audio_soft_limit(mix_r);
             int32_t frame_peak = abs32(out_stereo[f * 2 + 0]);
             int32_t right_peak = abs32(out_stereo[f * 2 + 1]);
             if (right_peak > frame_peak) frame_peak = right_peak;
@@ -1422,14 +1423,14 @@ void spu_render(int16_t* out_stereo, int frames) {
                 host_mix[f * 2] = host_mix_sample(mix_l, music_l, main_l);
                 host_mix[f * 2 + 1] = host_mix_sample(mix_r, music_r, main_r);
             }
-            mix_l = clamp16(mix_l);
-            mix_r = clamp16(mix_r);
+            mix_l = audio_soft_limit(mix_l);
+            mix_r = audio_soft_limit(mix_r);
             mix_l = ((int32_t)mix_l * main_l) >> 15;
             mix_r = ((int32_t)mix_r * main_r) >> 15;
         }
 
-        out_stereo[f * 2 + 0] = clamp16(mix_l);
-        out_stereo[f * 2 + 1] = clamp16(mix_r);
+        out_stereo[f * 2 + 0] = audio_soft_limit(mix_l);
+        out_stereo[f * 2 + 1] = audio_soft_limit(mix_r);
         int32_t frame_peak = abs32(out_stereo[f * 2 + 0]);
         int32_t right_peak = abs32(out_stereo[f * 2 + 1]);
         if (right_peak > frame_peak) frame_peak = right_peak;
