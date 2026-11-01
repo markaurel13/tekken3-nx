@@ -544,7 +544,7 @@ static unsigned s_bank_nkeys;
 static BankKey s_bank_prev[BANK_MAX_KEYS];
 static unsigned s_bank_nprev;
 
-static void bank_key_add(uint32_t tp, uint32_t cl, uint32_t fl, unsigned n) {
+[[maybe_unused]] static void bank_key_add(uint32_t tp, uint32_t cl, uint32_t fl, unsigned n) {
     for (unsigned i = 0; i < s_bank_nkeys; i++)
         if (s_bank_keys[i].tpage == tp && s_bank_keys[i].clut == cl && s_bank_keys[i].flags == fl) {
             s_bank_keys[i].n += n; return;

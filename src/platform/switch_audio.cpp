@@ -698,8 +698,9 @@ void SwitchAudio::Update() {
     s_last_audio_update_tick = t_spu0;
     alignas(64) int16_t tempPcm[BufferSamples];
     spu_render(tempPcm, FramesPerStep);
-    telem_scan(tempPcm, BufferSamples, g_at.pre_peak, g_at.pre_clip, &g_at.pre_over24576);
-    telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip);
+    telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip, &g_at.pre_over24576);
+    g_at.pre_peak = g_at.post_peak;
+    g_at.pre_clip = g_at.post_clip;
     g_at.produced_frames += FramesPerStep;
     g_at.produced_blocks++;
     u64 t_spu1 = armGetSystemTick();

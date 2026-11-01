@@ -3340,12 +3340,15 @@ static int floor_draw(CPUState *cpu) {
 }
 
 static int floor_hook(CPUState *cpu) {
-    uint64_t t = now_ns();
-    int r = floor_draw(cpu);
-    uint64_t dt = now_ns() - t;
-    g_prof_exp_floor_ns += dt;
-    if (perf_on()) s_perf_floor = dt;
-    return r;
+    if (__builtin_expect(perf_on(), 0)) {
+        uint64_t t = now_ns();
+        int r = floor_draw(cpu);
+        uint64_t dt = now_ns() - t;
+        g_prof_exp_floor_ns += dt;
+        s_perf_floor = dt;
+        return r;
+    }
+    return floor_draw(cpu);
 }
 
 extern void __real_func_80048E58(CPUState *cpu);
@@ -4612,10 +4615,11 @@ static void stage_draw(CPUState *cpu) {
                 s_pack.togr[0], s_pack.togr[1] <= 2 ? s_pack.togr[1] : s_pack.gkind);
         fflush(stdout);
     }
-    uint64_t t_tiles0 = now_ns();
+    int p_on = __builtin_expect(perf_on(), 0);
+    uint64_t t_tiles0 = p_on ? now_ns() : 0;
     tiles(&g, &s, ot_a, ot_b);
-    uint64_t t_objs0 = now_ns();
-    g_prof_exp_stage_tiles_ns += (t_objs0 - t_tiles0);
+    uint64_t t_objs0 = p_on ? now_ns() : 0;
+    if (p_on) g_prof_exp_stage_tiles_ns += (t_objs0 - t_tiles0);
     if (ttt) {      /* TTT Stages S4: stage 3's object, stage 11's beams, stage 2's particles */
         Gte w;
         if (!ttt_night()) ttt_objects(&g, &s);
@@ -4627,8 +4631,8 @@ static void stage_draw(CPUState *cpu) {
         objects(&g);
     }
     tj_fix();
-    uint64_t t_far0 = now_ns();
-    g_prof_exp_stage_objs_ns += (t_far0 - t_objs0);
+    uint64_t t_far0 = p_on ? now_ns() : 0;
+    if (p_on) g_prof_exp_stage_objs_ns += (t_far0 - t_objs0);
     /* B117: A and B lead to what their ranks hold once the objects are
      * linked: TTT's stage 3 links its carousel at 1022, B's rank, and the
      * game draws B, then the carousel (ttt.Stage.frame) */
@@ -4681,7 +4685,7 @@ static void stage_draw(CPUState *cpu) {
         tile_rect(ttt ? ttt_slot(TTT_OT_FILL) : main_ot(1023), -s.margin, 0, SCREEN_W + 2 * s.margin, SCREEN_H, bg);
     }
     if (ttt) ttt_ot_link();
-    g_prof_exp_stage_far_ns += (now_ns() - t_far0);
+    if (p_on) g_prof_exp_stage_far_ns += (now_ns() - t_far0);
     if ((++s_frames % 120) == 1) {
         fprintf(stdout, "[ArcadeStages] f=%u stg=%d(%s) phase=%d cone=%u tiles=%u(drop=%u) obj=%u(drop=%u) flr=%u far=%u mem=%u/%u alloc_fails=%u\n",
                 psx_mod_read_word(0x800A08F0u), s_pack.stage,
@@ -4697,16 +4701,19 @@ static void stage_draw(CPUState *cpu) {
 
 static void stage_frame(CPUState *cpu) {
     if (!active()) return;
-    uint64_t t = now_ns();
-    stage_draw(cpu);
-    uint64_t dt = now_ns() - t;
-    g_prof_exp_stage_total_ns += dt;
-    g_prof_exp_stage_calls++;
-    s_draws++;
-    if (perf_on()) {
+    if (__builtin_expect(perf_on(), 0)) {
+        uint64_t t = now_ns();
+        stage_draw(cpu);
+        uint64_t dt = now_ns() - t;
+        g_prof_exp_stage_total_ns += dt;
+        g_prof_exp_stage_calls++;
+        s_draws++;
         perf_frame(s_perf_floor + dt);
         s_perf_floor = 0;
+        return;
     }
+    stage_draw(cpu);
+    s_draws++;
 }
 
 static uint32_t s_wrap_entry_count = 0;
@@ -4758,9 +4765,13 @@ void __wrap_func_8006D014(CPUState *cpu) {
             s_probe_gte = 0;
         }
     }
-    uint64_t t_ps1_0 = now_ns();
-    __real_func_8006D014(cpu);
-    g_prof_exp_ps1_stage_ns += (now_ns() - t_ps1_0);
+    if (__builtin_expect(perf_on(), 0)) {
+        uint64_t t_ps1_0 = now_ns();
+        __real_func_8006D014(cpu);
+        g_prof_exp_ps1_stage_ns += (now_ns() - t_ps1_0);
+    } else {
+        __real_func_8006D014(cpu);
+    }
     if (!s_running) return;
     if (s_probe && !s_probe_gte && cpu->pc == 0x80036AF8u) {       /* first tile: the PS1's GTE */
         for (int i = 0; i < 8; i++) s_ps1_gte[i] = (int32_t)cpu->gte_ctrl[i];

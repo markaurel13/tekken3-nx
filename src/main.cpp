@@ -7,6 +7,7 @@
 #include <vector>
 #include <algorithm>
 #include <utility>
+#include <atomic>
 #include <sys/stat.h>
 #include <sys/iosupport.h>
 #include <sys/socket.h>
@@ -703,66 +704,48 @@ static uint64_t s_prof_last_audio_underrun = 0;
 static void prof_thread_fn(void*) {
     uint64_t last_seen_frame = 0;
     u64 last_frame_change_tick = armGetSystemTick();
-    uint32_t watchdog_counter = 0;
     uint32_t stall_alert_count = 0;
 
     while (s_prof_run) {
         int ph = g_exec_phase;
         if (ph < 0 || ph >= PROF_PHASES) ph = 0;
-        uint64_t c = s_prof_phase_cnt[ph];
-        s_prof_phase_cnt[ph] = c + 1;
-        if (ph != 7) {
-            uint32_t raw_pc = psx_last_irq_check_pc();
-            if (!raw_pc) raw_pc = g_prof_pc;
-            uint32_t pc = raw_pc & ~0xFu;   /* 16-byte buckets */
-            uint32_t h = (pc >> 4) * 2654435761u;
-            for (int i = 0; i < 16; i++) {
-                uint32_t s = (h + i) & (PROF_PC_SLOTS - 1);
-                if (s_prof_pc_key[s] == pc || s_prof_pc_cnt[s] == 0) {
-                    s_prof_pc_key[s] = pc; s_prof_pc_cnt[s]++; break;
-                }
-            }
-        }
+        s_prof_phase_cnt[ph] = s_prof_phase_cnt[ph] + 1;
 
-        // Watchdog activo cada ~200 ms (1000 iteraciones x 0.2 ms)
-        if (++watchdog_counter >= 1000) {
-            watchdog_counter = 0;
+        // Watchdog activo cada ~100 ms
+        u64 now_tick = armGetSystemTick();
+        uint64_t cur_frame = s_frame_count;
 
-            u64 now_tick = armGetSystemTick();
-            uint64_t cur_frame = s_frame_count;
-
-            if (cur_frame != last_seen_frame) {
-                last_seen_frame = cur_frame;
-                last_frame_change_tick = now_tick;
-                stall_alert_count = 0;
-            } else if (cur_frame > 100) { // Evaluar unicamente tras el arranque
-                u64 stall_ms = armTicksToNs(now_tick - last_frame_change_tick) / 1000000ULL;
-                if (stall_ms >= 1500) { // Main thread bloqueado por mas de 1.5 segundos
-                    stall_alert_count++;
-                    if (stall_alert_count <= 10 || (stall_alert_count % 10) == 0) {
-                        printf("\n[WATCHDOG_ALERT #%u] Main thread STALL! stall=%llu ms at frame=%llu (phase=%d g_prof_pc=0x%08X)\n",
-                               stall_alert_count, (unsigned long long)stall_ms, (unsigned long long)cur_frame, ph, g_prof_pc);
-                        if (debug_cpu_ptr) {
-                            printf("  [CPU] pc=0x%08X ra=0x%08X sp=0x%08X v0=0x%08X a0=0x%08X\n",
-                                   debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29],
-                                   debug_cpu_ptr->gpr[2], debug_cpu_ptr->gpr[4]);
-                        }
-                        if (g_disp_tail_seq > 0) {
-                            printf("  [Tail Dispatches]:\n");
-                            uint64_t tcount = g_disp_tail_seq < 5 ? g_disp_tail_seq : 5;
-                            for (uint64_t i = g_disp_tail_seq - tcount; i < g_disp_tail_seq; i++) {
-                                const DispTailEntry* t = &g_disp_tail[i % DISP_TAIL_CAP];
-                                printf("    [%llu] target=0x%08X ra=0x%08X sp=0x%08X cyc=%llu\n",
-                                       (unsigned long long)i, t->target, t->ra, t->sp, (unsigned long long)t->cycle);
-                            }
-                        }
-                        if (s_sd_log) fflush(s_sd_log);
+        if (cur_frame != last_seen_frame) {
+            last_seen_frame = cur_frame;
+            last_frame_change_tick = now_tick;
+            stall_alert_count = 0;
+        } else if (cur_frame > 100) { // Evaluar unicamente tras el arranque
+            u64 stall_ms = armTicksToNs(now_tick - last_frame_change_tick) / 1000000ULL;
+            if (stall_ms >= 1500) { // Main thread bloqueado por mas de 1.5 segundos
+                stall_alert_count++;
+                if (stall_alert_count <= 10 || (stall_alert_count % 10) == 0) {
+                    printf("\n[WATCHDOG_ALERT #%u] Main thread STALL! stall=%llu ms at frame=%llu (phase=%d g_prof_pc=0x%08X)\n",
+                           stall_alert_count, (unsigned long long)stall_ms, (unsigned long long)cur_frame, ph, g_prof_pc);
+                    if (debug_cpu_ptr) {
+                        printf("  [CPU] pc=0x%08X ra=0x%08X sp=0x%08X v0=0x%08X a0=0x%08X\n",
+                               debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29],
+                               debug_cpu_ptr->gpr[2], debug_cpu_ptr->gpr[4]);
                     }
+                    if (g_disp_tail_seq > 0) {
+                        printf("  [Tail Dispatches]:\n");
+                        uint64_t tcount = g_disp_tail_seq < 5 ? g_disp_tail_seq : 5;
+                        for (uint64_t i = g_disp_tail_seq - tcount; i < g_disp_tail_seq; i++) {
+                            const DispTailEntry* t = &g_disp_tail[i % DISP_TAIL_CAP];
+                            printf("    [%llu] target=0x%08X ra=0x%08X sp=0x%08X cyc=%llu\n",
+                                   (unsigned long long)i, t->target, t->ra, t->sp, (unsigned long long)t->cycle);
+                        }
+                    }
+                    if (s_sd_log) fflush(s_sd_log);
                 }
             }
         }
 
-        svcSleepThread(200000);   /* ~0.2 ms */
+        svcSleepThread(100000000);   /* 100 ms */
     }
 }
 
@@ -786,6 +769,10 @@ static void prof_stop(void) {
         s_prof_thread_started = false;
     }
 }
+
+/* ===== Medicion de Hardware VSync derivada del reloj del sistema ARM ===== */
+static std::atomic<uint64_t> s_hw_vsync_counter{0};
+
 
 /* ===== Telemetria Fase 0: reloj de CPU/GPU/EMC (clkrst en 8.0.0+, pcv antes) ===== */
 static bool s_clk_ready = false;
@@ -1121,7 +1108,7 @@ void dump_openbios_panic_state(void) {
     }
 }
 
-static void check_combat_stall_diagnostic(uint32_t frame) {
+static __attribute__((unused)) void check_combat_stall_diagnostic(uint32_t frame) {
     static bool s_combat_ever_seen = false;
     static uint32_t s_stall_frames = 0;
     uint32_t vtx = Deko3DRenderer::Instance().GetLastFrameVtx();
@@ -1235,10 +1222,27 @@ struct SlowFrameRecord {
     float acq_wait_ms;
     float gpu_fence_ms;
     uint32_t irq_checks;
+    float real_display_ms;
+    uint16_t hw_vsyncs;
+    uint16_t repeated_frames;
+};
+
+struct HwDisplayStats {
+    uint32_t total_frames = 0;
+    uint32_t total_hw_vsyncs = 0;
+    uint32_t perfect_frames = 0;       // vsyncs == 1 (1:1 presentación fluida)
+    uint32_t repeated_1_frames = 0;     // vsyncs == 2 (1 frame repetido en TV = tirón a 30fps)
+    uint32_t repeated_2plus_frames = 0; // vsyncs >= 3 (2+ frames repetidos)
+    double min_real_ms = 999999.0;
+    double max_real_ms = 0.0;
+    uint64_t max_real_frame = 0;
+    uint64_t sum_real_ns = 0;
 };
 
 static constexpr size_t MAX_SLOW_RECORDS_PER_WIN = 32;
 static FrameHistogram s_frame_hist{};
+static HwDisplayStats s_hw_stats{};
+static u64 s_last_present_tick = 0;
 static SlowFrameRecord s_slow_records[MAX_SLOW_RECORDS_PER_WIN]{};
 static size_t s_slow_records_count = 0;
 static uint64_t s_last_frame_cd_ns = 0;
@@ -1260,19 +1264,6 @@ static void switch_vblank_callback(void) {
         s_prof_cb_ticks += e - st; s_prof_last_cb_end = e; s_prof_frames++;
     } } prof_guard{frame_start_tick, prof_prev_phase};
     s_frame_count++;
-    memory_log_frame_prim_diag((uint32_t)s_frame_count);
-    check_combat_stall_diagnostic((uint32_t)s_frame_count);
-    fmv_diag_vblank(s_frame_count);
-    {
-        static uint32_t s_prev_c394 = 0xFFFFFFFFu;
-        uint32_t c394 = psx_read_word(0x800AC394u);
-        uint32_t c340 = psx_read_word(0x800AC340u);
-        if (c394 != s_prev_c394) {
-            printf("[WATCH_C394] f=%llu c394: 0x%08X -> 0x%08X (c340=0x%08X)\n",
-                   (unsigned long long)s_frame_count, s_prev_c394, c394, c340);
-            s_prev_c394 = c394;
-        }
-    }
     static bool s_game_started_logged = false;
     if (!s_game_started_logged && fntrace_is_game_started()) {
         s_game_started_logged = true;
@@ -1555,12 +1546,52 @@ static void switch_vblank_callback(void) {
     s_win_samples++;
     s_last_cb_exit_tick = frame_end_tick;
 
+    // --- Medición de hardware VSync de pantalla física y ms reales entre presentaciones ---
+    u64 real_frame_ns = (s_last_present_tick != 0) ? armTicksToNs(frame_end_tick - s_last_present_tick) : 16666666ULL;
+    double real_frame_ms = (double)real_frame_ns / 1e6;
+    s_last_present_tick = frame_end_tick;
+
+    // Periodo nominal de refresco de pantalla: 16.666667 ms (60.00 Hz).
+    // Con jitter normal de presentacion, un frame se presenta a tiempo en 1 VSync si real_frame_ms <= 18.0 ms.
+    // Si toma > 18.0 ms, sobrepasa el VSync y produce frames repetidos en la pantalla fisica:
+    uint32_t hw_vsyncs_passed = 1;
+    if (s_frame_count > 10 && real_frame_ms > 18.0) {
+        hw_vsyncs_passed = (uint32_t)((real_frame_ms + 8.333333) / 16.666667);
+        if (hw_vsyncs_passed < 2) hw_vsyncs_passed = 2;
+    }
+    uint32_t repeated_frames = (hw_vsyncs_passed > 1) ? (uint32_t)(hw_vsyncs_passed - 1) : 0;
+
+    s_hw_stats.total_frames++;
+    s_hw_stats.total_hw_vsyncs += (uint32_t)hw_vsyncs_passed;
+    if (hw_vsyncs_passed == 1) {
+        s_hw_stats.perfect_frames++;
+    } else if (hw_vsyncs_passed == 2) {
+        s_hw_stats.repeated_1_frames++;
+    } else if (hw_vsyncs_passed >= 3) {
+        s_hw_stats.repeated_2plus_frames++;
+    }
+    s_hw_stats.sum_real_ns += real_frame_ns;
+    if (s_frame_count > 10) {
+        if (real_frame_ms < s_hw_stats.min_real_ms) s_hw_stats.min_real_ms = real_frame_ms;
+        if (real_frame_ms > s_hw_stats.max_real_ms) {
+            s_hw_stats.max_real_ms = real_frame_ms;
+            s_hw_stats.max_real_frame = s_frame_count;
+        }
+    }
+
     // --- Diagnóstico por frame en memoria (cero I/O durante combate) ---
     u64 cur_loop_ns = total_cb_ns;
     u64 cur_frame_ns = cur_guest_ns + cur_loop_ns;
     double cur_frame_ms = (double)cur_frame_ns / 1e6;
     double cur_guest_ms = (double)cur_guest_ns / 1e6;
     double cur_loop_ms = (double)cur_loop_ns / 1e6;
+
+    if (repeated_frames > 0 && s_frame_count > 10) {
+        printf("[HW_STUTTER] f=%llu real_ms=%.2fms (vsyncs=%u -> %u frame(s) repetido(s) en pantalla!) | guest=%.2fms loop=%.2fms\n",
+               (unsigned long long)s_frame_count, real_frame_ms, (unsigned)hw_vsyncs_passed, repeated_frames,
+               cur_guest_ms, cur_loop_ms);
+        fflush(stdout);
+    }
 
     uint64_t cd_ns_now = g_prof_iso_raw_ns + g_prof_iso_cook_ns;
     uint64_t cd_calls_now = g_prof_iso_raw_calls + g_prof_iso_cook_calls;
@@ -1602,7 +1633,7 @@ static void switch_vblank_callback(void) {
         s_frame_hist.max_frame_num = s_frame_count;
     }
 
-    if (cur_frame_ms > 17.5 && s_frame_count > 10) {
+    if ((cur_frame_ms > 17.5 || repeated_frames > 0) && s_frame_count > 10) {
         if (s_slow_records_count < MAX_SLOW_RECORDS_PER_WIN) {
             SlowFrameRecord& rec = s_slow_records[s_slow_records_count++];
             rec.frame_num = s_frame_count;
@@ -1616,6 +1647,9 @@ static void switch_vblank_callback(void) {
             rec.acq_wait_ms = (float)cur_acq_wait_ms;
             rec.gpu_fence_ms = (float)cur_gpu_fence_ms;
             rec.irq_checks = (uint32_t)frame_irq_checks;
+            rec.real_display_ms = (float)real_frame_ms;
+            rec.hw_vsyncs = (uint16_t)hw_vsyncs_passed;
+            rec.repeated_frames = (uint16_t)repeated_frames;
         } else {
             size_t min_idx = 0;
             float min_ms = s_slow_records[0].total_ms;
@@ -1625,7 +1659,7 @@ static void switch_vblank_callback(void) {
                     min_idx = i;
                 }
             }
-            if (cur_frame_ms > min_ms) {
+            if (cur_frame_ms > min_ms || repeated_frames > 0) {
                 SlowFrameRecord& rec = s_slow_records[min_idx];
                 rec.frame_num = s_frame_count;
                 rec.total_ms = (float)cur_frame_ms;
@@ -1638,6 +1672,9 @@ static void switch_vblank_callback(void) {
                 rec.acq_wait_ms = (float)cur_acq_wait_ms;
                 rec.gpu_fence_ms = (float)cur_gpu_fence_ms;
                 rec.irq_checks = (uint32_t)frame_irq_checks;
+                rec.real_display_ms = (float)real_frame_ms;
+                rec.hw_vsyncs = (uint16_t)hw_vsyncs_passed;
+                rec.repeated_frames = (uint16_t)repeated_frames;
             }
         }
     }
@@ -1673,6 +1710,29 @@ static void switch_vblank_callback(void) {
                denom > 0 ? (100.0 * s_frame_hist.dropped_frames / denom) : 0.0,
                s_frame_hist.max_frame_ms, (unsigned long long)s_frame_hist.max_frame_num);
 
+        double total_real_sec = (double)s_hw_stats.sum_real_ns / 1e9;
+        double real_display_fps = (total_real_sec > 0.0) ? ((double)s_hw_stats.total_frames / total_real_sec) : 0.0;
+        double avg_real_ms = (s_hw_stats.total_frames > 0) ? ((double)s_hw_stats.sum_real_ns / 1e6 / s_hw_stats.total_frames) : 0.0;
+        uint32_t total_repeated = s_hw_stats.repeated_1_frames + s_hw_stats.repeated_2plus_frames;
+
+        printf("[DisplayHW] win%llu: real_time=%.3fs | frames=%u | hw_vsyncs=%u | 1:1_sync=%u (%.1f%%) | REPETIDOS=%u (%.1f%%) [1-drop=%u, >=2-drop=%u] | FPS_REAL=%.2f | real_ms(avg=%.2f min=%.2f max=%.2f en f=%llu)\n",
+               (unsigned long long)report_interval,
+               total_real_sec,
+               s_hw_stats.total_frames,
+               s_hw_stats.total_hw_vsyncs,
+               s_hw_stats.perfect_frames,
+               s_hw_stats.total_frames > 0 ? (100.0 * s_hw_stats.perfect_frames / s_hw_stats.total_frames) : 0.0,
+               total_repeated,
+               s_hw_stats.total_frames > 0 ? (100.0 * total_repeated / s_hw_stats.total_frames) : 0.0,
+               s_hw_stats.repeated_1_frames,
+               s_hw_stats.repeated_2plus_frames,
+               real_display_fps,
+               avg_real_ms,
+               s_hw_stats.min_real_ms < 99999.0 ? s_hw_stats.min_real_ms : 0.0,
+               s_hw_stats.max_real_ms,
+               (unsigned long long)s_hw_stats.max_real_frame);
+        s_hw_stats = {};
+
         if (s_slow_records_count > 0) {
             for (size_t i = 0; i < s_slow_records_count; ++i) {
                 for (size_t j = i + 1; j < s_slow_records_count; ++j) {
@@ -1684,12 +1744,14 @@ static void switch_vblank_callback(void) {
                 }
             }
             size_t to_print = s_slow_records_count > 8 ? 8 : s_slow_records_count;
-            printf("[SlowFramesDetail] top %zu de %u frame(s) >17.5ms en esta ventana:\n",
+            printf("[SlowFramesDetail] top %zu de %u frame(s) >17.5ms o repetidos en esta ventana:\n",
                    to_print, s_frame_hist.dropped_frames);
             for (size_t i = 0; i < to_print; ++i) {
                 const auto& sf = s_slow_records[i];
-                printf("  [Drop #%zu] f=%llu tot=%.2fms | guest=%.2fms (irq=%u) | cd_io=%.2fms (calls=%u) | vram_up=%.2fms (%uKB) | loop=%.2fms (acq=%.2f gpu=%.2f)\n",
-                       i + 1, (unsigned long long)sf.frame_num, sf.total_ms,
+                printf("  [Drop #%zu] f=%llu real_ms=%.2fms (hw_vsyncs=%u, rep=%u) | loop_tot=%.2fms | guest=%.2fms (irq=%u) | cd_io=%.2fms (calls=%u) | vram_up=%.2fms (%uKB) | loop=%.2fms (acq=%.2f gpu=%.2f)\n",
+                       i + 1, (unsigned long long)sf.frame_num,
+                       sf.real_display_ms, (unsigned)sf.hw_vsyncs, (unsigned)sf.repeated_frames,
+                       sf.total_ms,
                        sf.guest_ms, sf.irq_checks,
                        sf.cd_ms, (unsigned)sf.cd_calls,
                        sf.vram_up_ms, (unsigned)sf.vram_kb,

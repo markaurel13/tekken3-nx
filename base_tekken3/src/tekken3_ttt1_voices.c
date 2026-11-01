@@ -215,15 +215,20 @@ void __wrap_func_80040C90(CPUState *cpu) {
         id=rd32(k->bank+32+slot*16);
         GuestVoice *v=&voices[p][group==GROUP_KO?KO_VOICE:CRY_VOICE];
         v->id=id;v->slot=slot;v->group=group;v->pos=0;v->calls++;
+#ifndef NDEBUG
         fprintf(stderr,"%s voice: P%u command=%04X sample=%u\n",tekken3_guest_name_for(p),p+1,command,id);
+#endif
         /* Only this actor's character cry is replaced. Shared hit, movement,
          * announcer and opponent calls keep the native sound path. */
         cpu->pc=cpu->gpr[31];return;
     }
     /* Natives, Devil Jin and natives on TTT1 moves included: Tekken 3 plays
      * the KO cry and its own echo task. Logged for tools/test_ko_echo.py. */
-    if((cpu->pc==0 || cpu->pc==0x80040c90) && p<2 && (cpu->gpr[6]&65535)>>12==GROUP_KO && !guest_active(p))
+    if((cpu->pc==0 || cpu->pc==0x80040c90) && p<2 && (cpu->gpr[6]&65535)>>12==GROUP_KO && !guest_active(p)) {
+#ifndef NDEBUG
         fprintf(stderr,"TTT1 voices: P%u native KO cry %04X\n",p+1,cpu->gpr[6]&65535);
+#endif
+    }
     __real_func_80040C90(cpu);
 }
 

@@ -5484,73 +5484,73 @@ static void gp0_execute_command_now(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     int selector_fade_side = 0;
     int selector_fade_y = 0;
-    if (ws_nw_full_mirror && opcode >= 0x20u && opcode < 0x80u)
-        ws_refresh_current_reveal_margins();
     t3_selector_sidecar_unclipped = 0;
-    /* Do this after the complete GP0 packet has been collected, but before it
-     * reaches either the canonical renderer or the native-wide sidecar. */
-    if (opcode >= 0x20u && opcode <= 0x3Fu &&
-        ws_background_packet_projection_overflow(opcode)) {
-        return;
-    }
-    if (opcode >= 0x20u && opcode <= 0x7Fu) {
-        /* Default identity for every DRAW. Environment commands and NOPs emit
-         * no geometry, so they intentionally retain the pending delta until
-         * the next draw selects its own value. This keeps each rigid selector
-         * strip group batchable instead of flushing on every interleaved NOP. */
-        int sidecar_dx = 0;
-        int sidecar_dy = 0;
-        int sidecar_clip_bottom = -1;
-        int suppress_sidecar = 0;
-        int unclipped_sidecar = 0;
-        int expand_sidecar = 0;
-        if ((t3_selector_frame.active || t3_loading_frame.active) &&
-            gp0_cmd_source_addr != 0xFFFFFFFFu) {
-            Tekken3SelectorPacket packet;
-            if (ws_prepass_packet_bounds(gp0_cmd_buf, &packet)) {
-                packet.source_addr = gp0_cmd_source_addr & 0x1FFFFCu;
-                Tekken3SelectorPlacement placement = t3_loading_frame.active
-                    ? tekken3_loading_place(&t3_loading_frame, &packet, ws_nw_offset())
-                    : tekken3_selector_place(&t3_selector_frame, &packet, ws_nw_offset());
-                sidecar_dx = placement.sidecar_dx;
-                sidecar_dy = placement.sidecar_dy;
-                if (placement.sidecar_clip_bottom > 0)
-                    sidecar_clip_bottom = draw_offset_y + placement.sidecar_clip_bottom;
-                if (placement.portrait_fade && placement.group_id >= 1 &&
-                    placement.group_id <= 2) {
-                    unsigned bit = 1u << (placement.group_id - 1);
-                    if (!(t3_selector_fade_emitted & bit)) {
-                        selector_fade_side = (int)placement.group_id;
-                        selector_fade_y = draw_offset_y +
-                            t3_selector_frame.backdrop_height - 44;
-                        t3_selector_fade_emitted |= bit;
-                    }
-                }
-                suppress_sidecar = placement.suppress_sidecar;
-                unclipped_sidecar = placement.unclipped_sidecar;
-                expand_sidecar = placement.expand_backdrop;
 
-            }
+    if (__builtin_expect(ws_engaged() || t3_selector_frame.active || t3_loading_frame.active || t3_force_background_active, 0)) {
+        if (ws_nw_full_mirror && opcode >= 0x20u && opcode < 0x80u)
+            ws_refresh_current_reveal_margins();
+        /* Do this after the complete GP0 packet has been collected, but before it
+         * reaches either the canonical renderer or the native-wide sidecar. */
+        if (opcode >= 0x20u && opcode <= 0x3Fu &&
+            ws_background_packet_projection_overflow(opcode)) {
+            return;
         }
-        /* The Force overlay also emits a solid sky/underlay at these two
-         * fixed packet slots. Extend its authored full-width rectangle. */
-        if (t3_force_background_active && opcode == 0x60 &&
-            ((gp0_cmd_source_addr & 0x1fffffu) == 0xB6B18u ||
-             (gp0_cmd_source_addr & 0x1fffffu) == 0xB6B28u) &&
-            (gp0_cmd_buf[1] & 0xffffu) == 0 &&
-            (gp0_cmd_buf[2] & 0xffffu) == 368)
-            expand_sidecar = ws_nw_offset() > 0;
-        gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
-        gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
-        gr_wide_set_primitive_suppressed(suppress_sidecar);
-        gr_wide_set_primitive_unclipped(unclipped_sidecar);
-        gr_wide_set_primitive_expanded(expand_sidecar);
-        t3_selector_sidecar_unclipped = unclipped_sidecar;
+        if (opcode >= 0x20u && opcode <= 0x7Fu) {
+            /* Default identity for every DRAW. Environment commands and NOPs emit
+             * no geometry, so they intentionally retain the pending delta until
+             * the next draw selects its own value. This keeps each rigid selector
+             * strip group batchable instead of flushing on every interleaved NOP. */
+            int sidecar_dx = 0;
+            int sidecar_dy = 0;
+            int sidecar_clip_bottom = -1;
+            int suppress_sidecar = 0;
+            int unclipped_sidecar = 0;
+            int expand_sidecar = 0;
+            if ((t3_selector_frame.active || t3_loading_frame.active) &&
+                gp0_cmd_source_addr != 0xFFFFFFFFu) {
+                Tekken3SelectorPacket packet;
+                if (ws_prepass_packet_bounds(gp0_cmd_buf, &packet)) {
+                    packet.source_addr = gp0_cmd_source_addr & 0x1FFFFCu;
+                    Tekken3SelectorPlacement placement = t3_loading_frame.active
+                        ? tekken3_loading_place(&t3_loading_frame, &packet, ws_nw_offset())
+                        : tekken3_selector_place(&t3_selector_frame, &packet, ws_nw_offset());
+                    sidecar_dx = placement.sidecar_dx;
+                    sidecar_dy = placement.sidecar_dy;
+                    if (placement.sidecar_clip_bottom > 0)
+                        sidecar_clip_bottom = draw_offset_y + placement.sidecar_clip_bottom;
+                    if (placement.portrait_fade && placement.group_id >= 1 &&
+                        placement.group_id <= 2) {
+                        unsigned bit = 1u << (placement.group_id - 1);
+                        if (!(t3_selector_fade_emitted & bit)) {
+                            selector_fade_side = (int)placement.group_id;
+                            selector_fade_y = draw_offset_y +
+                                t3_selector_frame.backdrop_height - 44;
+                            t3_selector_fade_emitted |= bit;
+                        }
+                    }
+                    suppress_sidecar = placement.suppress_sidecar;
+                    unclipped_sidecar = placement.unclipped_sidecar;
+                    expand_sidecar = placement.expand_backdrop;
+
+                }
+            }
+            /* The Force overlay also emits a solid sky/underlay at these two
+             * fixed packet slots. Extend its authored full-width rectangle. */
+            if (t3_force_background_active && opcode == 0x60 &&
+                ((gp0_cmd_source_addr & 0x1fffffu) == 0xB6B18u ||
+                 (gp0_cmd_source_addr & 0x1fffffu) == 0xB6B28u) &&
+                (gp0_cmd_buf[1] & 0xffffu) == 0 &&
+                (gp0_cmd_buf[2] & 0xffffu) == 368)
+                expand_sidecar = ws_nw_offset() > 0;
+            gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
+            gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
+            gr_wide_set_primitive_suppressed(suppress_sidecar);
+            gr_wide_set_primitive_unclipped(unclipped_sidecar);
+            gr_wide_set_primitive_expanded(expand_sidecar);
+            t3_selector_sidecar_unclipped = unclipped_sidecar;
+        }
     }
-#if defined(__aarch64__) || defined(__SWITCH__)
-    uint64_t t_diag0, t_diag1;
-    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_diag0));
-#endif
+
     gp0_opcode_count[opcode]++;
 #ifndef NDEBUG
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
@@ -5567,10 +5567,6 @@ static void gp0_execute_command_now(void) {
             ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
         }
     }
-#if defined(__aarch64__) || defined(__SWITCH__)
-    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_diag1));
-    g_prof_gp0_diag_ns += ((t_diag1 - t_diag0) * 625u) / 12u;
-#endif
 
     /* Categorize for diagnostics */
     if (opcode <= 0x01) gp0_nop_count++;

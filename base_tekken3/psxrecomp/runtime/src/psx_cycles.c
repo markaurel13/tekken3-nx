@@ -733,7 +733,11 @@ uint32_t psx_mult_latency_u(uint32_t rs) {  /* MULTU (unsigned) */
 /* DIV/DIVU latency is the fixed constant 37 — emitted directly at the op site. */
 
 void psx_muldiv_set(CPUState* cpu, uint32_t latency) {
+#ifdef __SWITCH__
+    cpu->muldiv_ts_done = psx_cycle_count + (uint64_t)g_psx_cyc_batch + (uint64_t)latency;
+#else
     cpu->muldiv_ts_done = psx_cycle_count + (uint64_t)latency;
+#endif
 }
 
 void psx_muldiv_stall(CPUState* cpu) {
@@ -743,6 +747,17 @@ void psx_muldiv_stall(CPUState* cpu) {
      * have been "free" for following instructions are spent here instead. Plus the
      * off-by-one shortcut: a deadline exactly one cycle out just retracts (no stall).
      * (No-load code has read_absorb==0, so this reduces to a plain advance.) */
+#ifdef __SWITCH__
+    uint64_t cur = psx_cycle_count + (uint64_t)g_psx_cyc_batch;
+    if (cpu->muldiv_ts_done > cur) {
+        if (cpu->muldiv_ts_done == cur + 1u) {
+            cpu->muldiv_ts_done--;   /* off-by-one: retract the deadline, no advance */
+            return;
+        }
+        uint32_t stall = (uint32_t)(cpu->muldiv_ts_done - cur);
+        psx_cyc_charge(stall);
+    }
+#else
     if (cpu->muldiv_ts_done > psx_cycle_count) {
         if (cpu->muldiv_ts_done == psx_cycle_count + 1u) {
             cpu->muldiv_ts_done--;   /* off-by-one: retract the deadline, no advance */
@@ -754,6 +769,7 @@ void psx_muldiv_stall(CPUState* cpu) {
         cpu->read_absorb[w] = (uint8_t)(give > stall ? give - stall : 0u);  /* consume */
         psx_advance_cycles(stall);
     }
+#endif
 }
 
 /* MFC2/CFC2 (GTE register read → GPR): stall to the GTE command completion deadline
@@ -762,6 +778,17 @@ void psx_muldiv_stall(CPUState* cpu) {
  * §1+DO_LDS that bracket this ran in the instruction's psx_cyc_step (COP2 is non-load).
  * MTC2/CTC2 (writes) use psx_gte_stall (stall only, no give-back). */
 void psx_gte_read(CPUState* cpu, uint32_t rt) {
+#ifdef __SWITCH__
+    uint64_t cur = psx_cycle_count + (uint64_t)g_psx_cyc_batch;
+    if (cpu->gte_ts_done > cur) {
+        uint32_t stall = (uint32_t)(cpu->gte_ts_done - cur);
+        cpu->ld_absorb = stall;
+        psx_cyc_charge(stall);
+    } else {
+        cpu->ld_absorb = 0u;
+    }
+    cpu->ld_which_t = (uint8_t)rt;
+#else
     if (cpu->gte_ts_done > psx_cycle_count) {
         uint32_t stall = (uint32_t)(cpu->gte_ts_done - psx_cycle_count);
         cpu->ld_absorb = stall;
@@ -770,6 +797,7 @@ void psx_gte_read(CPUState* cpu, uint32_t rt) {
         cpu->ld_absorb = 0u;
     }
     cpu->ld_which_t = (uint8_t)rt;
+#endif
 }
 
 /* ---- GTE (COP2) per-command completion-stall timing ----
@@ -819,15 +847,33 @@ uint32_t psx_gte_cmd_latency(uint32_t cmd) {
 }
 
 void psx_gte_set(CPUState* cpu, uint32_t latency) {
+#ifdef __SWITCH__
+    uint64_t cur = psx_cycle_count + (uint64_t)g_psx_cyc_batch;
+    if (cpu->gte_ts_done > cur) {
+        uint32_t stall = (uint32_t)(cpu->gte_ts_done - cur);
+        psx_cyc_charge(stall);
+        cur += stall;
+    }
+    cpu->gte_ts_done = cur + (uint64_t)latency;
+#else
     /* Back-to-back GTE ops serialize: finish the prior op first. */
     if (cpu->gte_ts_done > psx_cycle_count) {
         psx_advance_cycles((uint32_t)(cpu->gte_ts_done - psx_cycle_count));
     }
     cpu->gte_ts_done = psx_cycle_count + (uint64_t)latency;
+#endif
 }
 
 void psx_gte_stall(CPUState* cpu) {
+#ifdef __SWITCH__
+    uint64_t cur = psx_cycle_count + (uint64_t)g_psx_cyc_batch;
+    if (cpu->gte_ts_done > cur) {
+        uint32_t stall = (uint32_t)(cpu->gte_ts_done - cur);
+        psx_cyc_charge(stall);
+    }
+#else
     if (cpu->gte_ts_done > psx_cycle_count) {
         psx_advance_cycles((uint32_t)(cpu->gte_ts_done - psx_cycle_count));
     }
+#endif
 }

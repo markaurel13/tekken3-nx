@@ -1842,10 +1842,6 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
-        watch_target_store_check(phys, val, 4, addr);
-        if (g_debug_last_store_pc >= 0x80036000u && g_debug_last_store_pc <= 0x80038000u) {
-            memory_track_prim_store(addr);
-        }
         if (__builtin_expect(phys == 0u && fntrace_is_game_started(), 0)) {
             switch (g_debug_last_store_pc) {
             case 0xBFC04E90u:
@@ -1861,21 +1857,16 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
                 return;
             }
         }
-        dirty_ram_mark_kernel_write(phys);
-        text_guard_note_write(phys, val, 4);
-        ram[phys]     = (uint8_t)(val);
-        ram[phys + 1] = (uint8_t)(val >> 8);
-        ram[phys + 2] = (uint8_t)(val >> 16);
-        ram[phys + 3] = (uint8_t)(val >> 24);
+        if (__builtin_expect(phys < DIRTY_RAM_KERNEL_TRACK_BYTES, 0)) {
+            dirty_ram_mark_kernel_write(phys);
+        }
+        __builtin_memcpy(ram + phys, &val, 4);
         return;
     }
     if (phys < 0x00800000u) {
         log_extended_ram_store(addr, val, 4);
         uint32_t off = phys - RAM_SIZE;
-        s_ram_overflow[off]     = (uint8_t)(val);
-        s_ram_overflow[off + 1] = (uint8_t)(val >> 8);
-        s_ram_overflow[off + 2] = (uint8_t)(val >> 16);
-        s_ram_overflow[off + 3] = (uint8_t)(val >> 24);
+        __builtin_memcpy(s_ram_overflow + off, &val, 4);
         return;
     }
 #endif
@@ -2094,18 +2085,16 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
-        watch_target_store_check(phys, (uint32_t)val, 2, addr);
-        dirty_ram_mark_kernel_write(phys);
-        text_guard_note_write(phys, (uint32_t)val, 2);
-        ram[phys]     = (uint8_t)(val);
-        ram[phys + 1] = (uint8_t)(val >> 8);
+        if (__builtin_expect(phys < DIRTY_RAM_KERNEL_TRACK_BYTES, 0)) {
+            dirty_ram_mark_kernel_write(phys);
+        }
+        __builtin_memcpy(ram + phys, &val, 2);
         return;
     }
     if (phys < 0x00800000u) {
         log_extended_ram_store(addr, (uint32_t)val, 2);
         uint32_t off = phys - RAM_SIZE;
-        s_ram_overflow[off]     = (uint8_t)(val);
-        s_ram_overflow[off + 1] = (uint8_t)(val >> 8);
+        __builtin_memcpy(s_ram_overflow + off, &val, 2);
         return;
     }
 #endif
@@ -2402,6 +2391,17 @@ void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
                                    uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
 }
+#ifdef __SWITCH__
+uint8_t psx_cyc_load_byte_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
+    psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
+    return psx_read_byte(addr);
+}
+
+uint32_t psx_cyc_lwc2_read_slow(CPUState* cpu, uint32_t addr) {
+    psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u);
+    return psx_read_word(addr);
+}
+#else
 uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
@@ -2431,6 +2431,7 @@ uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
 #endif
     return psx_read_word(addr);
 }
+#endif
 
 /* Deprecated uncharged passthroughs (the +4 flat wait-state model is gone; load
  * timing now lives in psx_cyc_load_*). Kept so any stray reference stays valid. */
@@ -2461,9 +2462,9 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     uint32_t phys = psx_phys_addr(addr);
 #if defined(__SWITCH__)
     if (__builtin_expect(phys < RAM_SIZE, 1)) {
-        watch_target_store_check(phys, (uint32_t)val, 1, addr);
-        dirty_ram_mark_kernel_write(phys);
-        text_guard_note_write(phys, (uint32_t)val, 1);
+        if (__builtin_expect(phys < DIRTY_RAM_KERNEL_TRACK_BYTES, 0)) {
+            dirty_ram_mark_kernel_write(phys);
+        }
         ram[phys] = val;
         return;
     }

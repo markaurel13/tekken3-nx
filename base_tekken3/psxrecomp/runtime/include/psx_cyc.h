@@ -338,18 +338,45 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
 }
 #endif
 
-extern uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
-
 /* Charge the exact timing/pipeline effects of a 32-bit CPU load without
  * invoking the memory handler.  Enhancement HLE may use this only when static
  * analysis proves the loaded value and read side effects are unobservable. */
 extern void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
                                            uint32_t rt, uint32_t reg_mask);
 
+#ifdef __SWITCH__
+static inline uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
+    (void)cpu; (void)rt; (void)reg_mask;
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys < 0x00200000u, 1)) {
+        psx_cyc_charge(2u);
+        return g_psx_ram[phys];
+    }
+    extern uint8_t psx_cyc_load_byte_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
+    return psx_cyc_load_byte_slow(cpu, addr, rt, reg_mask);
+}
+
+/* LWC2 (GTE load) fast-path inline for Switch */
+static inline uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
+    (void)cpu;
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys < 0x00200000u, 1)) {
+        psx_cyc_charge(2u);
+        uint32_t value;
+        memcpy(&value, g_psx_ram + phys, sizeof(value));
+        return value;
+    }
+    extern uint32_t psx_cyc_lwc2_read_slow(CPUState* cpu, uint32_t addr);
+    return psx_cyc_lwc2_read_slow(cpu, addr);
+}
+#else
+extern uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
+
 /* LWC2 (GTE load) ReadMemory timing only (completion +1, NO LDWhich arm — the dest
  * is a GTE register). Call AFTER psx_cyc_step(cpu,0) (§1+DO_LDS) and psx_gte_stall.
  * Returns the raw 32-bit value. */
 extern uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr);
+#endif
 
 #ifdef __cplusplus
 }

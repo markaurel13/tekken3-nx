@@ -921,11 +921,18 @@ static int ready(unsigned player) {
         p->other_records=other_records;p->other_generation=slots[other].generation;p->links=alias_links;
         preload_player_hit_effects();
         uint64_t t_alias1 = tek_get_ticks();
-        fprintf(stdout,"[MOD_LOAD_ALIAS] %s P%u time=%.2fms (original=%08X custom=%08X records=%08X count=%u)\n",
-                tekken3_guest_name_for(player),player+1,tek_ticks_to_ms(t_alias1 - t_alias0),
-                p->original_alias,p->alias_table,p->records,c->count);
-        fprintf(stderr,"%s combat: installed P%u alias table, original=%08X custom=%08X records=%08X\n",
-                tekken3_guest_name_for(player),player+1,p->original_alias,p->alias_table,p->records);
+        static const char* s_last_alias_fighter[2] = {NULL, NULL};
+        const char* cur_fighter = tekken3_guest_name_for(player);
+        if (s_last_alias_fighter[player] != cur_fighter) {
+            s_last_alias_fighter[player] = cur_fighter;
+            fprintf(stdout,"[MOD_LOAD_ALIAS] %s P%u time=%.2fms (original=%08X custom=%08X records=%08X count=%u)\n",
+                    cur_fighter,player+1,tek_ticks_to_ms(t_alias1 - t_alias0),
+                    p->original_alias,p->alias_table,p->records,c->count);
+#ifndef NDEBUG
+            fprintf(stderr,"%s combat: installed P%u alias table, original=%08X custom=%08X records=%08X\n",
+                    cur_fighter,player+1,p->original_alias,p->alias_table,p->records);
+#endif
+        }
     }
     unsigned opponent=psx_mod_read_half(0x800a9228+other*0x188c+0x16);
     /* The shared T3 move keys are 0..18; a guest opponent (native key 23)
@@ -2152,9 +2159,11 @@ static void preload_player_hit_effects(void) {
         const Hfx *h=hit_effect_64_pack(p);
         if(h) {
             place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
+#ifndef NDEBUG
             printf("[PS2_HFX_Diag] Preloaded hit effect for P%u: images=%u palettes=%u flags=%u\n",
                    p+1, h->images, h->palettes, h->flags);
             fflush(stdout);
+#endif
         }
     }
     s_in_hfx_preload = 0;
