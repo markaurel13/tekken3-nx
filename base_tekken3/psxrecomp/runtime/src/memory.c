@@ -275,6 +275,20 @@ int psx_kernel_bless_dispatchable(uint32_t phys) {
         kbless_native_hits++;
         return 1;
     }
+    static int s_kbless_mism_logged = 0;
+    if (s_kbless_mism_logged < 10) {
+        s_kbless_mism_logged++;
+        printf("[KBlessMismatch] phys=0x%08X (key 0x%08X, body=[0x%08X..0x%08X)) differs from ROM:\n",
+               phys, b->key, b->body_lo, b->body_hi);
+        for (uint32_t z = 0; z < b->body_hi - b->body_lo; z++) {
+            uint8_t r_byte = ram[b->body_lo + z];
+            uint8_t rom_byte = bios_rom[s_kb_rom_off + (b->body_lo - s_kb_lo) + z];
+            if (r_byte != rom_byte) {
+                printf("  diff at 0x%08X (ROM 0x%X): RAM=0x%02X ROM=0x%02X\n",
+                       b->body_lo + z, s_kb_rom_off + (b->body_lo - s_kb_lo) + z, r_byte, rom_byte);
+            }
+        }
+    }
     kbless_state[i] = KBLESS_MISMATCH;
     kbless_mismatches++;
     return 0;
@@ -427,6 +441,12 @@ void dirty_ram_clear_image_baseline(void) {
             if (ram[lo + z] != bios_rom[off + z]) { diff++; }
         }
         printf("[KBlessSync] Kernel window [0x%X..0x%X): %u bytes differ from ROM\n", lo, hi, diff);
+        for (uint32_t z = 0; z < sz; z++) {
+            if (ram[lo + z] != bios_rom[off + z]) {
+                printf("  [KBlessSyncDiff] at 0x%08X (ROM 0x%X): RAM=0x%02X ROM=0x%02X\n",
+                       lo + z, off + z, ram[lo + z], bios_rom[off + z]);
+            }
+        }
         printf("[KBlessHook] at 0x2810: %08X %08X %08X %08X %08X\n",
                *(uint32_t*)(ram + 0x2810), *(uint32_t*)(ram + 0x2814),
                *(uint32_t*)(ram + 0x2818), *(uint32_t*)(ram + 0x281C),
@@ -1536,10 +1556,6 @@ static void mmio_write8(uint32_t addr, uint8_t val) {
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
-        if (addr == 0x1F802080u || addr == 0x1F802082u) {
-            extern void bios_tty_putc(char c);
-            bios_tty_putc((char)val);
-        }
         return;
     }
     { /* open-bus (Beetle parity) */ g_io_openbus_writes++; return;; }
@@ -1708,7 +1724,6 @@ void memory_log_frame_prim_diag(uint32_t frame) {
             printf("[PrimDiag] f=%u stores=%u range=[0x%08X..0x%08X] span=%u KB\n",
                    frame, s_prim_stores, s_prim_min_addr, s_prim_max_addr,
                    (s_prim_max_addr >= s_prim_min_addr) ? (s_prim_max_addr - s_prim_min_addr) / 1024u : 0u);
-            fflush(stdout);
         }
         s_prim_min_addr = 0xFFFFFFFFu;
         s_prim_max_addr = 0x00000000u;

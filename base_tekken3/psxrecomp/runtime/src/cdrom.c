@@ -1604,6 +1604,7 @@ static void process_cdda_stream(uint32_t cycles) {
             if (v > max_sample) max_sample = v;
         }
 
+#ifdef DEBUG_CDDA_SECTORS
         static uint64_t s_cdda_diag_sectors = 0;
         if (s_cdda_diag_sectors < 10 || (s_cdda_diag_sectors % 75) == 0) {
             printf("[CDDA_Sector] count=%llu track=%d lba=%u read_ok=%d pk=%d (muted=%d)\n",
@@ -1611,6 +1612,7 @@ static void process_cdda_stream(uint32_t cycles) {
             fflush(stdout);
         }
         s_cdda_diag_sectors++;
+#endif
 
         if (cd_muted) memset(pcm, 0, sizeof(pcm));
         cd_apply_decode_volume(pcm, CDDA_SECTOR_FRAMES);
@@ -1804,6 +1806,13 @@ static void queue_or_exec_command(uint8_t cmd) {
 static int pause_complete_delay_cycles(void) {
     if (!reading && !(stat_reg & (CDSTAT_READ | CDSTAT_PLAY)))
         return 5000;
+#if defined(__SWITCH__)
+    /* On Switch, the simulated physical laser seek latency (1.1M-3.5M cycles)
+     * causes the guest CPU to spin in a tight busy-loop for 250-500ms, stalling
+     * the main thread and starving the audio output. A safe latency of 20,000 cycles
+     * allows the CD driver to process ACK and completion cleanly without any audio dropout. */
+    return 20000;
+#else
     int lba = reading ? msf_to_lba(read_min, read_sec, read_sect)
                       : last_sector_lba;
     if (lba < 0) lba = 0;
@@ -1811,6 +1820,7 @@ static int pause_complete_delay_cycles(void) {
     if (!(mode_reg & 0x80))
         cycles *= 2;
     return (int)cycles;
+#endif
 }
 
 static void exec_command(uint8_t cmd) {

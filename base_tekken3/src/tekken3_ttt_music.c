@@ -51,6 +51,19 @@
 #include <string.h>
 #include <zlib.h>
 
+static inline uint64_t tek_get_ticks(void) {
+#if defined(__aarch64__) || defined(__SWITCH__)
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return cnt;
+#else
+    return 0;
+#endif
+}
+static inline double tek_ticks_to_ms(uint64_t ticks) {
+    return (double)ticks * (625.0 / 12.0) / 1e6;
+}
+
 enum { BUSY = 0x8000, KEYON = 0x4000, KEYOFF = 0x2000, LOOPHIST = 0x800, PHASEFL = 0x100, PHASEFR = 0x80,
        LDIR = 0x40, LINK = 0x20, NOISE = 0x10, MULAW = 8, FILTER = 4, LOOP = 2, REVERSE = 1 };
 enum { FORMAT = 1, VOICES = 32, RING = 32, MAX_PIECES = 32 };
@@ -281,16 +294,20 @@ static int ps2_data(int i) {
         ps2.data_piece = i;
         return 1;
     }
+    uint64_t t0 = tek_get_ticks();
     size_t n = (size_t)ps2.p[i].sectors * SECTOR;
     FILE *f = fopen(ps2.path, "rb");
     if (!f) return 0;
     uint8_t *buf = (uint8_t *)malloc(n);
     int ok = buf && !fseek(f, (long)ps2.p[i].offset, SEEK_SET) && (fread(buf, 1, n, f) == n);
     fclose(f);
+    uint64_t t1 = tek_get_ticks();
     if (!ok) { free(buf); fprintf(stderr, "TTT music: %s unreadable\n", ps2.path); return 0; }
     ps2.cached_data[i] = buf;
     ps2.data = buf;
     ps2.data_piece = i;
+    fprintf(stdout, "[MOD_LOAD_TTT_MUSIC] piece=%d sectors=%u bytes=%zu time=%.2fms\n",
+            i, ps2.p[i].sectors, n, tek_ticks_to_ms(t1 - t0));
     return 1;
 }
 

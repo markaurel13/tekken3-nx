@@ -106,7 +106,13 @@ int tekken3_outfits_load_catalog(const char *path) {
   }
   fclose(f);
  }
- free(catalog);catalog=rows;catalog_count=count;memset(choice,0,sizeof choice);return count;
+ free(catalog);catalog=rows;catalog_count=count;memset(choice,0,sizeof choice);
+ printf("[OutfitCatalog] Cargado catalogo desde '%s' (total=%d entradas)\n", path ? path : "NULL", count);
+ for(int i=0;i<count;i++)if(rows[i].character==23) {
+  printf("[OutfitCatalog] Kazuya slot: id=%s name='%s' confirm=0x%04X art=%s\n",
+         rows[i].id, rows[i].name, rows[i].confirm, rows[i].art);
+ }
+ return count;
 }
 const Tekken3OutfitEntry *tekken3_outfits_entry(int cid,int index) {
  if(cid<0 || cid>=T3_OUTFIT_MAX_CHARS || cid==21 || cid==22)return NULL;
@@ -301,6 +307,8 @@ uint16_t tekken3_outfits_input(int pad,uint16_t buttons) {
      committed[p]=e->skin;
      /* Team Battle's Start randomizes the team; Triangle is costume three. */
      confirmation[p]=team_select && e->confirm==8?0x1000:e->confirm;
+     printf("[OutfitConfirm] P%d selecciono traje: cid=%d idx=%d id=%s art=%s confirm=0x%04X\n",
+            p + 1, character[p], choice[p][character[p]], e->id, e->art, confirmation[p]);
      /* Unlock before returning this first injected sample. Waiting until
       * next sync lets Team Battle consume Triangle as costume zero. */
      if(e->confirm==8 && character[p]<32) {

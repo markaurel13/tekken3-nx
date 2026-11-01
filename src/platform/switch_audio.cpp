@@ -19,7 +19,7 @@ extern "C" {
 #include "spu.h"
 #include "audio_trace.h"
 
-#define TEK_AUDIO_DIAG 1
+#define TEK_AUDIO_DIAG 0
 
 #if TEK_AUDIO_DIAG
 /* Espejo exacto de SpuDiagSnapshot (spu.c, solo __SWITCH__). */
@@ -287,8 +287,21 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
     SwitchAudio* self = static_cast<SwitchAudio*>(arg);
     alignas(64) int16_t last_block[BufferSamples] = {0};
     bool has_last_block = false;
+    bool had_underrun = false;
     bool primed = false;
     float current_pitch = 1.0f;
+
+    // Rolling ambient history buffer (32768 stereo frames = ~743 ms at 44100 Hz)
+    // Runs 100% on Core 2 to generate seamless ambient continuity audio during synchronous file loads
+    static constexpr size_t AmbientHistoryFrames = 32768;
+    alignas(64) static int16_t s_ambient_history[AmbientHistoryFrames * 2] = {0};
+    size_t ambient_write_pos = 0;
+    float ambient_decay = 1.0f;
+    float ambient_lpf_l = 0.0f;
+    float ambient_lpf_r = 0.0f;
+    size_t synth_tap1 = 0;
+    size_t synth_tap2 = 16384;
+    uint32_t s_noise_seed = 0x12345678;
 
     uint32_t health_tick_cnt = 0;
     uint32_t min_occ_win = RingSlots;
@@ -337,6 +350,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         if (occupancy < min_occ_win) min_occ_win = occupancy;
         if (occupancy > max_occ_win) max_occ_win = occupancy;
 
+#if 0
         if (++health_tick_cnt >= 200) {
             u32 voice_drops = audrvVoiceGetVoiceDropsCount(&self->m_drv, 0);
             printf("[AudioHealth] peak=(L:%d, R:%d) comp=%llu clip=%llu occ=[min=%u, max=%u] pitch=%.4f voice_drops=%u underruns=%llu\n",
@@ -360,6 +374,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             clipped_samples_win = 0;
             compressed_samples_win = 0;
         }
+#endif
 
         // 1. Priming inicial: acumular al menos 16 bloques (~266 ms) antes de comenzar a alimentar audren.
         // Al entregar 3 a audren, quedan 13 buffers completos de colchón elástico (~216 ms).
@@ -371,14 +386,16 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             }
         }
 
-        // 2. Control de latencia máxima (sin alterar el tono/pitch):
+        // 2. Control de desbordamiento de búfer anular (48 slots = ~800 ms):
         // En Nintendo Switch bloqueada a 60 FPS, el juego genera exactamente 44100 muestras/seg
         // y audren consume exactamente 44100 muestras/seg (1:1 lockstep físico por hardware).
         // El tono se mantiene SIEMPRE FIJO a 1.0000x (sin desafinaciones ni efecto cinta gastada).
-        // Si tras saltar cinemáticas o pausas largas se acumulan más de 24 slots (>400 ms),
-        // descartamos suavemente el exceso para devolver la latencia al colchón óptimo (~200 ms).
-        if (occupancy > 24) {
-            uint32_t drop_count = occupancy - 16;
+        // Solo descartamos exceso si la ocupación se aproxima al límite físico del ring buffer
+        // (por ejemplo tras fast-forward extremo o saltos largos de cinemáticas).
+        // Durante juego normal, un colchón de 16-43 slots absorbe cualquier variación sin jamás
+        // cortar el audio ni producir chasquidos o saltos perceptibles.
+        if (occupancy >= 44) {
+            uint32_t drop_count = occupancy - 36;
             r += drop_count;
             self->m_ringReadIdx.store(r, std::memory_order_release);
         }
@@ -406,21 +423,86 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
                     if (ar > peak_r_win) peak_r_win = ar;
                     if (al > 24576 || ar > 24576) compressed_samples_win++;
                     if (al >= 32700 || ar >= 32700) clipped_samples_win++;
+
+                    // Capture outgoing samples into rolling ambient history
+                    s_ambient_history[ambient_write_pos * 2]     = sl;
+                    s_ambient_history[ambient_write_pos * 2 + 1] = sr;
+                    ambient_write_pos = (ambient_write_pos + 1) & (AmbientHistoryFrames - 1);
                 }
-                memcpy(self->m_audioBuffers[self->m_currentBuffer], s_ptr, BufferSizeBytes);
+
+                // Reset ambient synthesis parameters for whenever an underrun might occur
+                ambient_decay = 1.0f;
+                synth_tap1 = (ambient_write_pos + AmbientHistoryFrames - 22050) & (AmbientHistoryFrames - 1);
+                synth_tap2 = (ambient_write_pos + AmbientHistoryFrames - 11025) & (AmbientHistoryFrames - 1);
+
+                if (had_underrun && has_last_block) {
+                    // 64-sample ramp-in crossfade from ambient synthesis to eliminate resumption click
+                    int16_t* dst = self->m_audioBuffers[self->m_currentBuffer];
+                    for (size_t s = 0; s < 128 && s < BufferSamples; s += 2) {
+                        int32_t blend = (int32_t)(s / 2); // 0 to 63
+                        int16_t cur_l = s_ptr[s];
+                        int16_t cur_r = s_ptr[s + 1];
+                        int16_t prev_l = last_block[s];
+                        int16_t prev_r = last_block[s + 1];
+                        dst[s]     = (int16_t)((prev_l * (64 - blend) + cur_l * blend) / 64);
+                        dst[s + 1] = (int16_t)((prev_r * (64 - blend) + cur_r * blend) / 64);
+                    }
+                    if (BufferSamples > 128) {
+                        memcpy(dst + 128, s_ptr + 128, BufferSizeBytes - 128 * sizeof(int16_t));
+                    }
+                    had_underrun = false;
+                } else {
+                    memcpy(self->m_audioBuffers[self->m_currentBuffer], s_ptr, BufferSizeBytes);
+                }
                 memcpy(last_block, s_ptr, BufferSizeBytes);
                 has_last_block = true;
                 self->m_ringReadIdx.store(r + 1, std::memory_order_release);
             } else {
                 g_prof_audio_underruns++;
-                if (has_last_block) {
-                    for (size_t s = 0; s < BufferSamples; s++) {
-                        last_block[s] = (int16_t)(last_block[s] * 7 / 8);
-                    }
-                    memcpy(self->m_audioBuffers[self->m_currentBuffer], last_block, BufferSizeBytes);
-                } else {
-                    memset(self->m_audioBuffers[self->m_currentBuffer], 0, BufferSizeBytes);
+                had_underrun = true;
+
+                // Independent ambient continuity synthesis on Core 2:
+                // Instead of abruptly decaying into dead silence during synchronous file loads,
+                // generate a warm, diffused ambient reverb tail from recent audio history.
+                int16_t* dst = self->m_audioBuffers[self->m_currentBuffer];
+
+                for (size_t s = 0; s < BufferSamples; s += 2) {
+                    int16_t s1_l = s_ambient_history[synth_tap1 * 2];
+                    int16_t s1_r = s_ambient_history[synth_tap1 * 2 + 1];
+                    int16_t s2_l = s_ambient_history[synth_tap2 * 2];
+                    int16_t s2_r = s_ambient_history[synth_tap2 * 2 + 1];
+
+                    synth_tap1 = (synth_tap1 + 1) & (AmbientHistoryFrames - 1);
+                    synth_tap2 = (synth_tap2 + 1) & (AmbientHistoryFrames - 1);
+
+                    // Diffused blend of both taps
+                    float in_l = (float)(s1_l + s2_l) * 0.5f * ambient_decay;
+                    float in_r = (float)(s1_r + s2_r) * 0.5f * ambient_decay;
+
+                    // Gentle high-cut low-pass filter (~3.5 kHz) for a warm, natural room reverb tail
+                    ambient_lpf_l += 0.35f * (in_l - ambient_lpf_l);
+                    ambient_lpf_r += 0.35f * (in_r - ambient_lpf_r);
+
+                    // Subtle analog warm room presence (-54 dBFS pinkish dither)
+                    s_noise_seed = s_noise_seed * 1664525u + 1013904223u;
+                    float dither = ((float)((int32_t)s_noise_seed >> 24)) * 0.15f;
+
+                    int32_t out_l = (int32_t)(ambient_lpf_l + dither);
+                    int32_t out_r = (int32_t)(ambient_lpf_r + dither);
+
+                    if (out_l > 32767) out_l = 32767; else if (out_l < -32768) out_l = -32768;
+                    if (out_r > 32767) out_r = 32767; else if (out_r < -32768) out_r = -32768;
+
+                    dst[s]         = (int16_t)out_l;
+                    dst[s + 1]     = (int16_t)out_r;
+                    last_block[s]     = (int16_t)out_l;
+                    last_block[s + 1] = (int16_t)out_r;
                 }
+                has_last_block = true;
+
+                // Graceful natural room decay: 0.985 per 16.67ms buffer (~63% volume over 500ms)
+                ambient_decay *= 0.985f;
+                if (ambient_decay < 0.05f) ambient_decay = 0.05f;
             }
 
             curWb->data_raw = self->m_memPoolPtr;

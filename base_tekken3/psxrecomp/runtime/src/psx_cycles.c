@@ -74,7 +74,13 @@ void psx_event_step_conservative_env_init(void) {
 }
 
 #if defined(__aarch64__) || defined(__SWITCH__)
+static int s_prof_dev_enabled = -1;
 static inline uint64_t prof_get_ticks(void) {
+    if (__builtin_expect(s_prof_dev_enabled < 0, 0)) {
+        const char *e = getenv("PSX_PROFILE_DEVICES");
+        s_prof_dev_enabled = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (__builtin_expect(!s_prof_dev_enabled, 1)) return 0;
     uint64_t cnt;
     __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
     return cnt;

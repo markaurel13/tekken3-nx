@@ -105,13 +105,12 @@ static int load_bank(unsigned p) {
     if(!data) return 0;
     memcpy(data, cached, size);
     int ok=1;
-    unsigned char digest[32];char hash[65];
-    if(ok) {
+    if(ok && tekken3_guest_digests_frozen()) {
+        unsigned char digest[32];char hash[65];
         psx_sha256_compute(data,size,digest);
         for(unsigned i=0;i<32;i++)snprintf(hash+i*2,3,"%02x",digest[i]);
         /* Identity check only; every structural check below still runs. */
-        ok=!tekken3_guest_digests_frozen() ||
-           !strcmp(hash,"a83562e4efd6d6d0db0e23ed8a7a6cb4cb5972e74fad66d873d3122ef81a0be3");
+        ok=!strcmp(hash,"a83562e4efd6d6d0db0e23ed8a7a6cb4cb5972e74fad66d873d3122ef81a0be3");
     }
     ok=ok && rd32(data)==0x3156554a && rd32(data+4)==1 && rd32(data+16)==44100;
     /* Payload contiguity and bounds are still enforced; only the requirement

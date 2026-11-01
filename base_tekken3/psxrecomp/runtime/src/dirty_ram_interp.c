@@ -1373,7 +1373,7 @@ static int interp_enter_compiled(CPUState *cpu, uint32_t target) {
         !g_precise_mode && !g_ls_replay_active) {
         uint32_t ra = cpu->gpr[31];
         uint32_t adv = 48u;
-        if (ra == 0x800FED10u || ra == 0x800FEE40u) {
+        if (ra == 0x800FED10u || ra == 0x800FEE40u || ra == 0x800E1D64u) {
             uint32_t dist = cycles_to_next_event();
             if (dist > 64u && dist != 0xFFFFFFFFu && dist <= 564480u) {
                 adv = dist;
@@ -2458,11 +2458,18 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     int prev_phase = g_exec_phase;
     g_exec_phase = 1;
 #if defined(__SWITCH__)
-    u64 t0 = armGetSystemTick();
+    static int s_prof_dirty_timing = -1;
+    if (__builtin_expect(s_prof_dirty_timing < 0, 0)) {
+        const char *e = getenv("PSX_PROFILE_DIRTY");
+        s_prof_dirty_timing = (e && e[0] == '1') ? 1 : 0;
+    }
+    u64 t0 = s_prof_dirty_timing ? armGetSystemTick() : 0;
     g_dirty_dispatch_calls++;
     int r = dirty_ram_dispatch_inner(cpu, addr, stop_addr);
-    u64 t1 = armGetSystemTick();
-    g_dirty_dispatch_time_ns += armTicksToNs(t1 - t0);
+    if (s_prof_dirty_timing) {
+        u64 t1 = armGetSystemTick();
+        g_dirty_dispatch_time_ns += armTicksToNs(t1 - t0);
+    }
 #else
     struct timespec t0, t1;
     int have_timing = (clock_gettime(CLOCK_MONOTONIC, &t0) == 0);

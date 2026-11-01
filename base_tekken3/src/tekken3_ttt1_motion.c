@@ -70,13 +70,12 @@ static int load_motion(void) {
     if(!f) return 0;
     int ok=fread(idle,1,sizeof(idle),f)==sizeof(idle) && fgetc(f)==EOF;
     fclose(f);
-    if(ok) {
+    if(ok && tekken3_guest_digests_frozen()) {
         unsigned char hash[32];char actual[65];
         psx_sha256_compute((const uint8_t*)idle,sizeof(idle),hash);
         for(unsigned i=0;i<32;i++) snprintf(actual+i*2,3,"%02x",hash[i]);
         /* Identity check only; the pose geometry checks still run. */
-        ok=!tekken3_guest_digests_frozen() ||
-           !strcmp(actual,"02a32dc9b370ed52e9aee028063ca918ff96bedfdf4afaf655368aacf56e0cd2");
+        ok=!strcmp(actual,"02a32dc9b370ed52e9aee028063ca918ff96bedfdf4afaf655368aacf56e0cd2");
     }
     if(ok) { loaded=1; fprintf(stderr,"%s motion: loaded original 100-frame arcade stance\n",tekken3_guest_name_for(0)); }
     return ok;

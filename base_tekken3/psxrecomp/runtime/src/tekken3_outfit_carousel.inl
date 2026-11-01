@@ -53,23 +53,31 @@ static OutfitArt *outfit_load_art(const char *name) {
     OutfitArt *a=(OutfitArt*)calloc(1,sizeof *a);if(!a)return NULL;
     snprintf(a->name,sizeof a->name,"%s",name);
     a->next=outfit_art;outfit_art=a;outfit_art_count++;
+
+    /* Intercept and swap Kazuya's portrait files 1 and 2 directly in NRO */
+    const char *file_name = name;
+    if (!strcmp(name, "kazuya-original-1")) file_name = "kazuya-original-2";
+    else if (!strcmp(name, "kazuya-original-2")) file_name = "kazuya-original-1";
     char path[1400];
 #if defined(PSX_SDL3)
     const char *base=SDL_GetBasePath();
 #else
     char *base=SDL_GetBasePath();
 #endif
-    snprintf(path,sizeof path,"%smods/outfit-menu/%s.rgba",base?base:"",name);
+    snprintf(path,sizeof path,"%smods/outfit-menu/%s.rgba",base?base:"",file_name);
     FILE *f=fopen(path,"rb");
     if(!f) {
-        snprintf(path,sizeof path,"%smods/assets/outfit-menu/%s.rgba",base?base:"",name);
+        snprintf(path,sizeof path,"%smods/assets/outfit-menu/%s.rgba",base?base:"",file_name);
         f=fopen(path,"rb");
     }
     if(!f && !strncmp(name,"jun-arcade-",11))outfit_jun_portrait(a,base);
 #if !defined(PSX_SDL3)
     SDL_free(base);
 #endif
-    if(!f)return a;
+    if(!f) {
+        printf("[OutfitArt] AVISO: no se encontro '%s' (intentado file_name='%s', path='%s')\n", name, file_name, path);
+        return a;
+    }
     char magic[8];uint32_t w=0,h=0;
     if(fread(magic,1,8,f)!=8 || memcmp(magic,"HDRGBA01",8) ||
        fread(&w,4,1,f)!=1 || fread(&h,4,1,f)!=1 || !w || !h ||
@@ -84,6 +92,8 @@ static OutfitArt *outfit_load_art(const char *name) {
             a->pixels[i]=c;
         }
         outfit_art_pixels+=(size_t)w*h;a->loaded=1;data=NULL;
+        printf("[OutfitArt] Retrato '%s' cargado desde '%s' (mapeado file='%s', %ux%u)\n",
+               name, path, file_name, w, h);
     }
     free(data);fclose(f);return a;
 }

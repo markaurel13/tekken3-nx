@@ -362,7 +362,9 @@ void Deko3DRenderer::BeginFrame() {
         m_fenceInFlight[m_frameResIdx] = false;
     }
     u64 t1 = armGetSystemTick();
-    m_timings.gpu_fence_wait_ns += armTicksToNs(t1 - t0);
+    uint64_t gpu_wait_ns = armTicksToNs(t1 - t0);
+    m_timings.gpu_fence_wait_ns += gpu_wait_ns;
+    m_curFrameGpuFenceNs = gpu_wait_ns;
 
     m_cmdBuf = m_cmdBufPool[m_frameResIdx];
     m_vtxRingCpu = m_vtxRingCpuPool[m_frameResIdx];
@@ -376,7 +378,9 @@ void Deko3DRenderer::BeginFrame() {
     u64 t2 = armGetSystemTick();
     m_curSlot = m_queue.acquireImage(m_swapchain);
     u64 t3 = armGetSystemTick();
-    m_timings.acq_wait_ns += armTicksToNs(t3 - t2);
+    uint64_t acq_wait_ns = armTicksToNs(t3 - t2);
+    m_timings.acq_wait_ns += acq_wait_ns;
+    m_curFrameAcqWaitNs = acq_wait_ns;
 
     m_vtxAllocated = 0;
     m_vtxBatchStart = 0;
@@ -1147,8 +1151,12 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
 
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
     u64 t_up_end = armGetSystemTick();
-    m_timings.vram_upload_ns += armTicksToNs(t_up_end - t_up_start);
-    m_timings.vram_upload_bytes += (size_t)orig_w * orig_h * sizeof(uint16_t);
+    uint64_t up_ns = armTicksToNs(t_up_end - t_up_start);
+    size_t up_bytes = (size_t)orig_w * orig_h * sizeof(uint16_t);
+    m_timings.vram_upload_ns += up_ns;
+    m_timings.vram_upload_bytes += up_bytes;
+    m_curFrameVramUploadNs += up_ns;
+    m_curFrameVramUploadBytes += up_bytes;
 }
 
 void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
@@ -1302,6 +1310,11 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     if (!m_initialized) {
         return 0;
     }
+
+    m_curFrameVramUploadNs = 0;
+    m_curFrameVramUploadBytes = 0;
+    m_curFrameGpuFenceNs = 0;
+    m_curFrameAcqWaitNs = 0;
 
     u64 t_prep_start = armGetSystemTick();
 
@@ -1566,19 +1579,19 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     m_queue.presentImage(m_swapchain, m_curSlot);
     u64 t_present_end = armGetSystemTick();
 
-    if (s_present_count <= 10 || (s_present_count % 60) == 0) {
+    if (s_present_count <= 10 || (s_present_count % 120) == 0) {
         printf("[Deko3D] Present #%llu disp=(%u,%u,%ux%u) clip=(%d,%d..%d,%d) off=(%d,%d) d24=%d dis=%d vtx=%u slot=%d\n",
                (unsigned long long)s_present_count,
                di.display_x, di.display_y, w, h,
                m_clipX1, m_clipY1, m_clipX2, m_clipY2,
                m_offsetX, m_offsetY,
                di.depth24, di.disabled, m_vtxAllocated, m_frameResIdx);
-        fflush(stdout);
     }
 
+#ifdef VRAM_WATCHDOG_37F4
     // Monitor CLUT area (y=480..511) for 0x37F4 corruption
     static uint32_t s_last_watchdog_37f4 = 0;
-    if (m_vram && (s_present_count % 10 == 0)) {
+    if (m_vram && (s_present_count % 60 == 0)) {
         uint32_t count_37f4 = 0;
         uint32_t first_x = 0, first_y = 0;
         for (uint32_t cy = 480; cy < 512; cy++) {
@@ -1607,6 +1620,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         }
         s_last_watchdog_37f4 = count_37f4;
     }
+#endif
 
     m_lastFrameVtx = m_vtxAllocated;
     u64 t_fence_start = armGetSystemTick();
@@ -1615,11 +1629,28 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     BeginFrame();
     u64 t_fence_end = armGetSystemTick();
 
-    m_timings.vram_prep_ns += armTicksToNs(t_submit_start - t_prep_start);
-    m_timings.submit_ns += armTicksToNs(t_present_start - t_submit_start);
-    m_timings.present_ns += armTicksToNs(t_present_end - t_present_start);
-    m_timings.fence_wait_ns += armTicksToNs(t_fence_end - t_fence_start);
+    uint64_t prep_ns = armTicksToNs(t_submit_start - t_prep_start);
+    uint64_t sub_ns = armTicksToNs(t_present_start - t_submit_start);
+    uint64_t pres_ns = armTicksToNs(t_present_end - t_present_start);
+    uint64_t fence_ns = armTicksToNs(t_fence_end - t_fence_start);
+
+    m_timings.vram_prep_ns += prep_ns;
+    m_timings.submit_ns += sub_ns;
+    m_timings.present_ns += pres_ns;
+    m_timings.fence_wait_ns += fence_ns;
     m_timings.samples++;
+
+    RenderTimings frameT{};
+    frameT.vram_prep_ns = prep_ns;
+    frameT.submit_ns = sub_ns;
+    frameT.present_ns = pres_ns;
+    frameT.fence_wait_ns = fence_ns;
+    frameT.gpu_fence_wait_ns = m_curFrameGpuFenceNs;
+    frameT.acq_wait_ns = m_curFrameAcqWaitNs;
+    frameT.vram_upload_ns = m_curFrameVramUploadNs;
+    frameT.vram_upload_bytes = m_curFrameVramUploadBytes;
+    frameT.samples = 1;
+    m_lastFrameTimings = frameT;
 
     // Reset de contadores por frame para diagnostico de pausa
     s_frame_vram_transfers = 0;

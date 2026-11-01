@@ -491,7 +491,8 @@ static ssize_t log_devoptab_write(struct _reent *r, void *fd, const char *ptr, s
     (void)r; (void)fd;
     if (s_sd_log) {
         fwrite(ptr, 1, len, s_sd_log);
-        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ERROR", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5)) {
+        if (memmem(ptr, len, "FATAL", 5) || memmem(ptr, len, "ERROR", 5) || memmem(ptr, len, "ABORT", 5) || memmem(ptr, len, "PANIC", 5) ||
+            memmem(ptr, len, "[Outfit", 7) || memmem(ptr, len, "[MOD", 4) || memmem(ptr, len, "TTT1", 4) || memmem(ptr, len, "Kazuya", 6)) {
             fflush(s_sd_log);
             fsync(fileno(s_sd_log));
         }
@@ -1146,10 +1147,45 @@ static void check_combat_stall_diagnostic(uint32_t frame) {
 
 extern "C" void fmv_diag_vblank(uint64_t frame_count);
 
+struct FrameHistogram {
+    uint32_t under_14ms = 0;
+    uint32_t b14_to_16ms = 0;
+    uint32_t b16_to_16_67ms = 0;
+    uint32_t b16_67_to_17_5ms = 0;
+    uint32_t b17_5_to_20ms = 0;
+    uint32_t over_20ms = 0;
+    uint32_t dropped_frames = 0;
+    double max_frame_ms = 0.0;
+    uint64_t max_frame_num = 0;
+};
+
+struct SlowFrameRecord {
+    uint64_t frame_num;
+    float total_ms;
+    float guest_ms;
+    float cd_ms;
+    uint16_t cd_calls;
+    uint16_t vram_kb;
+    float vram_up_ms;
+    float loop_ms;
+    float acq_wait_ms;
+    float gpu_fence_ms;
+    uint32_t irq_checks;
+};
+
+static constexpr size_t MAX_SLOW_RECORDS_PER_WIN = 32;
+static FrameHistogram s_frame_hist{};
+static SlowFrameRecord s_slow_records[MAX_SLOW_RECORDS_PER_WIN]{};
+static size_t s_slow_records_count = 0;
+static uint64_t s_last_frame_cd_ns = 0;
+static uint64_t s_last_frame_cd_calls = 0;
+static uint64_t s_last_frame_irq_checks = 0;
+
 static void switch_vblank_callback(void) {
     u64 frame_start_tick = armGetSystemTick();
+    u64 cur_guest_ns = (s_last_cb_exit_tick != 0) ? armTicksToNs(frame_start_tick - s_last_cb_exit_tick) : 0;
     if (s_last_cb_exit_tick != 0) {
-        s_win_guest_ns += armTicksToNs(frame_start_tick - s_last_cb_exit_tick);
+        s_win_guest_ns += cur_guest_ns;
     }
     if (s_prof_last_cb_end) s_prof_guest_ticks += frame_start_tick - s_prof_last_cb_end;
     int prof_prev_phase = g_exec_phase;
@@ -1191,7 +1227,8 @@ static void switch_vblank_callback(void) {
 
     const uint64_t report_interval = 120;
 
-    if (s_frame_count <= 5 || s_frame_count == 60 || (s_frame_count % report_interval) == 0) {
+    // Volcado diagnóstico inicial (primeros 5 frames y frame 60) sin interrumpir combate cada 120 frames
+    if (s_frame_count <= 5 || s_frame_count == 60) {
         extern uint64_t g_dirty_dispatch_calls;
         extern uint64_t g_dirty_dispatch_handled;
         extern uint64_t g_dirty_dispatch_rejected;
@@ -1373,13 +1410,6 @@ static void switch_vblank_callback(void) {
         if (s_sd_log) fflush(s_sd_log);
     }
 
-    // Flush regular cada 60 frames (1 segundo) para no perder logs ante cualquier freeze inesperado
-    static uint32_t s_regular_flush_counter = 0;
-    if (++s_regular_flush_counter >= 60) {
-        s_regular_flush_counter = 0;
-        if (s_sd_log) fflush(s_sd_log);
-    }
-
     // 1. Actualizar mandos y estados de botones siempre primero
     u64 input_start = armGetSystemTick();
     switch_input_update();
@@ -1461,6 +1491,93 @@ static void switch_vblank_callback(void) {
     s_win_samples++;
     s_last_cb_exit_tick = frame_end_tick;
 
+    // --- Diagnóstico por frame en memoria (cero I/O durante combate) ---
+    u64 cur_loop_ns = total_cb_ns;
+    u64 cur_frame_ns = cur_guest_ns + cur_loop_ns;
+    double cur_frame_ms = (double)cur_frame_ns / 1e6;
+    double cur_guest_ms = (double)cur_guest_ns / 1e6;
+    double cur_loop_ms = (double)cur_loop_ns / 1e6;
+
+    uint64_t cd_ns_now = g_prof_iso_raw_ns + g_prof_iso_cook_ns;
+    uint64_t cd_calls_now = g_prof_iso_raw_calls + g_prof_iso_cook_calls;
+    uint64_t frame_cd_ns = (cd_ns_now >= s_last_frame_cd_ns) ? (cd_ns_now - s_last_frame_cd_ns) : 0;
+    uint64_t frame_cd_calls = (cd_calls_now >= s_last_frame_cd_calls) ? (cd_calls_now - s_last_frame_cd_calls) : 0;
+    s_last_frame_cd_ns = cd_ns_now;
+    s_last_frame_cd_calls = cd_calls_now;
+    double cur_cd_ms = (double)frame_cd_ns / 1e6;
+
+    uint64_t irq_checks_now = 0, irq_dummy = 0;
+    psx_interrupt_check_path_diag(&irq_checks_now, &irq_dummy, &irq_dummy, &irq_dummy, &irq_dummy, &irq_dummy);
+    uint64_t frame_irq_checks = (irq_checks_now >= s_last_frame_irq_checks) ? (irq_checks_now - s_last_frame_irq_checks) : 0;
+    s_last_frame_irq_checks = irq_checks_now;
+
+    auto frame_rt = Deko3DRenderer::Instance().GetLastFrameTimings();
+    double cur_vram_up_ms = (double)frame_rt.vram_upload_ns / 1e6;
+    uint32_t cur_vram_up_kb = (uint32_t)(frame_rt.vram_upload_bytes / 1024);
+    double cur_acq_wait_ms = (double)frame_rt.acq_wait_ns / 1e6;
+    double cur_gpu_fence_ms = (double)frame_rt.gpu_fence_wait_ns / 1e6;
+
+    if (cur_frame_ms < 14.0) {
+        s_frame_hist.under_14ms++;
+    } else if (cur_frame_ms < 16.0) {
+        s_frame_hist.b14_to_16ms++;
+    } else if (cur_frame_ms <= 16.67) {
+        s_frame_hist.b16_to_16_67ms++;
+    } else if (cur_frame_ms < 17.5) {
+        s_frame_hist.b16_67_to_17_5ms++; // Jitter normal de sincronización VSync (no es caída)
+    } else if (cur_frame_ms < 20.0) {
+        s_frame_hist.b17_5_to_20ms++;
+        s_frame_hist.dropped_frames++;
+    } else {
+        s_frame_hist.over_20ms++;
+        s_frame_hist.dropped_frames++;
+    }
+
+    if (cur_frame_ms > s_frame_hist.max_frame_ms) {
+        s_frame_hist.max_frame_ms = cur_frame_ms;
+        s_frame_hist.max_frame_num = s_frame_count;
+    }
+
+    if (cur_frame_ms > 17.5 && s_frame_count > 10) {
+        if (s_slow_records_count < MAX_SLOW_RECORDS_PER_WIN) {
+            SlowFrameRecord& rec = s_slow_records[s_slow_records_count++];
+            rec.frame_num = s_frame_count;
+            rec.total_ms = (float)cur_frame_ms;
+            rec.guest_ms = (float)cur_guest_ms;
+            rec.cd_ms = (float)cur_cd_ms;
+            rec.cd_calls = (uint16_t)frame_cd_calls;
+            rec.vram_kb = (uint16_t)cur_vram_up_kb;
+            rec.vram_up_ms = (float)cur_vram_up_ms;
+            rec.loop_ms = (float)cur_loop_ms;
+            rec.acq_wait_ms = (float)cur_acq_wait_ms;
+            rec.gpu_fence_ms = (float)cur_gpu_fence_ms;
+            rec.irq_checks = (uint32_t)frame_irq_checks;
+        } else {
+            size_t min_idx = 0;
+            float min_ms = s_slow_records[0].total_ms;
+            for (size_t i = 1; i < MAX_SLOW_RECORDS_PER_WIN; ++i) {
+                if (s_slow_records[i].total_ms < min_ms) {
+                    min_ms = s_slow_records[i].total_ms;
+                    min_idx = i;
+                }
+            }
+            if (cur_frame_ms > min_ms) {
+                SlowFrameRecord& rec = s_slow_records[min_idx];
+                rec.frame_num = s_frame_count;
+                rec.total_ms = (float)cur_frame_ms;
+                rec.guest_ms = (float)cur_guest_ms;
+                rec.cd_ms = (float)cur_cd_ms;
+                rec.cd_calls = (uint16_t)frame_cd_calls;
+                rec.vram_kb = (uint16_t)cur_vram_up_kb;
+                rec.vram_up_ms = (float)cur_vram_up_ms;
+                rec.loop_ms = (float)cur_loop_ms;
+                rec.acq_wait_ms = (float)cur_acq_wait_ms;
+                rec.gpu_fence_ms = (float)cur_gpu_fence_ms;
+                rec.irq_checks = (uint32_t)frame_irq_checks;
+            }
+        }
+    }
+
     if (s_frame_count <= 5 || (s_frame_count % report_interval) == 0) {
         double denom = s_win_samples ? (double)s_win_samples : 1.0;
         auto rt = Deko3DRenderer::Instance().GetAndResetRenderTimings();
@@ -1484,6 +1601,40 @@ static void switch_vblank_callback(void) {
                (double)rt.vram_upload_ns / rt_denom / 1e6,
                (unsigned)((double)rt.vram_upload_bytes / rt_denom / 1024.0));
 
+        printf("[FrameHistogram] win%llu: <14ms:%u | 14-16ms:%u | 16-16.67ms:%u | 16.67-17.5ms(jitter):%u | 17.5-20ms:%u | >20ms:%u | drops(>17.5ms):%u/%u (%.1f%%) | max=%.2fms (at f=%llu)\n",
+               (unsigned long long)report_interval,
+               s_frame_hist.under_14ms, s_frame_hist.b14_to_16ms, s_frame_hist.b16_to_16_67ms,
+               s_frame_hist.b16_67_to_17_5ms, s_frame_hist.b17_5_to_20ms, s_frame_hist.over_20ms,
+               s_frame_hist.dropped_frames, (unsigned)denom,
+               denom > 0 ? (100.0 * s_frame_hist.dropped_frames / denom) : 0.0,
+               s_frame_hist.max_frame_ms, (unsigned long long)s_frame_hist.max_frame_num);
+
+        if (s_slow_records_count > 0) {
+            for (size_t i = 0; i < s_slow_records_count; ++i) {
+                for (size_t j = i + 1; j < s_slow_records_count; ++j) {
+                    if (s_slow_records[j].total_ms > s_slow_records[i].total_ms) {
+                        SlowFrameRecord tmp = s_slow_records[i];
+                        s_slow_records[i] = s_slow_records[j];
+                        s_slow_records[j] = tmp;
+                    }
+                }
+            }
+            size_t to_print = s_slow_records_count > 8 ? 8 : s_slow_records_count;
+            printf("[SlowFramesDetail] top %zu de %u frame(s) >17.5ms en esta ventana:\n",
+                   to_print, s_frame_hist.dropped_frames);
+            for (size_t i = 0; i < to_print; ++i) {
+                const auto& sf = s_slow_records[i];
+                printf("  [Drop #%zu] f=%llu tot=%.2fms | guest=%.2fms (irq=%u) | cd_io=%.2fms (calls=%u) | vram_up=%.2fms (%uKB) | loop=%.2fms (acq=%.2f gpu=%.2f)\n",
+                       i + 1, (unsigned long long)sf.frame_num, sf.total_ms,
+                       sf.guest_ms, sf.irq_checks,
+                       sf.cd_ms, (unsigned)sf.cd_calls,
+                       sf.vram_up_ms, (unsigned)sf.vram_kb,
+                       sf.loop_ms, sf.acq_wait_ms, sf.gpu_fence_ms);
+            }
+        }
+        s_frame_hist = {};
+        s_slow_records_count = 0;
+
         s_win_loop_ns = 0;
         s_win_input_ns = 0;
         s_win_audio_ns = 0;
@@ -1492,10 +1643,11 @@ static void switch_vblank_callback(void) {
         s_win_guest_ns = 0;
         s_win_samples = 0;
     }
-    if ((s_frame_count % report_interval) == 0) {
-        prof_report(s_frame_count);
-        tek_block_prof_report_and_reset(s_frame_count);
-    }
+    // Volcado de perfiles periódico desactivado durante combate para evitar micro-tirones
+    // if ((s_frame_count % report_interval) == 0) {
+    //     prof_report(s_frame_count);
+    //     tek_block_prof_report_and_reset(s_frame_count);
+    // }
 }
 
 // ============================================================================

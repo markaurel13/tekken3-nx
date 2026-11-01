@@ -9034,7 +9034,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
          * call (initial entry + each tail-call re-dispatch). a0..a3
          * reflect the args being passed for THIS iteration. */
         fntrace_record(cpu, addr);
-#ifdef __SWITCH__
+#ifdef PSX_PROFILE_FMV_DIAG
         extern void fmv_diag_pre_dispatch(CPUState* cpu, uint32_t addr);
         extern void fmv_diag_post_dispatch(CPUState* cpu, uint32_t addr);
         fmv_diag_pre_dispatch(cpu, addr);
@@ -9192,7 +9192,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
                 psx_unknown_dispatch(cpu, addr, phys);
             }
         }
-#ifdef __SWITCH__
+#ifdef PSX_PROFILE_FMV_DIAG
         fmv_diag_post_dispatch(cpu, addr);
 #endif
         /* Fix B: if the function just RETURNED via the recompiled exception

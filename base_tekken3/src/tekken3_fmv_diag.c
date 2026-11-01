@@ -29,6 +29,7 @@ static uint32_t s_current_vblank_loop_iters = 0;
 static u64 s_vsync_start_tick = 0;
 
 void fmv_diag_pre_dispatch(CPUState* cpu, uint32_t addr) {
+#ifdef PSX_PROFILE_FMV_DIAG
     if (addr == 0x800859A8u) {
         s_vsync_start_tick = armGetSystemTick();
         s_win.vsync_total_calls++;
@@ -77,15 +78,22 @@ void fmv_diag_pre_dispatch(CPUState* cpu, uint32_t addr) {
     } else if (addr == 0x800FED10u || addr == 0x800FECE8u) {
         s_current_vblank_loop_iters++;
     }
+#else
+    (void)cpu; (void)addr;
+#endif
 }
 
 void fmv_diag_post_dispatch(CPUState* cpu, uint32_t addr) {
     (void)cpu;
+#ifdef PSX_PROFILE_FMV_DIAG
     if (addr == 0x800859A8u && s_vsync_start_tick != 0) {
         u64 end_tick = armGetSystemTick();
         s_win.vsync_total_host_ns += armTicksToNs(end_tick - s_vsync_start_tick);
         s_vsync_start_tick = 0;
     }
+#else
+    (void)addr;
+#endif
 }
 
 void fmv_diag_vblank(uint64_t frame_count) {

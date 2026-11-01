@@ -73,6 +73,19 @@
 #define BUFFER_BYTES 0x30000u        /* packets of one OT buffer */
 #define FLOOR_BYTES 0x10000u         /* of which the floor's (B87: and its widened copies) */
 
+static inline uint64_t tek_get_ticks(void) {
+#if defined(__aarch64__) || defined(__SWITCH__)
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return cnt;
+#else
+    return 0;
+#endif
+}
+static inline double tek_ticks_to_ms(uint64_t ticks) {
+    return (double)ticks * (625.0 / 12.0) / 1e6;
+}
+
 /* PS1 addresses */
 #define ARENA        0x800ADC84u
 #define CAMERA       0x800A85C0u
@@ -961,9 +974,11 @@ static int pack_ttt(Pack *p) {
 }
 
 static int pack_load_from(int source, int stage) {
+    uint64_t t_start = tek_get_ticks();
     char path[1024];
     long size = 0;
     uint8_t *b = pack_read(source, stage, &size, path, sizeof path);
+    uint64_t t_read = tek_get_ticks();
     if (!b) return 0;
     pack_free();
     Pack *p = &s_pack;
@@ -1013,6 +1028,7 @@ static int pack_load_from(int source, int stage) {
         }
         o += 2u * r[2] * r[3];
     }
+    uint64_t t_vram = tek_get_ticks();
     s_pack_generation++;
     /* [PackVRAM_Diag]: the rectangles this pack holds in the upper half, at
      * each load. Runtime writes ([HighVram_CLASH]) are checked against
@@ -1029,7 +1045,6 @@ static int pack_load_from(int source, int stage) {
             }
             fprintf(stdout, p->aframes ? " anim=(%d,%d %ux%u f%u t%u)\n" : "\n",
                     p->ax, p->ay, p->aw, p->ah, p->aframes, p->aperiod);
-            fflush(stdout);
         }
     }
     /* objects: models, then the drawing calls (T3's stages 3 and 11; TTT's
@@ -1070,7 +1085,13 @@ static int pack_load_from(int source, int stage) {
                 "light beams %s)\n", stage, path, size, (unsigned)n, p->gfloor ? "yes" : "no",
                 p->storm ? "yes" : "no", p->nthunder, p->nlayout, p->tanm ? "yes" : "no", p->lite ? "yes" : "no",
                 p->part ? "yes" : "no", p->glow ? "yes" : "no");
-        fflush(stdout);
+        uint64_t t_end = tek_get_ticks();
+        fprintf(stdout, "[MOD_LOAD_STAGE] stg=%d(%s) rects=%u read=%.2fms vram_up=%.2fms total=%.2fms (file=%s)\n",
+                stage, "TTT", (unsigned)n,
+                tek_ticks_to_ms(t_read - t_start),
+                tek_ticks_to_ms(t_vram - t_read),
+                tek_ticks_to_ms(t_end - t_start),
+                path);
         storm_reset();
         ttt_anim_reset();
         return 1;
@@ -1099,12 +1120,35 @@ static int pack_load_from(int source, int stage) {
     p->fog = (const uint8_t *)(p->sqrt1 + 192); p->sqrt2 = (const int16_t *)(p->fog + 1024);
     fprintf(stdout, "arcade stages: stage %d loaded from %s (%ld bytes, %u textures and palettes, %u objects, "
             "%u animation frames)\n", stage, path, size, (unsigned)n, p->nlayout, p->aframes);
-    fflush(stdout);
+    uint64_t t_end = tek_get_ticks();
+    fprintf(stdout, "[MOD_LOAD_STAGE] stg=%d(%s) rects=%u read=%.2fms vram_up=%.2fms total=%.2fms (file=%s)\n",
+            stage, "T3", (unsigned)n,
+            tek_ticks_to_ms(t_read - t_start),
+            tek_ticks_to_ms(t_vram - t_read),
+            tek_ticks_to_ms(t_end - t_start),
+            path);
     anim_reset();
     return 1;
 }
 
 static int pack_load(int arena) { return pack_load_from(TEKKEN3_STAGE_T3, arena); }
+
+void tekken3_arcade_stages_preload(int source, int stage) {
+    if (!s_on || !psx_mod_gpu_high_vram_ready()) return;
+    if (source == TEKKEN3_STAGE_TTT && stage >= 0) {
+        if (s_pack.source != TEKKEN3_STAGE_TTT || s_pack.stage != stage) {
+            pack_load_from(TEKKEN3_STAGE_TTT, stage);
+            s_tried_ttt = stage;
+            s_tried = -1;
+        }
+    } else if (source == TEKKEN3_STAGE_T3 && stage >= 0 && stage_supported(stage)) {
+        if (s_pack.source != TEKKEN3_STAGE_T3 || s_pack.stage != stage) {
+            pack_load(stage);
+            s_tried = stage;
+            s_tried_ttt = -1;
+        }
+    }
+}
 
 /* The TTT stage this frame wants: a cinematic's, else the STAGES row's for
  * the fight; -1 none. */
@@ -1135,6 +1179,11 @@ static int active(void) {
     if (psx_mod_read_byte(NO_STAGE)) return 0;
     uint32_t mode = psx_mod_read_word(MODE);
     if (mode == 7 || mode == 8) return 0;
+    /* 3D stages only exist during a fight (screen 8) or the Embu attract demo (screen 6).
+     * Guard transitions to menus (screen 4), loading (screen 11), select (screen 9),
+     * transition state (screen 2), results/records (screen 14/16/17), etc. */
+    int screen = (int16_t)psx_mod_read_half(0x800AE204u);
+    if (screen != 8 && screen != 6) return 0;
     /* Guard uninitialized camera on frame 0 to avoid 1-frame stage glitch before zoom starts */
     if (psx_mod_read_word(CAMERA + 0x14) == 0 && psx_mod_read_word(CAMERA + 0x1C) == 0) return 0;
     /* The dark arena (True Ogre's fight) keeps the PS1's flat stage, unless
@@ -4541,6 +4590,7 @@ static void stage_draw(CPUState *cpu) {
 }
 
 static void stage_frame(CPUState *cpu) {
+    if (!active()) return;
     uint64_t t = now_ns();
     stage_draw(cpu);
     uint64_t dt = now_ns() - t;
@@ -4621,12 +4671,14 @@ void __wrap_func_8006D014(CPUState *cpu) {
         s_frame_stage_stats.last_slice_ret = s_ret;
         s_frame_stage_stats.last_slice_sp = cpu->gpr[29];
         s_frame_stage_stats.last_slice_s_sp = s_sp;
+#ifdef DEBUG_STAGE_SLICE
         static uint32_t s_wrap_slice_count = 0;
         if (++s_wrap_slice_count <= 10 || (s_wrap_slice_count % 120) == 0) {
             fprintf(stdout, "[ArcadeStages_INFO] 0x8006D014 slice return: pc=0x%08X (expected s_ret=0x%08X, sp=0x%08X s_sp=0x%08X)\n",
                     cpu->pc, s_ret, cpu->gpr[29], s_sp);
             fflush(stdout);
         }
+#endif
     }
 }
 

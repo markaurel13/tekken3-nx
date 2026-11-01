@@ -49,6 +49,7 @@
 #include "tekken3_moveset_draw.h"
 #include "memcard.h"
 #include "mod_plugins.h"
+#include "tekken3_arcade_stages.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@
 #include <time.h>
 
 extern void tekken3_ttt_music_stage_preload(int stage);
+extern void tekken3_ttt1_preload_fight(void);
 
 enum { SCREEN = 0x800ae204, OPTIONS = 5, FIGHT = 8, LOADING = 11, MENU = 4, MODE = 0x800afa88,
        ARENA = 0x800adc84, ARENA_COPY = 0x800afaa2, DARK_ARENA = 0x800afaa0, NO_STAGE = 0x800adca4,
@@ -219,6 +221,8 @@ void tekken3_stage_source_decide(unsigned mode, int player, const char *guest, i
         if (decided == TEKKEN3_STAGE_TTT && decided_stage >= 0) {
             tekken3_ttt_music_stage_preload(decided_stage);
         }
+        tekken3_arcade_stages_preload(decided, decided == TEKKEN3_STAGE_TTT ? decided_stage : decided_arena);
+        tekken3_ttt1_preload_fight();
         return;
     }
     int s = effective(), stage = -1;
@@ -251,6 +255,8 @@ void tekken3_stage_source_decide(unsigned mode, int player, const char *guest, i
     if (decided == TEKKEN3_STAGE_TTT && decided_stage >= 0) {
         tekken3_ttt_music_stage_preload(decided_stage);
     }
+    tekken3_arcade_stages_preload(decided, decided == TEKKEN3_STAGE_TTT ? decided_stage : decided_arena);
+    tekken3_ttt1_preload_fight();
 }
 int tekken3_stage_source_load_arena(void) { return moving ? decided_arena : -1; }
 
@@ -262,7 +268,7 @@ void tekken3_stage_source_tick(void) {
      * section 74). Any screen but the fight, the loading screen, the
      * selector (9) or screen 1 ends the match. */
     static uint16_t was_human[2];
-    if (screen == MENU) { decided = -1; moving = 0; }
+    if (screen == MENU || screen == 2) { decided = -1; moving = 0; }
     /* Gon's or Dr. B's arena given a TTT stage: the arena of that stage,
      * every VBlank until the fight (as the STAGE line, F18). */
     if (moving && screen == FIGHT) moving = 0;

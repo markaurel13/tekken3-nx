@@ -120,10 +120,12 @@ static void spu_diag_note_write(uint32_t addr, uint32_t value)
             s_diag.kon_pc[s_diag.kon_seq & 7u]  = pc;
             s_diag.kon_val[s_diag.kon_seq & 7u] = value & 0xFFFFu;
             s_diag.kon_seq++;
+#ifdef DEBUG_SPU_VERBOSE
             if (s_diag.kon_seq <= 64u)
                 printf("[SPUKeyOn] #%u pc=0x%08X mask=0x%04X val32=0x%08X reg=0x%08X\n",
                        s_diag.kon_seq, pc, (unsigned)(value & 0xFFFFu),
                        (unsigned)value, (unsigned)addr);
+#endif
         }
     } else if (addr < 0x1F801D90u) {
         s_diag.w_keyoff++;
@@ -518,6 +520,8 @@ static inline int16_t cd_input_volume(uint16_t raw) {
     return (int16_t)raw;
 }
 
+static int16_t s_cd_prev_l = 0, s_cd_prev_r = 0;
+
 void spu_cd_audio_reset(void) {
     memset(cd_ring, 0, sizeof(cd_ring));
     cd_read_pos = 0;
@@ -526,6 +530,8 @@ void spu_cd_audio_reset(void) {
     cd_push_frames = 0;
     cd_overflow_frames = 0;
     cd_underflow_frames = 0;
+    s_cd_prev_l = 0;
+    s_cd_prev_r = 0;
 }
 
 void spu_cd_audio_push(const int16_t* stereo, int frames) {
@@ -564,9 +570,18 @@ void spu_cd_audio_push(const int16_t* stereo, int frames) {
 }
 
 static int cd_audio_pop(int16_t* left, int16_t* right) {
-    if (cd_frame_count == 0) return 0;
-    *left = cd_ring[cd_read_pos * 2u + 0u];
-    *right = cd_ring[cd_read_pos * 2u + 1u];
+    if (cd_frame_count == 0) {
+        /* Underflow smoothing: decay toward zero instead of hard cut to eliminate clicks/bursts */
+        s_cd_prev_l = (int16_t)(((int32_t)s_cd_prev_l * 7) / 8);
+        s_cd_prev_r = (int16_t)(((int32_t)s_cd_prev_r * 7) / 8);
+        *left = s_cd_prev_l;
+        *right = s_cd_prev_r;
+        return 0;
+    }
+    s_cd_prev_l = cd_ring[cd_read_pos * 2u + 0u];
+    s_cd_prev_r = cd_ring[cd_read_pos * 2u + 1u];
+    *left = s_cd_prev_l;
+    *right = s_cd_prev_r;
     cd_read_pos = (cd_read_pos + 1u) % SPU_CD_RING_FRAMES;
     cd_frame_count--;
     return 1;

@@ -189,8 +189,6 @@ void __wrap_func_80040DF4(CPUState *cpu) {
             if(!group) {
                 for(unsigned c=0;c<CHANNELS;c++)
                     if(channels[c].pcm && channels[c].index==index)memset(&channels[c],0,sizeof channels[c]);
-                static unsigned stopped;
-                if(stopped<400){stopped++;fprintf(stderr,"TTT1 characters: P%u stop %04X (index %u)\n",p+1,command,index);}
                 cpu->pc=cpu->gpr[31];return;
             }
             /* A marked TTT1 script sound. A script can make the other
@@ -198,8 +196,6 @@ void __wrap_func_80040DF4(CPUState *cpu) {
              * guest's own pack. */
             if(find(p,index,&s) || find(p^1,index,&s)) {
                 play(&s,index);
-                static unsigned logged;
-                if(logged<400){logged++;fprintf(stderr,"TTT1 characters: P%u sound %04X (index %u)\n",p+1,command,index);}
             }
             cpu->pc=cpu->gpr[31];return;
         }
@@ -213,8 +209,6 @@ void __wrap_func_80040DF4(CPUState *cpu) {
          * victim's own pack holds TTT1's clang. */
         if(ra==METAL_HIT_RETURN && p<2 && metal_guest(p) && find(p,index,&s)) {
             play(&s,index);
-            static unsigned said;
-            if(said<400){said++;fprintf(stderr,"TTT1 characters: P%u metal hit %04X (TTT1)\n",p+1,command);}
             cpu->pc=cpu->gpr[31];return;
         }
         /* Unknown played by the CPU switches under pressure, guarding too. */
@@ -223,8 +217,6 @@ void __wrap_func_80040DF4(CPUState *cpu) {
                   ((ra==0x8004127c || ra==0x8004129c) && guest_move(p^1))?(int)(p^1):-1;
         if(owner>=0 && find((unsigned)owner,index,&s)) {
             play(&s,index);
-            static unsigned logged;
-            if(logged<400){logged++;fprintf(stderr,"TTT1 characters: P%u engine sound %04X (TTT1)\n",p+1,command);}
             cpu->pc=cpu->gpr[31];return;
         }
     }

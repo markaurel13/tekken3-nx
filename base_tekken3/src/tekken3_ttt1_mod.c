@@ -352,6 +352,8 @@ static int read_model(unsigned player) {
     m->first_block=word(m->file+24); m->payload=word(m->file+16);
     fprintf(stderr,"%s model: costume %u, %u B, m->textures %u B, %u relocations\n",
             name_for(player),costume,m->size,m->textures_size,m->reloc_count);
+    printf("[OutfitModel] %s: modelo costume %u cargado (archivo=%s, textures=%s, tam=%u)\n",
+           name_for(player), costume, model, textures, m->size);
     TRACE("T1|model_bytes=%u|texture_bytes=%u|m->reloc_count=%u\n",
           m->size,m->textures_size,m->reloc_count);
     TRACE("T2|rows=%u|scale=%u|magic=%08X|word4=%08X\n",
@@ -402,6 +404,13 @@ static void load_assets(void) {
  * that fails its checks is reported and never matched; the staged catalogue
  * only holds imports that passed them. */
 static void follow_models(void) {
+    uint32_t state = psx_mod_read_word(0x800ae204);
+    if (state == 9 || state == 10) {
+        /* In character/team select (states 9 and 10), skip loading 3D combat models
+         * while on the selection screen to guarantee rock-solid 60 FPS without cursor lag.
+         * The confirmed character's model is loaded when entering the match (states 11 / 8). */
+        return;
+    }
     for(unsigned p=0;p<2;p++) {
         unsigned generation=devil_jin[p]?DEVIL_JIN_GENERATION:tekken3_guest_generation(p),
                  costume=devil_jin[p]?0:tekken3_guest_costume(p);
@@ -1995,11 +2004,13 @@ static void guest_tick(void) {
     if (!control) return;
     /* The loading screen names each player's fighter and costume: the
      * request only stands for Jin in his punch costume. */
-    if(psx_mod_read_word(0x800ae204)==11)
+    if(psx_mod_read_word(0x800ae204)==11) {
+        tekken3_ttt1_preload_fight();
         for(unsigned p=0;p<2;p++)
             if(devil_jin[p] && (psx_mod_read_half(0x800add5c+p*2)!=JIN_ID ||
                                 (psx_mod_read_half(0x800add98+p*2)&3)!=0))
                 tekken3_devil_jin_set(p,0);
+    }
     follow_models();
     embu_tick();
     tekken3_ttt1_selector_tick();

@@ -19,6 +19,7 @@ extern "C" {
  * Forced, stage 4's storm makes no flash of its own: tekken3_ttt_stage_flash
  * drives it. The caller releases it when its scene ends. */
 int tekken3_ttt_stage_force(int stage);
+void tekken3_arcade_stages_preload(int source, int stage);
 
 /* The upper VRAM half the loaded stage holds: a value that changes with each
  * stage pack loaded or freed, and whether rectangle x, y, w, h (y 512..1023)

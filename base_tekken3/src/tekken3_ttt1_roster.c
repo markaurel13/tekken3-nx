@@ -529,12 +529,24 @@ static void patch_name_lookup(void) {
     const uint32_t lookup[5]={0x00031880,0x3c020000|hi,0x00431021,0x8c420000|lo,0};
     for(unsigned i=0;i<5;i++)psx_mod_write_code_word(0x8010e8b4+i*4,lookup[i]);
 }
+extern const unsigned char *switch_cached_file_get(const char *path, size_t *out_size);
+
 static void write_names(void) {
+    static unsigned last_id[2] = {~0u, ~0u};
+    unsigned current_id[2];
+    current_id[0] = psx_mod_read_word(0x80118668);
+    current_id[1] = psx_mod_read_word(0x80118668 + 0x7c);
+    if (current_id[0] == last_id[0] && current_id[1] == last_id[1]) {
+        return;
+    }
+    last_id[0] = current_id[0];
+    last_id[1] = current_id[1];
+
     for(unsigned id=0;id<NAME_TABLE_IDS;id++)
         psx_mod_write_word(name_table+id*4,((id<<3)&0x80)|((id&15)<<12));
     unsigned shown[2]={~0u,~0u};
     for(unsigned p=0;p<2;p++) {
-        unsigned id=psx_mod_read_word(0x80118668+p*0x7c);
+        unsigned id=current_id[p];
         int k=tekken3_guest_character(id);
         if(k<0)continue;
         unsigned row=NAME_ROW+p;
@@ -762,6 +774,25 @@ static void initialize(void) {
     if(attempted)return;attempted=1;
     select_guest();
     if(!roster_count){fprintf(stderr,"TTT1 characters: no guest passed interface validation\n");return;}
+
+    /* Pre-warm RAM file cache for all guest models so selector cursor moves are instantaneous */
+    const char *root = tekken3_ttt1_asset_root();
+    if (root && *root) {
+        static const char *const suffixes[] = {
+            "arcade-P1.3dm", "arcade-P1.relocs", "arcade-P1.tim",
+            "arcade-P1.face", "arcade-P1.acc",
+            "arcade-P2.3dm", "arcade-P2.relocs", "arcade-P2.tim",
+            "arcade-P2.face", "arcade-P2.acc"
+        };
+        char path[1024];
+        for (unsigned k = 0; k < roster_count; k++) {
+            for (size_t s = 0; s < sizeof(suffixes)/sizeof(suffixes[0]); s++) {
+                snprintf(path, sizeof(path), "%s/%s-%s", root, roster[k].prefix, suffixes[s]);
+                size_t sz = 0;
+                (void)switch_cached_file_get(path, &sz);
+            }
+        }
+    }
     uint32_t allocation=psx_mod_alloc_guest_memory(0x41000,16);
     if(!allocation){fprintf(stderr,"TTT1 characters: roster allocation failed\n");return;}
     uint32_t area=(allocation+65535u)&~65535u;

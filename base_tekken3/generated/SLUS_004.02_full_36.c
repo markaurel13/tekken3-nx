@@ -24284,6 +24284,27 @@ void func_800859A8(CPUState* cpu)
             default: break;
         }
     }
+    /* Fast-path para VSync(-1) (modo consulta de contador sin bucle de espera):
+     * cuando a0 == -1, simplemente lee el contador de VSync en 0x8009AC68 y retorna a $ra */
+    if (__builtin_expect(cpu->gpr[4] == 0xFFFFFFFFu, 1)) {
+        uint32_t _ra = cpu->gpr[31];
+        uint32_t adv = 48u;
+        if (_ra == 0x800FED10u || _ra == 0x800FEE40u || _ra == 0x800E1D64u) {
+            extern uint32_t cycles_to_next_event(void);
+            uint32_t dist = cycles_to_next_event();
+            if (dist > 64u && dist != 0xFFFFFFFFu && dist <= 564480u) {
+                adv = dist;
+            }
+        }
+        extern void psx_advance_cycles(uint32_t count);
+        psx_advance_cycles(adv);
+        cpu->gpr[5] = cpu->read_word(0x80099B34u);
+        cpu->gpr[3] = cpu->read_word(0x80099B38u);
+        cpu->gpr[2] = cpu->read_word(0x8009AC68u);
+        psx_check_interrupts_at(cpu, _ra);
+        cpu->pc = _ra;
+        return;
+    }
     debug_server_log_call_entry(0x800859A8u);
     /* Address: 0x800859A8, Size: 376 bytes, Blocks: 19 */
 

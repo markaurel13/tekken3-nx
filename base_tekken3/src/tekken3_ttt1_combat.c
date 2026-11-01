@@ -49,6 +49,19 @@ extern void __real_func_8002E0BC(CPUState *cpu);
 extern void __real_func_8002A914(CPUState *cpu);
 extern void __real_func_8002D07C(CPUState *cpu);
 extern void func_8002CA84(CPUState *cpu);
+
+static inline uint64_t tek_get_ticks(void) {
+#if defined(__aarch64__) || defined(__SWITCH__)
+    uint64_t cnt;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
+    return cnt;
+#else
+    return 0;
+#endif
+}
+static inline double tek_ticks_to_ms(uint64_t ticks) {
+    return (double)ticks * (625.0 / 12.0) / 1e6;
+}
 /* Each player's guest has its own slot: player 1's guest is slot 0, player
  * 2's slot 1, so the two can be different characters. Guest move IDs are
  * 8192+i for slot 0 and 8192+4096+i for slot 1: a move that animates the
@@ -761,6 +774,7 @@ static void gon_breath_rule(unsigned player) {
         return;
     }
 }
+static void preload_player_hit_effects(void);
 static int ready(unsigned player) {
     /* Diagnostic ponctuel sous TEKKEN3_GUEST_WHY=1 : dire QUELLE garde bloque.
      * load_combat() a plusieurs sorties muettes. */
@@ -794,6 +808,7 @@ static int ready(unsigned player) {
        p->generation!=c->generation || p->rx_shift!=rx_shift[player] ||
        p->counter_shift!=counter_shift[player] || p->other_records!=other_records ||
        p->other_generation!=slots[other].generation || p->links!=alias_links) {
+        uint64_t t_alias0 = tek_get_ticks();
         uint32_t source=psx_mod_read_word(base+8);
         p->original_alias=psx_mod_read_word(base+12);
         if(!p->alias_table)p->alias_table=tekken3_guest_pool_alloc(player,ALIAS_ENTRIES*4,16);
@@ -877,6 +892,11 @@ static int ready(unsigned player) {
         p->native_base=base;p->native_common=common;p->source=source;
         p->generation=c->generation;p->rx_shift=rx_shift[player];p->counter_shift=counter_shift[player];
         p->other_records=other_records;p->other_generation=slots[other].generation;p->links=alias_links;
+        preload_player_hit_effects();
+        uint64_t t_alias1 = tek_get_ticks();
+        fprintf(stdout,"[MOD_LOAD_ALIAS] %s P%u time=%.2fms (original=%08X custom=%08X records=%08X count=%u)\n",
+                tekken3_guest_name_for(player),player+1,tek_ticks_to_ms(t_alias1 - t_alias0),
+                p->original_alias,p->alias_table,p->records,c->count);
         fprintf(stderr,"%s combat: installed P%u alias table, original=%08X custom=%08X records=%08X\n",
                 tekken3_guest_name_for(player),player+1,p->original_alias,p->alias_table,p->records);
     }
@@ -1619,10 +1639,14 @@ static void load_hit_effect(unsigned s) {
     if(!root)return;
     char path[4096];
     if(snprintf(path,sizeof path,"%s/%s-hiteffect.tim",root,tekken3_guest_data_prefix_for(s))>=(int)sizeof path)return;
-    FILE *f=fopen(path,"rb");if(!f)return;
-    unsigned char *p=malloc(32*576);
-    size_t n=p?fread(p,1,32*576,f):0;fclose(f);
-    if(!p || !n || n%576){free(p);return;}
+    size_t file_sz = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &file_sz);
+    if(!cached || file_sz < 32*576) return;
+    unsigned char *p = (unsigned char *)malloc(32*576);
+    if(!p) return;
+    memcpy(p, cached, 32*576);
+    size_t n = 32*576;
+    if(n%576){free(p);return;}
     for(size_t o=0;o<n;o+=576)
         if(word(p+o)!=0x10 || word(p+o+4)!=8 || word(p+o+8)!=44 || word(p+o+16)!=0x10010 ||
            word(p+o+52)!=524 || word(p+o+60)!=0x200008){free(p);return;}
@@ -1787,6 +1811,7 @@ PSX_MOD_CONSTRUCTOR(register_ttt_hitspark) {
 }
 /* <root>/<prefix>-hiteffect64.hfx, checked whole. */
 static int read_hfx(const char *root,const char *prefix,const char *who,Hfx *out) {
+    uint64_t t_hfx0 = tek_get_ticks();
     char path[4096];
     if(!root || snprintf(path,sizeof path,"%s/%s-hiteffect64.hfx",root,prefix)>=(int)sizeof path)return 0;
     size_t n = 0;
@@ -1803,6 +1828,9 @@ static int read_hfx(const char *root,const char *prefix,const char *who,Hfx *out
     if(!p) return 0;
     memcpy(p, cached, n);
     out->data=p;out->images=images;out->palettes=palettes;out->flags=p[12]|p[13]<<8;
+    uint64_t t_hfx1 = tek_get_ticks();
+    fprintf(stdout,"[MOD_LOAD_HITSPARK] %s(%s) time=%.2fms images=%u palettes=%u\n",
+            who, prefix, tek_ticks_to_ms(t_hfx1 - t_hfx0), images, palettes);
     fprintf(stderr,"TTT Hitspark: %s, %u images, %u palette(s)\n",who,images,palettes);
     return 1;
 }
@@ -2085,6 +2113,17 @@ static void sparks_place(void) {
         const uint16_t *row=hi+(size_t)(sparks.pal.y-512+s)*1024+sparks.pal.x;
         if(memcmp(row,h->data+16,32))psx_mod_gpu_high_vram_tag("sparks");  /* [HighVram_CLASH_Diag] */
         if(memcmp(row,h->data+16,32))psx_mod_gpu_high_vram_upload(sparks.pal.x,sparks.pal.y+s,16,1,(const uint16_t*)(h->data+16));
+    }
+}
+static void preload_player_hit_effects(void) {
+    if(!hfx.on || !psx_mod_gpu_high_vram_ready())return;
+    sparks_tick();
+    sparks_place();
+    for(unsigned p=0;p<2;p++) {
+        const Hfx *h=hit_effect_64_pack(p);
+        if(h) {
+            place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
+        }
     }
 }
 /* Image k of pack h in cell c, unless it is there already. */
@@ -2942,4 +2981,34 @@ void __wrap_func_80038B4C(CPUState *cpu) {
 void __wrap_func_800389C0(CPUState *cpu) {
     if((cpu->pc==0 || cpu->pc==0x800389c0) && decode_pose(cpu,0))return;
     __real_func_800389C0(cpu);
+}
+
+void tekken3_ttt1_preload_fight(void) {
+    const char *root = tekken3_ttt1_asset_root();
+    if (!root) return;
+    for (unsigned p = 0; p < 2; p++) {
+        const char *m_prefix = tekken3_guest_moves_prefix_for(p);
+        const char *d_prefix = tekken3_guest_data_prefix_for(p);
+        char path[4096];
+        if (m_prefix && m_prefix[0]) {
+            snprintf(path, sizeof path, "%s/%s-combat.jmv", root, m_prefix);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-tables.jst", root, m_prefix);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-sfx.jus", root, m_prefix);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-movelist.bin", root, m_prefix);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-combos.bin", root, m_prefix);
+            (void)switch_cached_file_get(path, NULL);
+        }
+        if (d_prefix && d_prefix[0]) {
+            snprintf(path, sizeof path, "%s/%s-voices.juv", root, d_prefix);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-hiteffect.tim", root, d_prefix);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-hiteffect64.hfx", root, d_prefix);
+            (void)switch_cached_file_get(path, NULL);
+        }
+    }
 }

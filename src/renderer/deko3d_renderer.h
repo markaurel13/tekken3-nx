@@ -134,6 +134,7 @@ public:
         uint64_t samples = 0;
     };
     RenderTimings GetAndResetRenderTimings();
+    RenderTimings GetLastFrameTimings() const { return m_lastFrameTimings; }
 
 private:
     Deko3DRenderer() = default;
@@ -220,6 +221,11 @@ private:
     bool m_vramDirty = true;
     bool m_initialized = false;
     RenderTimings m_timings{};
+    RenderTimings m_lastFrameTimings{};
+    uint64_t m_curFrameVramUploadNs = 0;
+    uint64_t m_curFrameVramUploadBytes = 0;
+    uint64_t m_curFrameGpuFenceNs = 0;
+    uint64_t m_curFrameAcqWaitNs = 0;
 };
 
 #endif

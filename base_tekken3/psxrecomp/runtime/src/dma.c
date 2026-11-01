@@ -882,10 +882,14 @@ static uint32_t execute_ch2_gpu(void) {
             static unsigned s_dma_limit_cnt = 0;
             if (++s_dma_limit_cnt <= 20 || (s_dma_limit_cnt % 60) == 0) {
                 extern uint64_t s_frame_count;
-                fprintf(stdout, "[DMA_OT_ABORT] #%u f=%llu reason=%d (1=floyd_loop,2=empty>4096,3=safety>max) addr=0x%08X slow=0x%08X total_nodes=%u empty=%u pkts=%u words=%u\n",
-                        s_dma_limit_cnt, (unsigned long long)s_frame_count, hit_limit, addr, slow_addr,
+                uint64_t t_now = 0;
+#if defined(__aarch64__) || defined(__SWITCH__)
+                __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_now));
+#endif
+                double abort_ms = (t_now > t_pre1) ? ((double)((t_now - t_pre1) * 625u) / 12e6) : 0.0;
+                fprintf(stdout, "[DMA_OT_ABORT] #%u f=%llu time=%.2fms reason=%d (1=floyd_loop,2=empty>4096,3=safety>max) addr=0x%08X slow=0x%08X total_nodes=%u empty=%u pkts=%u words=%u\n",
+                        s_dma_limit_cnt, (unsigned long long)s_frame_count, abort_ms, hit_limit, addr, slow_addr,
                         cur_total_nodes, cur_empty_nodes, cur_packet_count, actual_words);
-                fflush(stdout);
             }
         }
 
