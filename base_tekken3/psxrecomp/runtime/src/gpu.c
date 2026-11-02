@@ -5479,6 +5479,9 @@ static void gp0_execute_command(void) {
 uint64_t g_prof_dma2_prepass_ns = 0;
 uint64_t g_prof_dma2_walk_ns = 0;
 uint64_t g_prof_gp0_diag_ns = 0;
+uint64_t g_prof_dma2_wolf_walk_ns = 0;
+uint32_t g_prof_dma2_wolf_pkts = 0;
+uint32_t g_prof_dma2_wolf_words = 0;
 
 static void gp0_execute_command_now(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
@@ -5987,6 +5990,31 @@ void gpu_write_gp0(uint32_t val) {
     int prev_phase = g_exec_phase;
     g_exec_phase = 4;
     gpu_write_gp0_body(val);
+    g_exec_phase = prev_phase;
+}
+
+void gpu_write_gp0_fast_packet(uint32_t source_addr, const uint32_t *words, uint32_t count) {
+    if (__builtin_expect(count == 0, 0)) return;
+    uint8_t opcode = (words[0] >> 24) & 0xFF;
+    int needed = gp0_command_word_count(opcode);
+    if (__builtin_expect(needed != (int)count || count > 16 || gp0_state != GP0_IDLE, 0)) {
+        for (uint32_t i = 0; i < count; i++) {
+            gpu_set_gp0_source(source_addr + i * 4u);
+            gpu_write_gp0(words[i]);
+        }
+        return;
+    }
+    extern int g_exec_phase;
+    int prev_phase = g_exec_phase;
+    g_exec_phase = 4;
+    gp0_write_count += count;
+    gp0_next_source_addr = source_addr;
+    gp0_cmd_source_addr = source_addr;
+    gp0_words_collected = count;
+    gp0_words_needed = count;
+    gp0_state = GP0_IDLE;
+    memcpy(gp0_cmd_buf, words, count * sizeof(uint32_t));
+    gp0_execute_command();
     g_exec_phase = prev_phase;
 }
 

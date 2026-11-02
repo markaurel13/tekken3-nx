@@ -658,6 +658,11 @@ uint32_t g_dma2_last_packet_count = 0;
 uint32_t g_dma2_last_actual_words = 0;
 uint32_t g_dma2_last_start_addr = 0;
 
+__attribute__((weak)) int tekken3_ttt1_is_wolf_packet_addr(uint32_t addr) { (void)addr; return 0; }
+extern uint64_t g_prof_dma2_wolf_walk_ns;
+extern uint32_t g_prof_dma2_wolf_pkts;
+extern uint32_t g_prof_dma2_wolf_words;
+
 static uint32_t execute_ch2_gpu(void) {
     uint32_t chcr = channels[2].chcr;
     uint32_t direction = chcr & 1;           /* 0=to RAM, 1=from RAM (to device) */
@@ -829,14 +834,18 @@ static uint32_t execute_ch2_gpu(void) {
                 }
             }
 
+            int is_wolf = tekken3_ttt1_is_wolf_packet_addr(addr);
+#if defined(__aarch64__) || defined(__SWITCH__)
+            uint64_t t_w0 = 0;
+            if (is_wolf) {
+                __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_w0));
+            }
+#endif
             if (emit && num_words > 0) {
                 gpu_set_gp0_linked_list_node(addr, num_words);
                 actual_words += 1u;
                 if (fast_words) {
-                    for (uint32_t i = 0; i < num_words; i++) {
-                        gpu_set_gp0_source(word_addr + i * 4u);
-                        gpu_write_gp0(fast_words[i]);
-                    }
+                    gpu_write_gp0_fast_packet(word_addr, fast_words, num_words);
                 } else {
                     for (uint32_t i = 0; i < num_words; i++) {
                         uint32_t word = psx_read_word(word_addr);
@@ -848,6 +857,15 @@ static uint32_t execute_ch2_gpu(void) {
                 }
                 actual_words += num_words;
             }
+#if defined(__aarch64__) || defined(__SWITCH__)
+            if (is_wolf) {
+                uint64_t t_w1;
+                __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_w1));
+                g_prof_dma2_wolf_walk_ns += ((t_w1 - t_w0) * 625u) / 12u;
+                g_prof_dma2_wolf_pkts++;
+                g_prof_dma2_wolf_words += num_words;
+            }
+#endif
 
             if (next == 0xFFFFFFu) {
                 last_addr = 0x00FFFFFFu;

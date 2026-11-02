@@ -2092,7 +2092,6 @@ extern "C" uint32_t gte_read_ctrl(CPUState* cpu, uint8_t reg) {
 
 extern "C" void gte_write_data(CPUState* cpu, uint8_t reg, uint32_t val) {
     if (reg >= 32) return;
-    gte_cpu_canonicalize_backing(cpu);
     switch (reg) {
         case 1: case 3: case 5: case 7:
         case 16: case 17: case 18: case 19:
@@ -2158,7 +2157,6 @@ extern "C" void gte_write_data(CPUState* cpu, uint8_t reg, uint32_t val) {
 
 extern "C" void gte_write_ctrl(CPUState* cpu, uint8_t reg, uint32_t val) {
     if (reg >= 32) return;
-    gte_cpu_canonicalize_backing(cpu);
     switch (reg) {
         case 4: case 12: case 20: case 26:
             cpu->gte_ctrl[reg] = val & 0xFFFFu;

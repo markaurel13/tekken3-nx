@@ -20,6 +20,7 @@ int      gpu_tekken3_selector_active(void);
 uint32_t gpu_read_gpustat(void);   /* 0x1F801814 read */
 uint32_t gpu_read_gpuread(void);   /* 0x1F801810 read */
 void     gpu_write_gp0(uint32_t val);  /* 0x1F801810 write */
+void     gpu_write_gp0_fast_packet(uint32_t source_addr, const uint32_t *words, uint32_t count);
 void     gpu_write_gp1(uint32_t val);  /* 0x1F801814 write */
 void     gpu_set_gp0_source(uint32_t addr); /* diagnostic source for next GP0 word */
 /* Linked-list provenance for the next GP0 words. `word_count == 0` identifies

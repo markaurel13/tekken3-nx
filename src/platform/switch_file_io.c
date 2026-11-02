@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <pthread.h>
 
 #define CACHE_HASH_SIZE 256
 
@@ -13,6 +14,7 @@ typedef struct SwitchFileCacheEntry {
 } SwitchFileCacheEntry;
 
 static SwitchFileCacheEntry *s_file_cache_buckets[CACHE_HASH_SIZE] = {0};
+static pthread_mutex_t s_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static inline unsigned int cache_hash(const char *str) {
     unsigned int hash = 5381;
@@ -27,15 +29,24 @@ const unsigned char *switch_cached_file_get(const char *path, size_t *out_size) 
 
     unsigned int bucket = cache_hash(path);
 
-    // 1. Buscar en caché en RAM (O(1))
+    // 1. Buscar en caché en RAM (O(1)) con protección multihilo
+    pthread_mutex_lock(&s_cache_mutex);
     for (SwitchFileCacheEntry *e = s_file_cache_buckets[bucket]; e; e = e->next) {
         if (strcmp(e->path, path) == 0) {
             if (out_size) *out_size = e->size;
-            return e->data;
+            const unsigned char *res = e->data;
+            pthread_mutex_unlock(&s_cache_mutex);
+            return res;
         }
     }
+    pthread_mutex_unlock(&s_cache_mutex);
 
     // 2. Cargar desde MicroSD con open/fstat directo (sin sobrecarga stdio ni cluster seeks)
+    uint64_t t_read_start = 0;
+#if defined(__aarch64__) || defined(__SWITCH__)
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_read_start));
+#endif
+
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
 
@@ -71,7 +82,17 @@ const unsigned char *switch_cached_file_get(const char *path, size_t *out_size) 
         return NULL;
     }
 
-    // 3. Registrar en hash table de caché
+#if defined(__aarch64__) || defined(__SWITCH__)
+    uint64_t t_read_end = 0;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_read_end));
+    double read_ms = (double)((t_read_end - t_read_start) * 625u) / 12e6;
+    if (read_ms >= 1.0) {
+        printf("[SD_BLOCKING_READ] '%s' (%zu KB) leido de SD en %.2f ms\n", path, sz / 1024, read_ms);
+        fflush(stdout);
+    }
+#endif
+
+    // 3. Registrar en hash table de caché con mutex
     SwitchFileCacheEntry *entry = (SwitchFileCacheEntry *)malloc(sizeof(SwitchFileCacheEntry));
     if (!entry) {
         if (out_size) *out_size = sz;
@@ -82,8 +103,22 @@ const unsigned char *switch_cached_file_get(const char *path, size_t *out_size) 
     entry->path[sizeof(entry->path) - 1] = '\0';
     entry->data = buf;
     entry->size = sz;
+
+    pthread_mutex_lock(&s_cache_mutex);
+    // Verificar si otro hilo lo insertó mientras leíamos de SD
+    for (SwitchFileCacheEntry *e = s_file_cache_buckets[bucket]; e; e = e->next) {
+        if (strcmp(e->path, path) == 0) {
+            free(buf);
+            free(entry);
+            if (out_size) *out_size = e->size;
+            const unsigned char *res = e->data;
+            pthread_mutex_unlock(&s_cache_mutex);
+            return res;
+        }
+    }
     entry->next = s_file_cache_buckets[bucket];
     s_file_cache_buckets[bucket] = entry;
+    pthread_mutex_unlock(&s_cache_mutex);
 
     if (out_size) *out_size = sz;
     return buf;

@@ -43,6 +43,8 @@ int tekken3_guest_draw_moveset(unsigned player);
 /* Moveset switched on L1 in the fight (Unknown): whether the player's guest
  * does it, a pending request (consumed a frame at a time), the switch. */
 int tekken3_guest_switches_on_button(unsigned player);
+unsigned tekken3_guest_donor_count(unsigned player);
+const char *tekken3_guest_donor_prefix(unsigned player, unsigned idx);
 int tekken3_guest_switch_request(unsigned player);
 int tekken3_ttt1_switch_ready(unsigned player);
 void tekken3_guest_switch_done(unsigned player);

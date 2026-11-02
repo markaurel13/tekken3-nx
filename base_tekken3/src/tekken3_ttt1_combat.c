@@ -3050,8 +3050,13 @@ void tekken3_ttt1_preload_player(unsigned p) {
     const char *root = tekken3_ttt1_asset_root();
     if (!root) return;
     switch_audio_pump_if_needed();
+    uint64_t t_pre0 = tek_get_ticks();
     const char *m_prefix = tekken3_guest_moves_prefix_for(p);
     const char *d_prefix = tekken3_guest_data_prefix_for(p);
+    unsigned donor_cnt = tekken3_guest_donor_count(p);
+    printf("[PreloadDiag] P%u inicio: m='%s' d='%s' donors=%u\n",
+           p + 1, m_prefix ? m_prefix : "(null)", d_prefix ? d_prefix : "(null)", donor_cnt);
+    fflush(stdout);
     char path[4096];
     if (m_prefix && m_prefix[0]) {
         snprintf(path, sizeof path, "%s/%s-combat.jmv", root, m_prefix);
@@ -3080,8 +3085,34 @@ void tekken3_ttt1_preload_player(unsigned p) {
             snprintf(path, sizeof path, "%s/%s-arcade-P%u.tim", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
         }
+        if (!strncmp(d_prefix, "Unknown", 7)) {
+            snprintf(path, sizeof path, "%s/Unknown-TTT1-wolf.glow", root);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/Unknown-TTT1-wolf.relocs", root);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/Unknown-TTT1-wolf.3dm", root);
+            (void)switch_cached_file_get(path, NULL);
+        }
+    }
+    if (donor_cnt > 0) {
+        for (unsigned k = 0; k < donor_cnt; k++) {
+            const char *donor_pfx = tekken3_guest_donor_prefix(p, k);
+            if (!donor_pfx || !donor_pfx[0]) continue;
+            snprintf(path, sizeof path, "%s/%s-combat.jmv", root, donor_pfx);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-tables.jst", root, donor_pfx);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-sfx.jus", root, donor_pfx);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-idle.poses", root, donor_pfx);
+            (void)switch_cached_file_get(path, NULL);
+            switch_audio_pump_if_needed();
+        }
     }
     switch_audio_pump_if_needed();
+    double pre_ms = tek_ticks_to_ms(tek_get_ticks() - t_pre0);
+    printf("[PreloadDiag] P%u completado en %.2f ms\n", p + 1, pre_ms);
+    fflush(stdout);
 }
 
 void tekken3_ttt1_preload_fight(void) {
@@ -3196,6 +3227,53 @@ void tekken3_ttt1_precach_kazuya(void) {
             switch_audio_pump_if_needed();
         }
     }
-    printf("[Preload] Kazuya, oponentes, escenarios y tablas de combate precargados en RAM: %d archivos, %zu KB\n",
+
+    // 5. Unknown y todos sus donantes de estilo de combate TTT1 (elimina tirón inicial de lectura SD)
+    static const char *unknown_files[] = {
+        "Unknown-TTT1-wolf.glow",
+        "Unknown-TTT1-wolf.relocs",
+        "Unknown-TTT1-wolf.3dm",
+        "Unknown-TTT1-arcade-P1.3dm",
+        "Unknown-TTT1-arcade-P1.relocs",
+        "Unknown-TTT1-arcade-P1.tim",
+        "Unknown-TTT1-arcade-P2.3dm",
+        "Unknown-TTT1-arcade-P2.relocs",
+        "Unknown-TTT1-arcade-P2.tim",
+        "Unknown-TTT1-voices.juv",
+        "Unknown-TTT1-hiteffect.tim",
+        "Unknown-TTT1-hiteffect64.hfx",
+        "Unknown-TTT1-idle.poses",
+        "Unknown-TTT1-combat.jmv",
+        "Unknown-TTT1-tables.jst",
+        "Unknown-TTT1-sfx.jus",
+        "Unknown-TTT1-movelist.bin",
+        "Unknown-TTT1-combos.bin",
+    };
+    for (size_t i = 0; i < sizeof(unknown_files)/sizeof(unknown_files[0]); i++) {
+        snprintf(path, sizeof path, "%s/%s", root, unknown_files[i]);
+        size_t sz = 0;
+        if (switch_cached_file_get(path, &sz)) {
+            total_bytes += sz;
+            loaded++;
+        }
+        switch_audio_pump_if_needed();
+    }
+
+    static const char *donor_exts[] = {
+        "-combat.jmv", "-tables.jst", "-sfx.jus", "-idle.poses"
+    };
+    for (size_t f = 0; f < sizeof(common_fighters)/sizeof(common_fighters[0]); f++) {
+        const char *dname = common_fighters[f];
+        for (size_t e = 0; e < sizeof(donor_exts)/sizeof(donor_exts[0]); e++) {
+            snprintf(path, sizeof path, "%s/Unknown@%s-TTT1%s", root, dname, donor_exts[e]);
+            size_t sz = 0;
+            if (switch_cached_file_get(path, &sz)) {
+                total_bytes += sz;
+                loaded++;
+            }
+        }
+        switch_audio_pump_if_needed();
+    }
+    printf("[Preload] Kazuya, oponentes, Unknown, donantes y escenarios precargados en RAM: %d archivos, %zu KB\n",
            loaded, total_bytes / 1024);
 }

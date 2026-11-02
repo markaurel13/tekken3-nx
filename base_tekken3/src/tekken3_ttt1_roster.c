@@ -381,6 +381,15 @@ int tekken3_guest_switches_on_button(unsigned player) {
     if(player>1 || tekken3_guest_character(psx_mod_read_half(0x800a9240+player*0x188c))<0)return 0;
     return guest(player)->on_button && guest(player)->donor_count>1;
 }
+unsigned tekken3_guest_donor_count(unsigned player) {
+    if(player>1 || tekken3_guest_character(psx_mod_read_half(0x800a9240+player*0x188c))<0)return 0;
+    return guest(player)->donor_count;
+}
+const char *tekken3_guest_donor_prefix(unsigned player, unsigned idx) {
+    if(player>1 || tekken3_guest_character(psx_mod_read_half(0x800a9240+player*0x188c))<0)return NULL;
+    if(idx >= guest(player)->donor_count) return NULL;
+    return guest(player)->donor_prefix[idx];
+}
 int tekken3_guest_switch_moveset(unsigned player) {
     if(!tekken3_guest_switches_on_button(player))return 0;
     Tekken3Guest *g=&guests[player];

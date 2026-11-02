@@ -1163,7 +1163,7 @@ void tekken3_arcade_stages_preload(int source, int stage) {
     if (!s_on || !psx_mod_gpu_high_vram_ready()) return;
     int screen = (int16_t)psx_mod_read_half(0x800AE204u);
     int phase = (uint16_t)psx_mod_read_half(PHASE);
-    /* En combate, demo o transición inicial a carga (screen 11, phase 0) con escenario anclado:
+    /* En combate o demo activa (screen 8 o 6), o en pantalla de fade inicial (screen 11, phase 0) con escenario anclado:
      * APLAZAR la precarga para no destruir ni sobreescribir el escenario aún visible en pantalla. */
     if (screen == 8 || screen == 6 || (screen == 11 && phase == 0 && s_combat_active_stage >= 0)) {
         s_pending_preload_source = source;
@@ -1175,6 +1175,10 @@ void tekken3_arcade_stages_preload(int source, int stage) {
     }
     s_pending_preload_source = -1;
     s_pending_preload_stage = -1;
+    s_combat_active_stage = -1;
+    s_combat_active_source = -1;
+    s_tried = -1;
+    s_tried_ttt = -1;
     if (source == TEKKEN3_STAGE_TTT && stage >= 0) {
         if (s_pack.source != TEKKEN3_STAGE_TTT || s_pack.stage != stage) {
             pack_load_from(TEKKEN3_STAGE_TTT, stage);
@@ -1191,7 +1195,6 @@ void tekken3_arcade_stages_preload(int source, int stage) {
 }
 
 static void check_apply_pending_preload(void) {
-    if (s_pending_preload_stage < 0) return;
     int screen = (int16_t)psx_mod_read_half(0x800AE204u);
     int phase = (uint16_t)psx_mod_read_half(PHASE);
     uint32_t vtx = deko3d_get_last_frame_vtx();
@@ -1209,18 +1212,21 @@ static void check_apply_pending_preload(void) {
         return;
     }
 
-    /* Condición de carga segura (Pasos 2 y 4):
-     * 1. La pantalla de carga o VS ya está activa y en fade negro (screen 10 o screen 11 con phase >= 1)
-     *    y no hay vértices de la pelea en vuelo (s_vtx_zero_counter >= 1).
-     * 2. O el GPU ha emitido 0 vértices durante al menos 2 frames seguidos fuera de combate (s_vtx_zero_counter >= 2). */
+    /* Fuera de combate (screen 11 con phase >= 1, screen 10, screen 4, etc.), liberar anclaje */
+    s_combat_active_stage = -1;
+    s_combat_active_source = -1;
+    s_tried = -1;
+    s_tried_ttt = -1;
+
+    if (s_pending_preload_stage < 0) return;
+
+    /* Condición de carga segura: pantalla de carga o fuera de combate con pantalla negra / 0 vértices */
     if (((screen == 10 || screen == 11) && phase >= 1 && s_vtx_zero_counter >= 1) || s_vtx_zero_counter >= 2) {
         int source = s_pending_preload_source;
         int stage = s_pending_preload_stage;
         int zeros = s_vtx_zero_counter;
         s_pending_preload_source = -1;
         s_pending_preload_stage = -1;
-        s_combat_active_stage = -1;
-        s_combat_active_source = -1;
         s_vtx_zero_counter = 0;
 
         fprintf(stdout, "[ArcadePreloadDiag] f=%u APPLIED stg=%d src=%d (screen=%d phase=%d act=%d vtx_zeros=%d)\n",
@@ -1274,6 +1280,7 @@ static int active(void) {
         s_tried_ttt = -1;
         return 0;
     }
+
     /* Guard uninitialized camera on frame 0 of a new stage to avoid 1-frame stage glitch before zoom starts */
     if (!round_over() && psx_mod_read_word(CAMERA + 0x14) == 0 && psx_mod_read_word(CAMERA + 0x1C) == 0) return 0;
 

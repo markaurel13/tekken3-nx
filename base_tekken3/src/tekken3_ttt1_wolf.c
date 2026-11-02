@@ -102,24 +102,34 @@ static int wanted(void) {
     if(on<0) { const char *e=getenv("TEKKEN3_UNKNOWN_WOLF"); on=!e || strcmp(e,"0"); }
     return on;
 }
-/* TEKKEN3_WOLF_GLOW=0: the wolf without its glow (the performance bench's breakdown). */
 static int glowing(void) {
     static int on=-1;
     if(on<0) { const char *e=getenv("TEKKEN3_WOLF_GLOW"); on=!e || strcmp(e,"0"); }
     return on;
 }
 
+extern const unsigned char *switch_cached_file_get(const char *path, size_t *out_size);
 static unsigned char *read_file(const char *suffix,uint32_t *size) {
     const char *root=tekken3_ttt1_asset_root();
     char path[4096];
     if(!root || snprintf(path,sizeof path,"%s/Unknown-TTT1-%s",root,suffix)>=(int)sizeof path) return NULL;
+    size_t sz = 0;
+    const unsigned char *cached = switch_cached_file_get(path, &sz);
+    if (cached && sz > 0 && sz < 4*1024*1024) {
+        unsigned char *b = (unsigned char *)malloc(sz);
+        if (b) {
+            memcpy(b, cached, sz);
+            if (size) *size = (uint32_t)sz;
+        }
+        return b;
+    }
     FILE *f=fopen(path,"rb");
     if(!f) return NULL;
     fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
     unsigned char *b=n>0 && n<4*1024*1024?malloc((size_t)n):NULL;
     if(b && fread(b,1,(size_t)n,f)!=(size_t)n) { free(b); b=NULL; }
     fclose(f);
-    if(b) *size=(uint32_t)n;
+    if(b && size) *size=(uint32_t)n;
     return b;
 }
 static uint32_t word(const unsigned char *p) { return p[0]|p[1]<<8|p[2]<<16|(uint32_t)p[3]<<24; }
@@ -507,11 +517,21 @@ static int fighting(void) {
     return psx_mod_read_word(SCREEN)==8 && phase!=16 && phase!=17 && !tekken3_cine_pending();
 }
 
+int g_wolf_debug_suppress = 0;
+
+int tekken3_ttt1_is_wolf_packet_addr(uint32_t addr) {
+    if (!pack.gpu) return 0;
+    uint32_t start = pack.gpu & 0x00FFFFFFu;
+    uint32_t end = start + 2*PACKETS + 2*2*SPRITES*SPRITE;
+    uint32_t a = addr & 0x00FFFFFFu;
+    return (a >= start && a < end);
+}
+
 /* src/tekken3_cine.c's 0x8003B4F8 wrapper, once an actor is drawn. */
 void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     if(actor!=ACTOR0 && actor!=ACTOR0+ACTOR_SIZE) return;
     unsigned p=actor!=ACTOR0;
-    if(!wanted() || !pack.pack || psx_mod_read_word(SKIP_DRAW) || !fighting() || !unknown(p) || !load()) {
+    if(g_wolf_debug_suppress || !wanted() || !pack.pack || psx_mod_read_word(SKIP_DRAW) || !fighting() || !unknown(p) || !load()) {
         wolves[p].live=0; return;
     }
     /* Phases 2..4 set a round up (the fighters back on their marks): no
@@ -538,6 +558,7 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     wolves[p].live=1;
 
     uint64_t t0=tekken3_host_ns();
+    uint64_t cyc_before=psx_cycle_count;
     /* Outside emulated time, as the cinematics' extra actors (TIPS): the
      * game's own routines on our actor, registers, GTE and scratchpad put
      * back. Note: psx_cycle_count must NOT be rewound, otherwise the SPU
@@ -588,6 +609,7 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
         psx_mod_write_half(a+FACING,wolves[p].angle);
         psx_mod_write_half(a+YAW,psx_mod_read_half(actor+YAW));
     }
+    uint64_t t_copy=tekken3_host_ns();
 
     psx_mod_write_word(PAUSE,1);
     call(cpu,SOLVE,a);
@@ -600,8 +622,10 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
         }
         if(!(n++%120)) fprintf(stderr,"Unknown's wolf: P%u pose after the solver, worst bone %u off by %d\n",p+1,at,worst);
     }
+    uint64_t t_solve=tekken3_host_ns();
     call(cpu,BODY,a);
     psx_mod_write_word(PAUSE,pause);
+    uint64_t t_body=tekken3_host_ns();
 
     /* The engine wrote each drawn packet's command over ours: semi-transparent again.
      * Fast-path: access mod_gpu_dma_memory directly without per-word call overhead. */
@@ -630,14 +654,49 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
             q+=size[(op>>3)-4];
         }
     }
+    uint64_t t_pkts=tekken3_host_ns();
 
     while(steps--) step(p);
+    uint64_t t_step=tekken3_host_ns();
     if(glowing()) effects(&saved,p);
+    uint64_t t_eff=tekken3_host_ns();
     if (spad) memcpy(spad, scratch, sizeof(scratch));
     else for(unsigned i=0;i<256;i++) psx_mod_write_word(0x1f800000+i*4,scratch[i]);
     *cpu=saved;
     psx_cyc_batch_flush();
     psx_in_device_service=service;
+    uint64_t t_spad=tekken3_host_ns();
+    uint64_t cyc_spent=(psx_cycle_count>=cyc_before)?(psx_cycle_count-cyc_before):0;
+
+    static uint64_t acc_copy, acc_solve, acc_body, acc_pkts, acc_step, acc_eff, acc_spad, acc_tot, acc_cycles;
+    static unsigned wolf_frames;
+    acc_copy += (t_copy - t0);
+    acc_solve += (t_solve - t_copy);
+    acc_body += (t_body - t_solve);
+    acc_pkts += (t_pkts - t_body);
+    acc_step += (t_step - t_pkts);
+    acc_eff += (t_eff - t_step);
+    acc_spad += (t_spad - t_eff);
+    acc_tot += (t_spad - t0);
+    acc_cycles += cyc_spent;
+    wolf_frames++;
+    if(wolf_frames >= 120) {
+        printf("[WolfPerf] P%u (120f avg): TOTAL=%.2fms | copy=%.2fms solve=%.2fms body=%.2fms pkts=%.2fms step=%.2fms eff=%.2fms spad=%.2fms | psx_cycles=%llu/f (wolf=%s)\n",
+               p + 1,
+               (double)acc_tot / 1e6 / wolf_frames,
+               (double)acc_copy / 1e6 / wolf_frames,
+               (double)acc_solve / 1e6 / wolf_frames,
+               (double)acc_body / 1e6 / wolf_frames,
+               (double)acc_pkts / 1e6 / wolf_frames,
+               (double)acc_step / 1e6 / wolf_frames,
+               (double)acc_eff / 1e6 / wolf_frames,
+               (double)acc_spad / 1e6 / wolf_frames,
+               (unsigned long long)(acc_cycles / wolf_frames),
+               g_wolf_debug_suppress ? "OFF" : "ON");
+        fflush(stdout);
+        acc_copy = acc_solve = acc_body = acc_pkts = acc_step = acc_eff = acc_spad = acc_tot = acc_cycles = 0;
+        wolf_frames = 0;
+    }
     if(tracing()) {
         static unsigned n;
         static uint64_t spent;

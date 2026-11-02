@@ -30,7 +30,7 @@ extern "C" {
 extern void mod_runtime_activate_plugins(void);
 extern void ensure_outfit_catalog_loaded(void);
 extern void host_osd_outfit_preload(void);
-extern "C" void host_osd_fps_update(double fps, double ms);
+extern void host_osd_fps_update(double fps, double ms);
 extern void tekken3_ttt1_precach_kazuya(void);
 extern void cd_prefetch_shutdown(void);
 extern uint32_t g_game_entry_hits[];
@@ -665,6 +665,9 @@ extern uint64_t g_prof_exp_vblank_mods_ns;
 extern uint64_t g_prof_dma2_prepass_ns;
 extern uint64_t g_prof_dma2_walk_ns;
 extern uint64_t g_prof_gp0_diag_ns;
+extern uint64_t g_prof_dma2_wolf_walk_ns;
+extern uint32_t g_prof_dma2_wolf_pkts;
+extern uint32_t g_prof_dma2_wolf_words;
 }
 
 #define PROF_PHASES 14
@@ -924,7 +927,7 @@ static void prof_report(uint64_t frame) {
     printf("[AudioBreakdown] per-frame: spu_mix=%.3fms (Core 0) audren_dsp=%.3fms (Core 2) ring_underrun=%llu\n",
            d_spu_ms, d_audren_ms, (unsigned long long)delta_underrun);
 
-    printf("[PROF_EXPANDED] per-frame: floor=%.3fms ps1_orig_stg=%.3fms stg_draw=%.3fms(tiles=%.3fms objs=%.3fms far=%.3fms calls=%.1f) vblank_mods=%.3fms | dma2(prepass=%.3fms walk_gp0=%.3fms gp0_diag=%.3fms)\n",
+    printf("[PROF_EXPANDED] per-frame: floor=%.3fms ps1_orig_stg=%.3fms stg_draw=%.3fms(tiles=%.3fms objs=%.3fms far=%.3fms calls=%.1f) vblank_mods=%.3fms | dma2(prepass=%.3fms walk_gp0=%.3fms gp0_diag=%.3fms wolf_walk=%.3fms pkts=%.1f words=%.1f)\n",
            (double)g_prof_exp_floor_ns / 1e6 / fr,
            (double)g_prof_exp_ps1_stage_ns / 1e6 / fr,
            (double)g_prof_exp_stage_total_ns / 1e6 / fr,
@@ -935,11 +938,17 @@ static void prof_report(uint64_t frame) {
            (double)g_prof_exp_vblank_mods_ns / 1e6 / fr,
            (double)g_prof_dma2_prepass_ns / 1e6 / fr,
            (double)g_prof_dma2_walk_ns / 1e6 / fr,
-           (double)g_prof_gp0_diag_ns / 1e6 / fr);
+           (double)g_prof_gp0_diag_ns / 1e6 / fr,
+           (double)g_prof_dma2_wolf_walk_ns / 1e6 / fr,
+           (double)g_prof_dma2_wolf_pkts / fr,
+           (double)g_prof_dma2_wolf_words / fr);
     g_prof_exp_floor_ns = g_prof_exp_ps1_stage_ns = g_prof_exp_stage_tiles_ns = 0;
     g_prof_exp_stage_objs_ns = g_prof_exp_stage_far_ns = g_prof_exp_stage_total_ns = 0;
     g_prof_exp_stage_calls = g_prof_exp_vblank_mods_ns = 0;
     g_prof_dma2_prepass_ns = g_prof_dma2_walk_ns = g_prof_gp0_diag_ns = 0;
+    g_prof_dma2_wolf_walk_ns = 0;
+    g_prof_dma2_wolf_pkts = 0;
+    g_prof_dma2_wolf_words = 0;
 
     s_prof_last_dev_sio = g_prof_dev_sio_ns;
     s_prof_last_dev_cdrom = g_prof_dev_cdrom_ns;
@@ -1607,9 +1616,18 @@ static void switch_vblank_callback(void) {
     double cur_loop_ms = (double)cur_loop_ns / 1e6;
 
     if (repeated_frames > 0 && s_frame_count > 10) {
-        printf("[HW_STUTTER] f=%llu real_ms=%.2fms (vsyncs=%u -> %u frame(s) repetido(s) en pantalla!) | guest=%.2fms loop=%.2fms\n",
+        printf("[HW_STUTTER] f=%llu real_ms=%.2fms (vsyncs=%u -> %u frame(s) repetido(s) en pantalla!) | guest=%.2fms loop=%.2fms (audio=%.2fms render=%.2fms input=%.2fms other=%.2fms)\n",
                (unsigned long long)s_frame_count, real_frame_ms, (unsigned)hw_vsyncs_passed, repeated_frames,
-               cur_guest_ms, cur_loop_ms);
+               cur_guest_ms, cur_loop_ms,
+               (double)audio_ns / 1e6, (double)render_ns / 1e6, (double)input_ns / 1e6, (double)other_ns / 1e6);
+        fflush(stdout);
+    }
+
+    if (cur_guest_ms > 25.0 && s_frame_count > 10) {
+        extern volatile uint32_t g_prof_pc;
+        extern int g_exec_phase;
+        printf("[GUEST_SPIKE] f=%llu guest=%.2fms (phase=%d pc=0x%08X)\n",
+               (unsigned long long)s_frame_count, cur_guest_ms, g_exec_phase, g_prof_pc);
         fflush(stdout);
     }
 
