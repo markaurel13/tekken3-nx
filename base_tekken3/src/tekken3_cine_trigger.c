@@ -46,6 +46,7 @@ static int trigger_count;
 
 extern int tekken3_guest_id(const char *key);
 extern int tekken3_t3_key_id(const char *key);
+extern int tekken3_guest_character(unsigned id);
 static int character(const char *token) {
     if(*token>='0' && *token<='9') return atoi(token);
     int id=tekken3_guest_id(token);
@@ -181,11 +182,17 @@ static void title_tick(unsigned state) {
  * Arcade's own ending (target 19, mode 0, stage 10 cleared, the Arcade
  * overlay), player 1 with a trigger. 1 if taken: the handler is skipped. */
 int tekken3_cine_trigger_arcade_end(void) {
-    if(!trigger_count || active || psx_mod_read_byte(0x80097f38)!=19 || psx_mod_read_byte(0x800afa88)!=0 ||
+    if(active || credits || psx_mod_read_byte(0x80097f38)!=19 || psx_mod_read_byte(0x800afa88)!=0 ||
        psx_mod_read_byte(0x800afaac)!=10 || psx_mod_read_word(0x800b2870)!=0x24020014u) return 0;
     unsigned p1=psx_mod_read_half(0x800add5c);
-    int i=find(EV_ARCADE_END,p1);
-    if(i<0) return 0;
+    int i=trigger_count?find(EV_ARCADE_END,p1):-1;
+    if(i<0) {
+        if(tekken3_guest_character(p1)>=0) {
+            fprintf(stderr,"Cine trigger: arcade-end guest %u has no cinematic, skipping movie to credits\n",p1);
+            credits=1;
+        }
+        return 0;
+    }
     const Trigger *t=&triggers[i];
     if(!tekken3_cine_prepare(t->cine)) { fprintf(stderr,"Cine trigger: %s cannot be played, the ending movie\n",t->cine); return 0; }
     active=t;

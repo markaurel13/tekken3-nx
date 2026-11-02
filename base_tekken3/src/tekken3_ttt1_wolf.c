@@ -418,14 +418,32 @@ static void sprite(const View *v,uint32_t ot,uint32_t *at,uint32_t end,const int
     uint32_t q=*at,u=f[0],w=f[1],du=f[2],dv=f[3];
     uint32_t xy[4]={(uint32_t)(sx[0]&0xffff)|(uint32_t)sy[0]<<16,(uint32_t)(sx[1]&0xffff)|(uint32_t)sy[0]<<16,
                     (uint32_t)(sx[0]&0xffff)|(uint32_t)sy[1]<<16,(uint32_t)(sx[1]&0xffff)|(uint32_t)sy[1]<<16};
-    psx_mod_write_word(q+4,0x2e000000u|colour<<16|colour<<8|colour);
-    psx_mod_write_word(q+8,xy[0]);  psx_mod_write_word(q+12,(uint32_t)half(f+6)<<16|w<<8|u);
-    psx_mod_write_word(q+16,xy[1]); psx_mod_write_word(q+20,(uint32_t)half(f+4)<<16|w<<8|(u+du));
-    psx_mod_write_word(q+24,xy[2]); psx_mod_write_word(q+28,(w+dv)<<8|u);
-    psx_mod_write_word(q+32,xy[3]); psx_mod_write_word(q+36,(w+dv)<<8|(u+du));
-    uint32_t slot=ot+(uint32_t)index*4,link=psx_mod_read_word(slot);
-    psx_mod_write_word(q,9u<<24|(link&0xffffff));
-    psx_mod_write_word(slot,(link&0xff000000u)|(q&0xffffff));
+    extern uint8_t *g_psx_ram;
+    extern const uint8_t *psx_mod_memory_region(int which, uint32_t *used);
+    uint32_t dma_used = 0;
+    uint8_t *dma_mem = (uint8_t*)psx_mod_memory_region(1, &dma_used);
+    uint32_t slot=ot+(uint32_t)index*4;
+    if (dma_mem && g_psx_ram && q >= 0x80E00000u && (q - 0x80E00000u + SPRITE) <= dma_used && slot >= 0x80000000u && slot < 0x80200000u) {
+        uint32_t *pq = (uint32_t*)(dma_mem + (q - 0x80E00000u));
+        uint32_t *pslot = (uint32_t*)(g_psx_ram + (slot & 0x1FFFFFu));
+        uint32_t link = *pslot;
+        pq[1] = 0x2e000000u | colour<<16 | colour<<8 | colour;
+        pq[2] = xy[0]; pq[3] = (uint32_t)half(f+6)<<16 | w<<8 | u;
+        pq[4] = xy[1]; pq[5] = (uint32_t)half(f+4)<<16 | w<<8 | (u+du);
+        pq[6] = xy[2]; pq[7] = (w+dv)<<8 | u;
+        pq[8] = xy[3]; pq[9] = (w+dv)<<8 | (u+du);
+        pq[0] = 9u<<24 | (link & 0xffffff);
+        *pslot = (link & 0xff000000u) | (q & 0xffffff);
+    } else {
+        psx_mod_write_word(q+4,0x2e000000u|colour<<16|colour<<8|colour);
+        psx_mod_write_word(q+8,xy[0]);  psx_mod_write_word(q+12,(uint32_t)half(f+6)<<16|w<<8|u);
+        psx_mod_write_word(q+16,xy[1]); psx_mod_write_word(q+20,(uint32_t)half(f+4)<<16|w<<8|(u+du));
+        psx_mod_write_word(q+24,xy[2]); psx_mod_write_word(q+28,(w+dv)<<8|u);
+        psx_mod_write_word(q+32,xy[3]); psx_mod_write_word(q+36,(w+dv)<<8|(u+du));
+        uint32_t link=psx_mod_read_word(slot);
+        psx_mod_write_word(q,9u<<24|(link&0xffffff));
+        psx_mod_write_word(slot,(link&0xff000000u)|(q&0xffffff));
+    }
     *at+=SPRITE;
 }
 static void bone_view(const View *v,unsigned p,unsigned bone,int32_t c[3]) {
@@ -522,25 +540,55 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     uint64_t t0=tekken3_host_ns();
     /* Outside emulated time, as the cinematics' extra actors (TIPS): the
      * game's own routines on our actor, registers, GTE and scratchpad put
-     * back, the clock where it was, no device serviced meanwhile. */
+     * back. Note: psx_cycle_count must NOT be rewound, otherwise the SPU
+     * mixer is starved of audio cycles, producing underruns/cuts. */
     psx_cyc_batch_flush();
-    uint64_t cycles=psx_cycle_count;
     int service=psx_in_device_service;
     psx_in_device_service=1;
     CPUState saved=*cpu;
+
+    extern uint8_t *memory_get_scratchpad_ptr(void);
+    extern uint8_t *g_psx_ram;
+    extern const uint8_t *psx_mod_memory_region(int which, uint32_t *used);
+
+    uint8_t *spad = memory_get_scratchpad_ptr();
     uint32_t scratch[256];
-    for(unsigned i=0;i<256;i++) scratch[i]=psx_mod_read_word(0x1f800000+i*4);
+    if (spad) memcpy(scratch, spad, sizeof(scratch));
+    else for(unsigned i=0;i<256;i++) scratch[i]=psx_mod_read_word(0x1f800000+i*4);
+
     uint32_t a=wolves[p].actor,pause=psx_mod_read_word(PAUSE);
-    for(unsigned b=0;b<18;b++) for(unsigned k=0;k<9;k++)
-        psx_mod_write_half(a+LOCALS+b*32+k*2,psx_mod_read_half(actor+LOCALS+b*32+k*2));
-    for(unsigned k=0;k<9;k++) psx_mod_write_half(a+ROOT+k*2,psx_mod_read_half(actor+ROOT+k*2));
-    psx_mod_write_word(a+ROOT+0x14,(uint32_t)wolves[p].x);
-    psx_mod_write_word(a+ROOT+0x18,(uint32_t)wolves[p].y);
-    psx_mod_write_word(a+ROOT+0x1c,(uint32_t)wolves[p].z);
-    for(unsigned k=0;k<3;k++)
-        psx_mod_write_word(a+k*4,psx_mod_read_word(actor+k*4)+(uint32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]));
-    psx_mod_write_half(a+FACING,wolves[p].angle);
-    psx_mod_write_half(a+YAW,psx_mod_read_half(actor+YAW));
+    uint32_t mod_used = 0;
+    uint8_t *mod_mem = (uint8_t*)psx_mod_memory_region(0, &mod_used);
+
+    if (g_psx_ram && mod_mem && a >= 0x9F000000u && actor >= 0x80000000u && actor < 0x80200000u) {
+        uint8_t *dst = mod_mem + (a - 0x9F000000u);
+        uint8_t *src = g_psx_ram + (actor & 0x1FFFFFu);
+        for(unsigned b=0;b<18;b++) memcpy(dst+LOCALS+b*32, src+LOCALS+b*32, 18);
+        memcpy(dst+ROOT, src+ROOT, 18);
+        memcpy(dst+ROOT+0x14, &wolves[p].x, 4);
+        memcpy(dst+ROOT+0x18, &wolves[p].y, 4);
+        memcpy(dst+ROOT+0x1c, &wolves[p].z, 4);
+        for(unsigned k=0;k<3;k++) {
+            int32_t val;
+            memcpy(&val, src+k*4, 4);
+            val += (int32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]);
+            memcpy(dst+k*4, &val, 4);
+        }
+        memcpy(dst+FACING, &wolves[p].angle, 2);
+        memcpy(dst+YAW, src+YAW, 2);
+    } else {
+        for(unsigned b=0;b<18;b++) for(unsigned k=0;k<9;k++)
+            psx_mod_write_half(a+LOCALS+b*32+k*2,psx_mod_read_half(actor+LOCALS+b*32+k*2));
+        for(unsigned k=0;k<9;k++) psx_mod_write_half(a+ROOT+k*2,psx_mod_read_half(actor+ROOT+k*2));
+        psx_mod_write_word(a+ROOT+0x14,(uint32_t)wolves[p].x);
+        psx_mod_write_word(a+ROOT+0x18,(uint32_t)wolves[p].y);
+        psx_mod_write_word(a+ROOT+0x1c,(uint32_t)wolves[p].z);
+        for(unsigned k=0;k<3;k++)
+            psx_mod_write_word(a+k*4,psx_mod_read_word(actor+k*4)+(uint32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]));
+        psx_mod_write_half(a+FACING,wolves[p].angle);
+        psx_mod_write_half(a+YAW,psx_mod_read_half(actor+YAW));
+    }
+
     psx_mod_write_word(PAUSE,1);
     call(cpu,SOLVE,a);
     if(tracing()) {
@@ -554,21 +602,42 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     }
     call(cpu,BODY,a);
     psx_mod_write_word(PAUSE,pause);
-    /* The engine wrote each drawn packet's command over ours: semi-transparent again. */
+
+    /* The engine wrote each drawn packet's command over ours: semi-transparent again.
+     * Fast-path: access mod_gpu_dma_memory directly without per-word call overhead. */
     static const unsigned size[4]={32,40,40,52};
-    for(uint32_t q=wolves[p].start;q<wolves[p].next;) {
-        uint32_t w=psx_mod_read_word(q+4);
-        unsigned op=w>>24;
-        if(op<0x24 || op>0x3f) { q+=32; continue; }                 /* an empty block */
-        psx_mod_write_word(q+4,w|0x02000000u);
-        q+=size[(op>>3)-4];
+    uint32_t dma_used = 0;
+    uint8_t *dma_mem = (uint8_t*)psx_mod_memory_region(1, &dma_used);
+    if (dma_mem && wolves[p].start >= 0x80E00000u && wolves[p].next >= wolves[p].start) {
+        uint32_t start_off = wolves[p].start - 0x80E00000u;
+        uint32_t end_off = wolves[p].next - 0x80E00000u;
+        if (end_off <= dma_used) {
+            for (uint32_t off = start_off; off < end_off;) {
+                uint32_t *pw = (uint32_t*)(dma_mem + off + 4);
+                uint32_t w = *pw;
+                unsigned op = w >> 24;
+                if (op < 0x24 || op > 0x3f) { off += 32; continue; }
+                *pw = w | 0x02000000u;
+                off += size[(op >> 3) - 4];
+            }
+        }
+    } else {
+        for(uint32_t q=wolves[p].start;q<wolves[p].next;) {
+            uint32_t w=psx_mod_read_word(q+4);
+            unsigned op=w>>24;
+            if(op<0x24 || op>0x3f) { q+=32; continue; }                 /* an empty block */
+            psx_mod_write_word(q+4,w|0x02000000u);
+            q+=size[(op>>3)-4];
+        }
     }
+
     while(steps--) step(p);
     if(glowing()) effects(&saved,p);
-    for(unsigned i=0;i<256;i++) psx_mod_write_word(0x1f800000+i*4,scratch[i]);
+    if (spad) memcpy(spad, scratch, sizeof(scratch));
+    else for(unsigned i=0;i<256;i++) psx_mod_write_word(0x1f800000+i*4,scratch[i]);
     *cpu=saved;
     psx_cyc_batch_flush();
-    psx_cycle_count=cycles; psx_in_device_service=service;
+    psx_in_device_service=service;
     if(tracing()) {
         static unsigned n;
         static uint64_t spent;
