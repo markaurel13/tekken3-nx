@@ -58,6 +58,15 @@ int tekken3_guest_has_third_costume(unsigned id) {
  (void)id;
  return 0;
 }
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+unsigned tekken3_ttt1_grid_character(unsigned cell) {
+ uint32_t op=psx_mod_read_word(0x80052e24u),table=0x80022768u;
+ if((op&0xffff0000u)==0x3c030000u)table=(op&65535u)<<16;
+ if(cell>=22)return 22;
+ return psx_mod_read_half(table+cell*6+4)/4;
+}
 static const Tekken3OutfitEntry *stock_entry(int cid,int index) {
  if(cid<0 || cid>=T3_OUTFIT_MAX_CHARS || index<0 || index>=3)return NULL;
  if(cid==21 || cid==22)return NULL;
@@ -215,14 +224,11 @@ void tekken3_outfits_sync(void) {
      unsigned team_phase=psx_mod_read_word(state),x=psx_mod_read_word(state+8),y=psx_mod_read_word(state+12);
      phase=(int)team_phase;manual=phase==2 || phase==3 || phase==7;
      is_cpu=phase==7;if(is_cpu)next_owner=1-p;
-     uint32_t op=psx_mod_read_word(0x80052e24u),table=0x80022768u;
-     int columns=7;
-     if((op&0xffff0000u)==0x3c030000u){table=(op&65535u)<<16;columns=8;}
      ids[p]=-1;
-     if(manual && x<(unsigned)columns && y<3 &&
-        (table==0x80022768u || (table>=0x9f000000u && table<0xa0000000u))) {
-       int cid=psx_mod_read_half(table+(y*columns+x)*6+4)/4;
-       if(cid<T3_OUTFIT_MAX_CHARS && (cid<24 ? (psx_mod_read_word(state+36)&(1u<<cid)) : 1))ids[p]=cid;
+     if(manual && x<7 && y<3) {
+       int cid=(int)tekken3_ttt1_grid_character(y*7+x);
+       if(cid>=0 && cid<T3_OUTFIT_MAX_CHARS && cid!=21 && cid!=22 &&
+          (cid<21 ? (psx_mod_read_word(state+36)&(1u<<cid)) : 1))ids[p]=cid;
      }
      int count=(int)psx_mod_read_word(state+44);
      if(count!=team_count[p]) {
