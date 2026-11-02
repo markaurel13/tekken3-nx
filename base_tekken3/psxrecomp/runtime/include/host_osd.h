@@ -43,6 +43,11 @@ void host_osd_outfit_rect(int player,int vw,int vh,int iw,int ih,
                          int *x,int *y,int *w,int *h);
 void host_osd_present_done(void);
 
+void host_osd_fps_toggle(void);
+int  host_osd_fps_is_active(void);
+void host_osd_fps_update(double fps, double ms);
+int  host_osd_fps_image(const uint32_t **pixels, int *w, int *h);
+
 /* Software / SDL_Renderer path: draw overlays over the current backbuffer. */
 struct SDL_Renderer;
 void host_osd_draw_sdl(struct SDL_Renderer *renderer);

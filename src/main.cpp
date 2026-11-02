@@ -30,6 +30,7 @@ extern "C" {
 extern void mod_runtime_activate_plugins(void);
 extern void ensure_outfit_catalog_loaded(void);
 extern void host_osd_outfit_preload(void);
+extern "C" void host_osd_fps_update(double fps, double ms);
 extern void tekken3_ttt1_precach_kazuya(void);
 extern void cd_prefetch_shutdown(void);
 extern uint32_t g_game_entry_hits[];
@@ -1279,6 +1280,25 @@ static void switch_vblank_callback(void) {
         s_last_vblank_tick = now_tick;
         s_last_vblank_frame = s_frame_count;
     }
+
+    // Actualizar telemetría de FPS en pantalla (se refresca 4 veces por segundo para máxima legibilidad)
+    static u64 s_osd_fps_last_tick = 0;
+    static uint32_t s_osd_fps_frames = 0;
+    static double s_osd_cur_fps = 60.0;
+    static double s_osd_cur_ms = 16.6;
+    s_osd_fps_frames++;
+    if (s_osd_fps_last_tick == 0) s_osd_fps_last_tick = now_tick;
+    u64 osd_diff_ns = armTicksToNs(now_tick - s_osd_fps_last_tick);
+    if (osd_diff_ns >= 250000000ULL) {
+        double sec = (double)osd_diff_ns / 1e9;
+        if (sec > 0.0 && s_osd_fps_frames > 0) {
+            s_osd_cur_fps = (double)s_osd_fps_frames / sec;
+            s_osd_cur_ms = (sec / (double)s_osd_fps_frames) * 1000.0;
+        }
+        s_osd_fps_frames = 0;
+        s_osd_fps_last_tick = now_tick;
+    }
+    host_osd_fps_update(s_osd_cur_fps, s_osd_cur_ms);
 
     const uint64_t report_interval = 120;
 

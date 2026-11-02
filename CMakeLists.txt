@@ -402,7 +402,7 @@ endforeach()
 
 # Generar metadata NACP para Horizon OS
 nx_generate_nacp(tekken3_nx.nacp
-    NAME "Tekken 3"
+    NAME "Tekken 3: Definitive Edition"
     AUTHOR "markaurel13"
     VERSION "1.0.0"
 )

@@ -9,6 +9,7 @@ extern "C" {
     void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
     void tekken3_outfits_connect(int player, int connected);
     uint16_t tekken3_outfits_input(int player, uint16_t buttons);
+    void host_osd_fps_toggle(void);
 }
 
 SwitchInput& SwitchInput::Instance() {
@@ -164,6 +165,19 @@ void SwitchInput::Update() {
     u64 p1Down = padGetButtonsDown(&m_pads[0]);
     if ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Minus)) {
         ShowControllerApplet();
+    }
+
+    // Combinación para alternar el contador de FPS en pantalla:
+    // Minus (-) + presionar ambos sticks analógicos (L3 + R3)
+    bool minus_held = (p1Held & HidNpadButton_Minus) != 0;
+    bool stick_l_held = (p1Held & HidNpadButton_StickL) != 0;
+    bool stick_r_held = (p1Held & HidNpadButton_StickR) != 0;
+    if (minus_held && stick_l_held && (p1Down & HidNpadButton_StickR)) {
+        host_osd_fps_toggle();
+    } else if (minus_held && stick_r_held && (p1Down & HidNpadButton_StickL)) {
+        host_osd_fps_toggle();
+    } else if (stick_l_held && stick_r_held && (p1Down & HidNpadButton_Minus)) {
+        host_osd_fps_toggle();
     }
 
     u64 end_tick = armGetSystemTick();

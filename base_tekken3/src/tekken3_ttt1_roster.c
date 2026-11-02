@@ -2134,8 +2134,9 @@ void tekken3_ttt1_roster_tick(void) {
         }
     }
     /* Selection identity: the actor carries its guest's own ID. */
+    static int selected=-1;
     if(state==8) {
-        static int selected=-1;int wanted=0;
+        int wanted=0;
         for(unsigned p=0;p<2;p++) {
             unsigned id=psx_mod_read_half(0x800a9240+p*0x188c);
             if(id==native_id[p]){wanted=1;continue;}
@@ -2152,6 +2153,8 @@ void tekken3_ttt1_roster_tick(void) {
         }
         for(unsigned p=0;p<2;p++)if(tekken3_devil_jin_player(p))wanted=1;
         if(wanted!=selected){tekken3_ttt1_select(wanted);selected=wanted;}
+    } else {
+        if(selected!=0){tekken3_ttt1_select(0);selected=0;}
     }
 }
 

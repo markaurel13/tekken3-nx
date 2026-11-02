@@ -54,6 +54,16 @@ static uint32_t s_vol_img[VOL_BAR_W * VOL_BAR_H];
 static int      s_vol_w = VOL_BAR_W;
 static int      s_vol_h = VOL_BAR_H;
 
+#define FPS_MAX_CHARS 32
+#define FPS_IMG_W ((OSD_PAD_X * 2 + FPS_MAX_CHARS * OSD_GLYPH_W) * OSD_SCALE)
+#define FPS_IMG_H ((OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE)
+static int      s_fps_active = 0;
+static char     s_fps_str[FPS_MAX_CHARS] = "";
+static uint32_t s_fps_img[FPS_IMG_W * FPS_IMG_H];
+static int      s_fps_img_w = 0;
+static int      s_fps_img_h = 0;
+static int      s_fps_dirty = 1;
+
 #ifndef PSX_SDL_NO_RENDER
 static SDL_Texture *s_sdl_tex;
 static int          s_sdl_tw;
@@ -158,6 +168,43 @@ static void rasterize_volume(void) {
             s_vol_img[y * s_vol_w + x] = 0xFFFFFFFFu;
     }
     s_vol_dirty = 0;
+}
+
+static void rasterize_fps(void) {
+    int n = (int)strlen(s_fps_str);
+    if (n > FPS_MAX_CHARS) n = FPS_MAX_CHARS;
+    s_fps_img_w = (OSD_PAD_X * 2 + n * OSD_GLYPH_W) * OSD_SCALE;
+    s_fps_img_h = (OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE;
+    if (s_fps_img_w < 1) s_fps_img_w = 1;
+    if (s_fps_img_h < 1) s_fps_img_h = 1;
+    if (s_fps_img_w > FPS_IMG_W) s_fps_img_w = FPS_IMG_W;
+    if (s_fps_img_h > FPS_IMG_H) s_fps_img_h = FPS_IMG_H;
+
+    for (int i = 0; i < s_fps_img_w * s_fps_img_h; i++)
+        s_fps_img[i] = 0xD0101010u;
+
+    for (int ci = 0; ci < n; ci++) {
+        unsigned char ch = (unsigned char)s_fps_str[ci];
+        if (ch < 32 || ch > 126) ch = '?';
+        const uint8_t *g = FONT8X8[ch - 32];
+        for (int row = 0; row < OSD_GLYPH_H; row++) {
+            uint8_t bits = g[row];
+            for (int col = 0; col < OSD_GLYPH_W; col++) {
+                if (!(bits & (1u << col))) continue;
+                int x0 = (OSD_PAD_X + ci * OSD_GLYPH_W + col) * OSD_SCALE;
+                int y0 = (OSD_PAD_Y + row) * OSD_SCALE;
+                for (int dy = 0; dy < OSD_SCALE; dy++) {
+                    for (int dx = 0; dx < OSD_SCALE; dx++) {
+                        int x = x0 + dx, y = y0 + dy;
+                        if ((unsigned)x < (unsigned)s_fps_img_w &&
+                            (unsigned)y < (unsigned)s_fps_img_h)
+                            s_fps_img[y * s_fps_img_w + x] = 0xFF50FF50u;
+                    }
+                }
+            }
+        }
+    }
+    s_fps_dirty = 0;
 }
 
 #ifndef PSX_SDL_NO_RENDER
@@ -314,6 +361,52 @@ int host_osd_volume_image(const uint32_t **pixels, int *w, int *h) {
     if (pixels) *pixels = s_vol_img;
     if (w) *w = s_vol_w;
     if (h) *h = s_vol_h;
+    return 1;
+#endif
+}
+
+void host_osd_fps_toggle(void) {
+    s_fps_active = !s_fps_active;
+    s_fps_dirty = 1;
+    if (s_fps_active) {
+        host_osd_push("FPS: ON", 1500);
+    } else {
+        host_osd_push("FPS: OFF", 1500);
+    }
+}
+
+int host_osd_fps_is_active(void) {
+    return s_fps_active;
+}
+
+void host_osd_fps_update(double fps, double ms) {
+    if (!s_fps_active) return;
+    char buf[FPS_MAX_CHARS];
+    snprintf(buf, sizeof(buf), "%.1f FPS (%.1fms)", fps, ms);
+    if (strcmp(buf, s_fps_str) != 0) {
+        strncpy(s_fps_str, buf, sizeof(s_fps_str) - 1);
+        s_fps_str[sizeof(s_fps_str) - 1] = '\0';
+        s_fps_dirty = 1;
+    }
+}
+
+int host_osd_fps_image(const uint32_t **pixels, int *w, int *h) {
+#if !HOST_OSD_VISUAL
+    if (pixels) *pixels = NULL;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    return 0;
+#else
+    if (!s_fps_active || !s_fps_str[0]) {
+        if (pixels) *pixels = NULL;
+        if (w) *w = 0;
+        if (h) *h = 0;
+        return 0;
+    }
+    if (s_fps_dirty) rasterize_fps();
+    if (pixels) *pixels = s_fps_img;
+    if (w) *w = s_fps_img_w;
+    if (h) *h = s_fps_img_h;
     return 1;
 #endif
 }

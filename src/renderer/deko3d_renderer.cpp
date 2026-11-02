@@ -1566,6 +1566,15 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             int vy = ((int)curOutH > vdh) ? (((int)curOutH - vdh) / 2) : osdMargin;
             DrawOsdImage(osdPx, osdW, osdH, vx, vy, vdw, vdh, curOutW, curOutH, colorTarget);
         }
+        const uint32_t* fpsPx = nullptr;
+        int fpsW = 0, fpsH = 0;
+        if (host_osd_fps_image(&fpsPx, &fpsW, &fpsH) && fpsPx) {
+            int fdw = fpsW * uiScale;
+            int fdh = fpsH * uiScale;
+            int fx = ((int)curOutW > fdw + osdMargin) ? ((int)curOutW - fdw - osdMargin) : osdMargin;
+            int fy = osdMargin;
+            DrawOsdImage(fpsPx, fpsW, fpsH, fx, fy, fdw, fdh, curOutW, curOutH, colorTarget);
+        }
         host_osd_present_done();
     }
 

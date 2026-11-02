@@ -803,6 +803,7 @@ static void gon_breath_rule(unsigned player) {
 }
 static void preload_player_hit_effects(void);
 static int ready(unsigned player) {
+    if(psx_mod_read_word(0x800ae204)!=8)return 0;
     /* Diagnostic ponctuel sous TEKKEN3_GUEST_WHY=1 : dire QUELLE garde bloque.
      * load_combat() a plusieurs sorties muettes. */
     if(getenv("TEKKEN3_GUEST_WHY")) {
@@ -2814,6 +2815,7 @@ void __wrap_func_8002CD7C(CPUState *cpu) {
     __real_func_8002CD7C(cpu);
 }
 void tekken3_ttt1_combat_tick(void) {
+    if(psx_mod_read_word(0x800ae204)!=8)return;
     install_cpu_table();
     install_force_bosses();
     for(unsigned player=0;player<2;player++) {
