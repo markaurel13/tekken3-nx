@@ -2229,18 +2229,20 @@ static void hfx_swap(const HfxSwap *s,unsigned n,unsigned buffer,int trace) {
         psx_mod_write_word(o+20,page<<16|v<<8|ur);
         psx_mod_write_half(o+28,(uint16_t)((v+63)<<8|ul));
         psx_mod_write_half(o+36,(uint16_t)((v+63)<<8|ur));
-        if(s[k].fade) {
+        {
             uint32_t cmd = psx_mod_read_word(prim+4) & 0xff000000u;
-            /* PS2 hit effect packs have pre-faded palettes (one per frame).
+            /* Hit effect packs have pre-colored or pre-faded palettes (one per frame).
              * Set raw texture bit (opcode 0x2D / 0x2F) and zero out vertex RGB,
              * eliminating the 50% grey quad artifact completely. */
             psx_mod_write_word(o+4, (cmd | 0x01000000u) & 0xff000000u);
-            static int s_logged_swap = 0;
-            if(!s_logged_swap) {
-                s_logged_swap = 1;
-                printf("[PS2_HFX_Diag] First PS2 swap: slot=%u prim=%08X -> ours=%08X cmd=%08X cell=(%u,%u) pal=(%u,%u)\n",
-                       s[k].slot, prim, o, (cmd | 0x01000000u) & 0xff000000u, cell->x, cell->y, s[k].pal_x, s[k].pal_y);
-                fflush(stdout);
+            if(s[k].fade) {
+                static int s_logged_swap = 0;
+                if(!s_logged_swap) {
+                    s_logged_swap = 1;
+                    printf("[PS2_HFX_Diag] First PS2 swap: slot=%u prim=%08X -> ours=%08X cmd=%08X cell=(%u,%u) pal=(%u,%u)\n",
+                           s[k].slot, prim, o, (cmd | 0x01000000u) & 0xff000000u, cell->x, cell->y, s[k].pal_x, s[k].pal_y);
+                    fflush(stdout);
+                }
             }
         }
     }
