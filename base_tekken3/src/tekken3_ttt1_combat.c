@@ -1974,7 +1974,7 @@ static const Hfx *hit_effect_64_pack(unsigned p) {
     if(own && *own && tekken3_cine_frame()>=0)return cine_hfx(own);
     const Hfx *ps2=ps2_hfx_for(p);
     if(ps2)return ps2;
-    if(s_in_hfx_preload || hit_effect_in_fight[p] || tekken3_ttt1_embu_effect_guest(p))return slots[p].hfx.data?&slots[p].hfx:NULL;
+    if(s_in_hfx_preload || tekken3_guest_data_prefix_for(p) || hit_effect_in_fight[p] || tekken3_ttt1_embu_effect_guest(p))return slots[p].hfx.data?&slots[p].hfx:NULL;
     return native_hfx(psx_mod_read_half(FX_IDS+p*0x188c));
 }
 /* A pack in its cells (image k at cells[k], palette p at row pal_y + p of
@@ -2157,7 +2157,6 @@ static void preload_player_hit_effects(void) {
     sparks_place();
     for(unsigned p=0;p<2;p++) {
         load_hit_effect(p);
-        place_hit_effect(p);
         const Hfx *h=hit_effect_64_pack(p);
         if(h) {
             place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
@@ -2824,7 +2823,7 @@ void tekken3_ttt1_combat_tick(void) {
             if(ready(player)) {
                 /* A native on its TTT1 moves and Devil Jin keep their own
                  * strong-hit effect (and Devil Jin his Devil face). */
-                if(tekken3_ttt1_player_motion_mode(player)==2 && !tekken3_devil_jin_player(player))place_hit_effect(player);
+                if(tekken3_ttt1_player_motion_mode(player)==2 && !tekken3_devil_jin_player(player) && !hit_effect_64_pack(player))place_hit_effect(player);
                 sample_sweeps(player);
                 uint32_t actor=0x800a9228+player*0x188c,record=psx_mod_read_word(actor+0x54);
                 unsigned frame=psx_mod_read_half(actor+0x58),duration=0;

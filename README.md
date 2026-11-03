@@ -37,12 +37,14 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 
 ## 📁 Installation & File Structure
 
+### Step 1: Base Game Installation (Tekken 3 PS1)
+
 1. Extract the release package onto the root of your Nintendo Switch microSD card.
 2. Place your own copy of **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
 3. (Optional) Use Sphaira to generate a Home Menu shortcut so you can launch the game directly without entering the Homebrew Menu.
 
-Your directory structure on the microSD card should look like this (Before first launch):
+Your directory structure on the microSD card should look like this (Base game):
 
 ```text
 sdmc:/
@@ -60,7 +62,56 @@ sdmc:/
 > **Note:** The port includes an intelligent universal disc detector. While standard names like `Tekken 3 (USA).cue` are recommended, it will automatically search, match, and mount any compatible `.cue`, `.bin`, `.iso`, or `.chd` placed inside the `disc/` or `tekken3/` directory regardless of file naming.
 
 >  [!TIP]
-> **Enable Auto Save on First Launch:** Once in-game, Go to **OPTION MODE** → **MEMORY CARD** and turn **AUTO SAVE: ON**. This ensures your progress is saved automatically whenever you finish a mode, unlock a character, or set a new record
+> **Enable Auto Save on First Launch:** Once in-game, Go to **OPTION MODE** → **MEMORY CARD** and turn **AUTO SAVE: ON**. This ensures your progress is saved automatically whenever you finish a mode, unlock a character, or set a new record.
+
+---
+
+### Step 2: Installing Tekken 3 Expanded (Web Installer)
+
+**Tekken 3 Expanded** upgrades your game into the definitive fighting experience:
+- **20+ Additional Fighters from TTT1:** Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
+- **28 Arcade & TTT 3D Stages:** Full 3D geometry stages from the arcade versions of Tekken 3 and Tekken Tag Tournament.
+- **Remastered PS2 Stage BGM:** High-fidelity remastered stage music from the PS2 release (`ps2-music.ttp`).
+- **TTT Ending Cinematics & Embu:** Fully authentic in-engine endings and cinematics.
+- **Alternate Outfit Selector & HD Gallery:** Extra costumes for the entire roster.
+
+To install Expanded features easily without compiling or running command-line scripts, use the **Web Installer**:
+
+👉 **[Launch Tekken 3 Expanded Web Installer](https://markaurel13.github.io/tekken3-expanded-installer/)**  
+*(or run `python3 installer/serve.py` locally and open `http://localhost:8196`)*
+
+#### How to use the Web Installer:
+1. Open the web installer in any modern browser (Chrome, Firefox, Safari, Edge).
+2. **Drag and drop** your legally dumped files directly into the window (you can drop individual files, or an archive `.zip` / `.7z` / folder containing them):
+   - 🕹️ **Tekken 3 Arcade ROM** (`tekken3.zip` — Namco System 12 MAME set)
+   - 🕹️ **Tekken Tag Tournament Arcade ROM** (`tektagt.zip` — Namco System 12 MAME set)
+   - 💿 **Tekken Tag Tournament PS2 Disc** (`SLUS-20001` — `.iso` or `.bin`/`.cue`)
+   - *(Optional)* Your **Tekken 3 PS1 Disc** if you want it bundled directly into the `disc/` folder.
+3. The installer will automatically verify the file signatures and extract the remastered PS2 music and stage data right inside your browser.
+4. Click **Crear paquete para Switch / Build Switch Package**.
+5. Once downloaded, extract `tekken3-expanded.zip` and **drag and drop the `switch` folder** onto the root of your Switch microSD card (`sdmc:/`).
+
+Your directory structure with Tekken 3 Expanded will look like this:
+
+```text
+sdmc:/
+└── switch/
+    └── tekken3/
+        ├── tekken3_nx.nro              
+        ├── config.txt                  
+        ├── disc/
+        │   └── Tekken 3 (USA).cue / .bin
+        └── mods/
+            ├── arcade-stages/        # 13 Tekken 3 Arcade 3D stages (.ast)
+            ├── ttt-stages/           # 15 Tekken Tag Arcade 3D stages (.ast)
+            ├── ttt-ps2-music/        # 14 Remastered PS2 audio tracks (ps2-music.ttp)
+            ├── ttt-music/            # Arcade BGM (music.ttm)
+            ├── ttt-cinematics/       # Full TTT Endings and Embu (.cine)
+            ├── ttt-ps2-laser/        # Devil & Angel PS2 lasers and hitsparks
+            ├── difficulty/           # Authentic arcade difficulty tables
+            ├── ttt1/                 # TTT1 roster movesets and assets
+            └── outfit-menu/          # Alternate costume selector & HD portraits
+```
 
 ---
 
