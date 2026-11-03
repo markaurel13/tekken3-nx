@@ -3176,7 +3176,7 @@ void tekken3_ttt1_precach_kazuya(void) {
         "Jun", "Kunimitsu", "Baek", "Bruce", "Wang", "Armorking",
         "Ganryu", "Lee", "Roger", "Alex", "DevilJin", "Angel", "Devil",
         "Jack2", "Pjack", "Trueogre", "Ogre", "Julia", "Kuma",
-        "Lei", "Anna", "Michelle", "Tetsujin", "Mokujin"
+        "Lei", "Anna", "Michelle", "Tetsujin", "Mokujin", "Kazuya"
     };
     static const char *fighter_exts[] = {
         "-combat.jmv", "-tables.jst", "-sfx.jus", "-voices.juv",
