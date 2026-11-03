@@ -1,0 +1,51 @@
+{
+  "version": "1.0.0",
+  "title": "Tekken 3 Expanded (Nintendo Switch)",
+  "nro": {
+    "filename": "tekken3_nx.nro",
+    "sha256": "853b6bbcf2299e57bc40af9f5232e2bbe3487de5e5a941042d9cba94082d0628",
+    "size": 14839657
+  },
+  "mod_bundles": [
+    {
+      "name": "arcade-stages",
+      "path": "./release/mods/arcade-stages.zip",
+      "target": "mods/arcade-stages"
+    },
+    {
+      "name": "ttt-stages",
+      "path": "./release/mods/ttt-stages.zip",
+      "target": "mods/ttt-stages"
+    },
+    {
+      "name": "difficulty",
+      "path": "./release/mods/difficulty.zip",
+      "target": "mods/difficulty"
+    },
+    {
+      "name": "ttt-music",
+      "path": "./release/mods/ttt-music.zip",
+      "target": "mods/ttt-music"
+    },
+    {
+      "name": "ttt-ps2-laser",
+      "path": "./release/mods/ttt-ps2-laser.zip",
+      "target": "mods/ttt-ps2-laser"
+    },
+    {
+      "name": "ttt-cinematics",
+      "path": "./release/mods/ttt-cinematics.zip",
+      "target": "mods/ttt-cinematics"
+    },
+    {
+      "name": "ttt1",
+      "path": "./release/mods/ttt1.zip",
+      "target": "mods/ttt1"
+    },
+    {
+      "name": "outfit-menu",
+      "path": "./release/mods/outfit-menu.zip",
+      "target": "mods/outfit-menu"
+    }
+  ]
+}

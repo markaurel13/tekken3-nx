@@ -1,0 +1,14 @@
+# ==============================================================================
+# Tekken 3 (USA) - Nintendo Switch Port Configuration
+# ==============================================================================
+
+# Resolucion interna / Supersampling:
+# 1 = 1x (Resolucion nativa PS1 1024x512)
+# 2 = 2x HD (Recomendado - 60 FPS fijos a 1020MHz Stock)
+# 3 = 3x Ultra HD
+supersampling = 2
+
+# Relacion de aspecto:
+# false = 4:3 Clasico con bandas laterales (Original PS1)
+# true  = 16:9 Panoramico
+widescreen = false

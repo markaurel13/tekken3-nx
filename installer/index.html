@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tekken 3 Expanded — Nintendo Switch Web Installer</title>
+  <meta name="description" content="Build the complete Tekken 3 Expanded package for Nintendo Switch directly in your browser.">
+  <meta name="theme-color" content="#0a0b0e">
+  <style>
+    :root {
+      --bg: #090b10;
+      --panel: rgba(16, 20, 28, 0.88);
+      --panel-hover: rgba(22, 28, 38, 0.95);
+      --card-bg: rgba(11, 14, 20, 0.75);
+      --border: rgba(255, 255, 255, 0.1);
+      --border-focus: #ff3b30;
+      --text: #f0f3f6;
+      --muted: #8b949e;
+      --red: #ff3b30;
+      --red-hover: #ff5247;
+      --gold: #ff9500;
+      --good: #34c759;
+      --bad: #ff453a;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: clamp(16px, 3vw, 40px) 16px;
+    }
+
+    /* Ambient background glow */
+    body::before {
+      content: "";
+      position: fixed;
+      top: -20%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 400px;
+      background: radial-gradient(ellipse at center, rgba(255, 59, 48, 0.15) 0%, rgba(255, 149, 0, 0.05) 45%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 780px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    header {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .badge-pill {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: rgba(255, 59, 48, 0.2);
+      color: var(--red);
+      padding: 3px 10px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 59, 48, 0.3);
+    }
+
+    .languages {
+      display: flex;
+      gap: 6px;
+    }
+
+    .languages button {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .languages button:hover, .languages button.active {
+      background: var(--red);
+      border-color: var(--red);
+      color: #fff;
+    }
+
+    h1 {
+      font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #ffffff 60%, var(--muted) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: clamp(0.9rem, 2vw, 1.05rem);
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: clamp(16px, 2.5vw, 24px);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(16px);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Drag & Drop Zone */
+    .drop-zone {
+      border: 2px dashed rgba(255, 255, 255, 0.2);
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.25);
+      padding: clamp(24px, 4vw, 36px) 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .drop-zone:hover, .drop-zone.drag-active {
+      border-color: var(--red);
+      background: rgba(255, 59, 48, 0.06);
+      transform: translateY(-1px);
+    }
+
+    .drop-icon {
+      font-size: 2.4rem;
+      margin-bottom: 4px;
+    }
+
+    .drop-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .drop-sub {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .browse-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 6px;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    /* Components Checklist */
+    .checklist-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .checklist {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .checklist-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      gap: 12px;
+    }
+
+    .item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .item-name {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .item-hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .status-badge {
+      font-size: 0.8rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
+    }
+
+    .status-badge.bad {
+      background: rgba(255, 69, 58, 0.15);
+      color: var(--bad);
+      border: 1px solid rgba(255, 69, 58, 0.3);
+    }
+
+    .status-badge.good {
+      background: rgba(52, 199, 89, 0.15);
+      color: var(--good);
+      border: 1px solid rgba(52, 199, 89, 0.3);
+    }
+
+    .status-badge.checking {
+      background: rgba(255, 149, 0, 0.15);
+      color: var(--gold);
+      border: 1px solid rgba(255, 149, 0, 0.3);
+    }
+
+    .status-badge.optional {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    /* Options checklist */
+    .options-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+    }
+
+    .opt-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+    }
+
+    .opt-label input[type="checkbox"] {
+      accent-color: var(--red);
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Primary Action Button */
+    .btn-primary {
+      background: var(--red);
+      color: #fff;
+      border: none;
+      font-size: 1.05rem;
+      font-weight: 700;
+      padding: 14px 24px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 16px rgba(255, 59, 48, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--red-hover);
+      box-shadow: 0 6px 20px rgba(255, 59, 48, 0.5);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    /* Progress and Logs */
+    .progress-box {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--red), var(--gold));
+      transition: width 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding-right: 6px;
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #000;
+    }
+
+    .log-box {
+      background: #050608;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.78rem;
+      max-height: 180px;
+      overflow-y: auto;
+      color: #abb2bf;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .log-line.error { color: var(--bad); }
+
+    /* Result Success Card */
+    .result-card {
+      background: rgba(52, 199, 89, 0.08);
+      border: 1px solid rgba(52, 199, 89, 0.3);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .result-title {
+      font-weight: 700;
+      color: var(--good);
+      font-size: 1.05rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    pre.tree-box {
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.8rem;
+      color: #38ef7d;
+      overflow-x: auto;
+    }
+
+    footer {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    footer a {
+      color: var(--muted);
+      text-decoration: underline;
+    }
+
+    footer a:hover { color: #fff; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="top-bar">
+      <span class="badge-pill" data-i18n="heroBadge">Nintendo Switch Port</span>
+      <div class="languages" id="languages"></div>
+    </div>
+    <h1 data-i18n="appTitle">Tekken 3 Expanded — Nintendo Switch Installer</h1>
+    <p class="subtitle" data-i18n="subtitle">Build the complete package with TTT1 characters, 3D arcade stages, cinematics, outfits and remixed music from your own copies.</p>
+  </header>
+
+  <!-- Drag & Drop Card -->
+  <div class="card">
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-icon">📦</div>
+      <div class="drop-title" data-i18n="dropAreaTitle">Arrastra tus archivos aquí</div>
+      <div class="drop-sub" data-i18n="dropAreaSub">Suelta tekken3.zip, tektagt.zip y tu ISO de Tekken Tag PS2 (o un archivo .7z/.zip con ellos)</div>
+      
+      <div class="browse-actions">
+        <label class="btn-secondary">
+          📁 <span data-i18n="btnChooseFiles">Seleccionar archivos</span>
+          <input type="file" id="fileInput" multiple style="display: none;">
+        </label>
+        <label class="btn-secondary">
+          🗂️ <span data-i18n="btnChooseFolder">Seleccionar carpeta</span>
+          <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+        </label>
+      </div>
+    </div>
+
+    <!-- Required Components Checklist -->
+    <div class="checklist-title" data-i18n="detectedComponents">Archivos necesarios:</div>
+    <div class="checklist">
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name" data-i18n="compT3Arcade">Tekken 3 Arcade ROM (tekken3.zip)</div>
+          <div class="item-hint">Namco System 12 MAME set</div>
+        </div>
+        <div class="status-badge bad" id="badgeT3Arcade" data-i18n="statusMissing">No detectado</div>
+      </div>
+
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name" data-i18n="compTttArcade">Tekken Tag Arcade ROM (tektagt.zip)</div>
+          <div class="item-hint">Namco System 12 MAME set</div>
+        </div>
+        <div class="status-badge bad" id="badgeTttArcade" data-i18n="statusMissing">No detectado</div>
+      </div>
+
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name" data-i18n="compTttPs2">Tekken Tag PS2 Disc (SLUS-20001)</div>
+          <div class="item-hint">Imagen .iso o .bin/.cue (USA v1.00 o v2.00)</div>
+        </div>
+        <div class="status-badge bad" id="badgeTttPs2" data-i18n="statusMissing">No detectado</div>
+      </div>
+
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name" data-i18n="compT3Ps1">Tekken 3 PS1 Disc (SLUS-00402)</div>
+          <div class="item-hint" data-i18n="statusOptional">Opcional (si ya lo instalaste antes)</div>
+        </div>
+        <div class="status-badge optional" id="badgeT3Ps1">○ Opcional</div>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="checklist-title" data-i18n="optionsTitle">Opciones del paquete:</div>
+    <div class="options-grid">
+      <label class="opt-label">
+        <input type="checkbox" id="optPs2Music" checked>
+        <span data-i18n="optPs2Music">Música PS2 remasterizada (ps2-music.ttp)</span>
+      </label>
+      <label class="opt-label">
+        <input type="checkbox" id="optStages" checked>
+        <span data-i18n="optStages">28 Escenarios 3D Arcade & TTT (.ast)</span>
+      </label>
+      <label class="opt-label">
+        <input type="checkbox" id="optCinematics" checked>
+        <span data-i18n="optCinematics">Finales y cinemáticas TTT</span>
+      </label>
+      <label class="opt-label">
+        <input type="checkbox" id="optOutfits" checked>
+        <span data-i18n="optOutfits">Menú de trajes y galería HD</span>
+      </label>
+      <label class="opt-label">
+        <input type="checkbox" id="optNro" checked>
+        <span data-i18n="optNro">Incluir ejecutable de Switch (tekken3_nx.nro)</span>
+      </label>
+    </div>
+
+    <!-- Primary action button -->
+    <button class="btn-primary" id="btnBuild" disabled>
+      ⚡ <span data-i18n="btnBuild">Crear paquete para Switch</span>
+    </button>
+
+    <!-- Progress & Log Section -->
+    <div class="progress-box" id="progressContainer" hidden>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progressBar">0%</div>
+      </div>
+      <div class="log-box" id="logBox"></div>
+    </div>
+
+    <!-- Post-Build Result Card -->
+    <div class="result-card" id="resultCard" hidden>
+      <div class="result-title">
+        🎉 <span data-i18n="buildComplete">¡Paquete generado con éxito!</span>
+      </div>
+      <p data-i18n-html="buildSuccessMsg">Tu archivo <strong>tekken3-expanded.zip</strong> se ha descargado. Descomprímelo y copia la carpeta <code>switch</code> directamente en la raíz de tu tarjeta microSD (<code>sdmc:/</code>).</p>
+      <pre class="tree-box">sdmc:/
+└── switch/
+    └── tekken3/
+        ├── tekken3_nx.nro
+        ├── config.txt
+        ├── disc/                [Tu copia de Tekken 3 PS1]
+        └── mods/
+            ├── arcade-stages/   [13 escenarios Tekken 3 Arcade]
+            ├── ttt-stages/      [15 escenarios Tekken Tag Arcade]
+            ├── ttt-ps2-music/   [14 pistas remasterizadas PS2]
+            ├── ttt-music/       [BGM Arcade]
+            ├── ttt-cinematics/  [Finales y cinemáticas TTT]
+            ├── outfit-menu/     [Menú de trajes y galería]
+            └── ttt1/            [Luchadores y movimientos TTT1]</pre>
+    </div>
+  </div>
+
+  <footer>
+    Tekken 3 (USA) Native Recompilation Port for Nintendo Switch — Open Source Homebrew
+  </footer>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
