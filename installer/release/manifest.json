@@ -1,11 +1,6 @@
 {
   "version": "1.2",
   "title": "Tekken 3: Definitive Edition (Nintendo Switch)",
-  "nro": {
-    "filename": "tekken3_nx.nro",
-    "sha256": "ef978b8cfa679b48b8984d3906baa7ece48c6286ab9bad2fa084f6ae446c85fa",
-    "size": 14856297
-  },
   "mod_bundles": [
     {
       "name": "arcade-stages",
