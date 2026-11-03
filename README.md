@@ -35,7 +35,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 
 ---
 
-## 📁 Installation & File Structure
+## 📁 1. Installing Tekken 3 (Base game)
 
 ### Step 1: Base Game Installation (Tekken 3 PS1)
 
@@ -66,7 +66,7 @@ sdmc:/
 
 ---
 
-### Step 2: Installing Tekken 3 Expanded (Web Installer)
+### Step 2: Installing Tekken 3 Expanded (This will be available soon, meanwhile just ignore it)
 
 **Tekken 3 Expanded** upgrades your game into the definitive fighting experience:
 - **20+ Additional Fighters from TTT1:** Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
