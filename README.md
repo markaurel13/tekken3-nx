@@ -2,7 +2,7 @@
   <img src="assets/tekken3_logo.png" alt="Tekken 3" width="400" />
 </p>
 
-# Tekken 3 (USA) — Nintendo Switch Native Port
+# Tekken 3: Definitive Edition for Nintendo Switch
 
 [![Platform: Nintendo Switch](https://img.shields.io/badge/Platform-Nintendo%20Switch-E60012.svg?logo=nintendoswitch&logoColor=white)](https://github.com/markaurel13/tekken3_nx)
 [![Performance: Locked 60 FPS](https://img.shields.io/badge/Performance-Locked%2060%20FPS-brightgreen.svg)]()
@@ -19,6 +19,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 ## ✨ Features
 
 - **Rock-Solid 60 FPS on Stock Clocks:** Direct native execution with zero emulation overhead, running at a locked 60 FPS.
+- **Tekken 3 Expanded compatibility:** Includes 18 new extra characters from TTT1 (Including Kazuya, Kunimitsu, Yun and more) , 28 3D stages from the arcade versions of Tekken 3 and TTT1, costume selector and more.
 - **Internal Supersampling Anti-Aliasing (Game Resolution):**
   - **2x HD (Default):** Crisp polygon edges and optimal performance (Full HD)
   - **3x Ultra HD:** Maximum polygon edge definition for 4K / large TV screens via `sdmc:/switch/tekken3/config.txt` *(Note: Since the Switch output is capped at 1080p, 3x SSAA is overkill and may cause occasional frame drops to ~55 FPS)*.
@@ -72,11 +73,11 @@ sdmc:/
 - **Remastered PS2 Stage BGM:** High-fidelity remastered stage music from the PS2 release (`ps2-music.ttp`).
 - **TTT Ending Cinematics & Embu:** Fully authentic in-engine endings and cinematics.
 - **Alternate Costume Selector & Standalone Outfits:** 7 extra character outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate outfit selection.
+- **New Stage selector on VS MODE** You can now choose which specific stage you would like to fight on in VS MODE.
 
-To generate and install the Expanded content easily without compiling or running command-line scripts, use the **Web Installer**:
+To generate and install the Expanded content easily use the **web installer:**
 
-👉 **[Launch Tekken 3 Expanded Web Installer](https://markaurel13.github.io/tekken3-expanded-installer/)**  
-*(or run `python3 installer/serve.py` locally and open `http://localhost:8196`)*
+👉 **[Tekken 3 Expanded Web Installer](https://markaurel13.github.io/tekken3-expanded-installer/)**  
 
 ### How to use the Web Installer:
 1. Open the web installer in any modern browser (Chrome, Firefox, Safari, Edge).
