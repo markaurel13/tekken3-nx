@@ -37,10 +37,8 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 
 ## 📁 1. Installing Tekken 3 (Base game)
 
-### Step 1: Base Game Installation (Tekken 3 PS1)
-
-1. Extract the release package onto the root of your Nintendo Switch microSD card.
-2. Place your own copy of **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `disc/` subfolder.
+1. Download the latest release (`tekken3_nx.zip`) from the [Releases](https://github.com/markaurel13/tekken3_nx/releases) page and extract it onto the root of your Nintendo Switch microSD card (`sdmc:/`).
+2. Place your own copy of **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `switch/tekken3/disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
 3. (Optional) Use Sphaira to generate a Home Menu shortcut so you can launch the game directly without entering the Homebrew Menu.
 
@@ -50,8 +48,8 @@ Your directory structure on the microSD card should look like this (Base game):
 sdmc:/
 └── switch/
     └── tekken3/
-        ├── tekken3_nx.nro              
-        ├── config.txt                  
+        ├── tekken3_nx.nro              # Nintendo Switch native executable (from Releases)
+        ├── config.txt                  # Graphics & options config
         ├── disc/
         │   ├── Tekken 3 (USA).cue       
         │   ├── Tekken 3 (USA) (Track 1).bin
@@ -66,30 +64,31 @@ sdmc:/
 
 ---
 
-### Step 2: Installing Tekken 3 Expanded (This will be available soon, meanwhile just ignore it)
+## 🥊 2. Installing Tekken 3 Expanded
 
 **Tekken 3 Expanded** upgrades your game into the definitive fighting experience:
-- **20+ Additional Fighters from TTT1:** Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
-- **28 Arcade & TTT 3D Stages:** Full 3D geometry stages from the arcade versions of Tekken 3 and Tekken Tag Tournament.
+- **18 Additional Fighters from TTT1:** Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
+- **28 Arcade & TTT 3D Stages:** Full 3D geometry stages from the arcade versions of Tekken 3 (13 stages) and Tekken Tag Tournament (15 stages).
 - **Remastered PS2 Stage BGM:** High-fidelity remastered stage music from the PS2 release (`ps2-music.ttp`).
 - **TTT Ending Cinematics & Embu:** Fully authentic in-engine endings and cinematics.
-- **Alternate Outfit Selector & HD Gallery:** Extra costumes for the entire roster.
+- **Alternate Costume Selector & Standalone Outfits:** 7 extra character outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate outfit selection.
 
-To install Expanded features easily without compiling or running command-line scripts, use the **Web Installer**:
+To generate and install the Expanded content easily without compiling or running command-line scripts, use the **Web Installer**:
 
 👉 **[Launch Tekken 3 Expanded Web Installer](https://markaurel13.github.io/tekken3-expanded-installer/)**  
 *(or run `python3 installer/serve.py` locally and open `http://localhost:8196`)*
 
-#### How to use the Web Installer:
+### How to use the Web Installer:
 1. Open the web installer in any modern browser (Chrome, Firefox, Safari, Edge).
-2. **Drag and drop** your legally dumped files directly into the window (you can drop individual files, or an archive `.zip` / `.7z` / folder containing them):
+2. **Drag and drop** (or select) your legally dumped files:
    - 🕹️ **Tekken 3 Arcade ROM** (`tekken3.zip` — Namco System 12 MAME set)
    - 🕹️ **Tekken Tag Tournament Arcade ROM** (`tektagt.zip` — Namco System 12 MAME set)
-   - 💿 **Tekken Tag Tournament PS2 Disc** (`SLUS-20001` — `.iso` or `.bin`/`.cue`)
-   - *(Optional)* Your **Tekken 3 PS1 Disc** if you want it bundled directly into the `disc/` folder.
-3. The installer will automatically verify the file signatures and extract the remastered PS2 music and stage data right inside your browser.
-4. Click **Crear paquete para Switch / Build Switch Package**.
-5. Once downloaded, extract `tekken3-expanded.zip` and **drag and drop the `switch` folder** onto the root of your Switch microSD card (`sdmc:/`).
+   - 💿 **Tekken Tag Tournament PS2 Disc** (`SLUS-20001` — `.iso` or `.bin` USA v1.00 or v2.00)
+3. Once all 3 files are detected, click **⚡ Build Switch Package**. The installer will extract all stage geometry, decrypt and convert the remastered PS2 music, and prepare all 16 mod packs right inside your browser.
+4. When finished, `tekken3-expanded.zip` will download automatically. Extract it and **drag and drop the `switch` folder** onto the root of your Switch microSD card (`sdmc:/`).
+
+> [!NOTE]
+> The Web Installer builds strictly the `mods/` directory containing all 16 mod packages. Make sure you have installed the base game and latest `tekken3_nx.nro` from Section 1.
 
 Your directory structure with Tekken 3 Expanded will look like this:
 
@@ -97,31 +96,38 @@ Your directory structure with Tekken 3 Expanded will look like this:
 sdmc:/
 └── switch/
     └── tekken3/
-        ├── tekken3_nx.nro              
-        ├── config.txt                  
+        ├── tekken3_nx.nro              # From GitHub Releases
+        ├── config.txt                  # Configuration file
         ├── disc/
         │   └── Tekken 3 (USA).cue / .bin
         └── mods/
-            ├── arcade-stages/        # 13 Tekken 3 Arcade 3D stages (.ast)
-            ├── ttt-stages/           # 15 Tekken Tag Arcade 3D stages (.ast)
-            ├── ttt-ps2-music/        # 14 Remastered PS2 audio tracks (ps2-music.ttp)
-            ├── ttt-music/            # Arcade BGM (music.ttm)
-            ├── ttt-cinematics/       # Full TTT Endings and Embu (.cine)
-            ├── ttt-ps2-laser/        # Devil & Angel PS2 lasers and hitsparks
-            ├── difficulty/           # Authentic arcade difficulty tables
-            ├── ttt1/                 # TTT1 roster movesets and assets
-            └── outfit-menu/          # Alternate costume selector & HD portraits
+            ├── anna-jessica-rabbit/    # Anna Jessica Rabbit red dress costume
+            ├── arcade-stages/          # 13 Tekken 3 Arcade 3D stages (.ast)
+            ├── difficulty/             # Authentic arcade difficulty tables
+            ├── eddy-monochrome/        # Eddy monochrome outfit
+            ├── heihachi-tiger-coat/    # Heihachi tiger fur coat costume
+            ├── julia-blue/             # Julia blue denim costume
+            ├── kuma-polar-bear/        # Kuma polar bear costume
+            ├── nina-white-satin/       # Nina white satin dress costume
+            ├── outfit-menu/            # Alternate costume selector & HD portraits
+            ├── ttt1/                   # 18 TTT1 roster fighters, movesets & assets
+            ├── ttt-cinematics/         # Full TTT Endings and Embu (.cine)
+            ├── ttt-music/              # Arcade BGM (music.ttm)
+            ├── ttt-ps2-laser/          # Devil & Angel PS2 lasers and hitsparks
+            ├── ttt-ps2-music/          # 14 Remastered PS2 audio tracks (ps2-music.ttp)
+            ├── ttt-stages/             # 15 Tekken Tag Arcade 3D stages (.ast)
+            └── xiaoyu-cherry-blossom/  # Xiaoyu cherry blossom qipao costume
 ```
 
 ---
 
-## ⚙️ Graphics Configuration (`config.txt`)
+## ⚙️ Game & Graphics Configuration (`config.txt`)
 
-You can customize graphical settings by editing [`config.txt`](config.txt) located in `sdmc:/switch/tekken3/config.txt`:
+You can customize graphical and gameplay settings by editing [`config.txt`](config.txt) located in `sdmc:/switch/tekken3/config.txt`:
 
 ```ini
 # ==============================================================================
-# Tekken 3 (USA) - Graphics Configuration for Nintendo Switch
+# Tekken 3 (USA) - Nintendo Switch Port Configuration
 # ==============================================================================
 # Place this file in the same directory as 'tekken3_nx.nro' on your microSD card
 # (e.g. sdmc:/switch/tekken3/config.txt).
@@ -131,20 +137,29 @@ You can customize graphical settings by editing [`config.txt`](config.txt) locat
 # Internal Supersampling Anti-Aliasing (SSAA):
 #   1 = 1x PS1 Native (1024x512)
 #   2 = 2x HD (2048x1024) [RECOMMENDED]
-#       -> Sharp edges, optimal configuration
+#       -> Sharp edges, locked 60 FPS on stock clocks
 #   3 = 3x Ultra HD (3072x1536)
-#       -> Maximum polygon edge definition for 4K / large TV screens (Switch has a 1080p limit, so it is overkill and may cause FPS drops to 55 FPS)
+#       -> Maximum polygon edge definition for 4K / large TV screens (Switch output is capped at 1080p)
 # ------------------------------------------------------------------------------
 supersampling = 2
 
 # ------------------------------------------------------------------------------
 # Screen Aspect Ratio:
-#   OFF = 4:3 Original with black sidebars [RECOMMENDED IF YOU WANT THE ORIGINAL EXPERIENCE]
+#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]
 #         -> Preserves authentic retro proportions for characters and stages.
 #   ON  = 16:9 Fullscreen Widescreen
 #         -> Fills the entire Switch screen and 16:9 TV display without bars.
 # ------------------------------------------------------------------------------
 widescreen_16_9 = OFF
+
+# ------------------------------------------------------------------------------
+# Unlock All Characters & Modes:
+#   0 = OFF: Authentic progression. Loads only characters unlocked in your save/memory card. [DEFAULT]
+#   1 = ON: Automatically unlocks all characters, secret costumes, and modes.
+#       WARNING: If you save your game while ON (1), your memory card will record
+#       100% progression with all fighters and modes permanently unlocked.
+# ------------------------------------------------------------------------------
+unlocked_all_characters = 0
 ```
 
 ---
