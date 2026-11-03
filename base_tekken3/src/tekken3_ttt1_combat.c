@@ -1676,12 +1676,11 @@ static void load_hit_effect(unsigned s) {
     if(snprintf(path,sizeof path,"%s/%s-hiteffect.tim",root,tekken3_guest_data_prefix_for(s))>=(int)sizeof path)return;
     size_t file_sz = 0;
     const unsigned char *cached = switch_cached_file_get(path, &file_sz);
-    if(!cached || file_sz < 32*576) return;
-    unsigned char *p = (unsigned char *)malloc(32*576);
+    if(!cached || !file_sz || (file_sz % 576)) return;
+    size_t n = file_sz < 32 * 576 ? file_sz : 32 * 576;
+    unsigned char *p = (unsigned char *)calloc(32 * 576, 1);
     if(!p) return;
-    memcpy(p, cached, 32*576);
-    size_t n = 32*576;
-    if(n%576){free(p);return;}
+    memcpy(p, cached, n);
     for(size_t o=0;o<n;o+=576)
         if(word(p+o)!=0x10 || word(p+o+4)!=8 || word(p+o+8)!=44 || word(p+o+16)!=0x10010 ||
            word(p+o+52)!=524 || word(p+o+60)!=0x200008){free(p);return;}
@@ -1975,7 +1974,7 @@ static const Hfx *hit_effect_64_pack(unsigned p) {
     if(own && *own && tekken3_cine_frame()>=0)return cine_hfx(own);
     const Hfx *ps2=ps2_hfx_for(p);
     if(ps2)return ps2;
-    if(hit_effect_in_fight[p] || tekken3_ttt1_embu_effect_guest(p))return slots[p].hfx.data?&slots[p].hfx:NULL;
+    if(s_in_hfx_preload || hit_effect_in_fight[p] || tekken3_ttt1_embu_effect_guest(p))return slots[p].hfx.data?&slots[p].hfx:NULL;
     return native_hfx(psx_mod_read_half(FX_IDS+p*0x188c));
 }
 /* A pack in its cells (image k at cells[k], palette p at row pal_y + p of
@@ -2157,14 +2156,15 @@ static void preload_player_hit_effects(void) {
     sparks_tick();
     sparks_place();
     for(unsigned p=0;p<2;p++) {
+        load_hit_effect(p);
+        place_hit_effect(p);
         const Hfx *h=hit_effect_64_pack(p);
         if(h) {
             place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
-#ifndef NDEBUG
-            printf("[PS2_HFX_Diag] Preloaded hit effect for P%u: images=%u palettes=%u flags=%u\n",
-                   p+1, h->images, h->palettes, h->flags);
+            const char *who = tekken3_guest_name_for(p);
+            printf("[HFX_Preload] P%u (%s): preloaded %u frames, %u palettes into High VRAM\n",
+                   p+1, who ? who : "Native", h->images, h->palettes);
             fflush(stdout);
-#endif
         }
     }
     s_in_hfx_preload = 0;
@@ -2235,14 +2235,12 @@ static void hfx_swap(const HfxSwap *s,unsigned n,unsigned buffer,int trace) {
              * Set raw texture bit (opcode 0x2D / 0x2F) and zero out vertex RGB,
              * eliminating the 50% grey quad artifact completely. */
             psx_mod_write_word(o+4, (cmd | 0x01000000u) & 0xff000000u);
-            if(s[k].fade) {
-                static int s_logged_swap = 0;
-                if(!s_logged_swap) {
-                    s_logged_swap = 1;
-                    printf("[PS2_HFX_Diag] First PS2 swap: slot=%u prim=%08X -> ours=%08X cmd=%08X cell=(%u,%u) pal=(%u,%u)\n",
-                           s[k].slot, prim, o, (cmd | 0x01000000u) & 0xff000000u, cell->x, cell->y, s[k].pal_x, s[k].pal_y);
-                    fflush(stdout);
-                }
+            static int s_logged_swap = 0;
+            if(!s_logged_swap) {
+                s_logged_swap = 1;
+                printf("[HFX_Swap] First swap: slot=%u prim=%08X -> ours=%08X cmd=%08X cell=(%u,%u) pal=(%u,%u) fade=%u\n",
+                       s[k].slot, prim, o, (cmd | 0x01000000u) & 0xff000000u, cell->x, cell->y, s[k].pal_x, s[k].pal_y, s[k].fade);
+                fflush(stdout);
             }
         }
     }
