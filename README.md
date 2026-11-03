@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/tekken3_logo.png" alt="Tekken 3" width="400" />
+  <img src="assets/icon.jpg" alt="Tekken 3: Definitive Edition" width="280" />
 </p>
 
 # Tekken 3: Definitive Edition for Nintendo Switch
