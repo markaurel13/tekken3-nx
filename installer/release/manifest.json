@@ -38,8 +38,28 @@
       "target": "mods/ttt-cinematics"
     },
     {
-      "name": "ttt1",
-      "path": "./release/mods/ttt1.zip",
+      "name": "ttt1-part1",
+      "path": "./release/mods/ttt1-part1.zip",
+      "target": "mods/ttt1"
+    },
+    {
+      "name": "ttt1-part2",
+      "path": "./release/mods/ttt1-part2.zip",
+      "target": "mods/ttt1"
+    },
+    {
+      "name": "ttt1-part3",
+      "path": "./release/mods/ttt1-part3.zip",
+      "target": "mods/ttt1"
+    },
+    {
+      "name": "ttt1-part4",
+      "path": "./release/mods/ttt1-part4.zip",
+      "target": "mods/ttt1"
+    },
+    {
+      "name": "ttt1-part5",
+      "path": "./release/mods/ttt1-part5.zip",
       "target": "mods/ttt1"
     },
     {
