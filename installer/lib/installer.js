@@ -59,25 +59,25 @@ export async function buildPackage(inputs, options = {}, sink, log = () => {}, p
 
   // 4. Pre-built mod payloads from release/mods/ (All included for complete functionality)
   const modList = manifest?.mod_bundles || [
-    { name: 'arcade-stages', path: './release/mods/arcade-stages.zip', target: 'mods/arcade-stages' },
-    { name: 'ttt-stages', path: './release/mods/ttt-stages.zip', target: 'mods/ttt-stages' },
-    { name: 'difficulty', path: './release/mods/difficulty.zip', target: 'mods/difficulty' },
-    { name: 'ttt-music', path: './release/mods/ttt-music.zip', target: 'mods/ttt-music' },
-    { name: 'ttt-ps2-laser', path: './release/mods/ttt-ps2-laser.zip', target: 'mods/ttt-ps2-laser' },
-    { name: 'ttt-cinematics', path: './release/mods/ttt-cinematics.zip', target: 'mods/ttt-cinematics' },
-    { name: 'ttt1-part1', path: './release/mods/ttt1-part1.zip', target: 'mods/ttt1' },
-    { name: 'ttt1-part2', path: './release/mods/ttt1-part2.zip', target: 'mods/ttt1' },
-    { name: 'ttt1-part3', path: './release/mods/ttt1-part3.zip', target: 'mods/ttt1' },
-    { name: 'ttt1-part4', path: './release/mods/ttt1-part4.zip', target: 'mods/ttt1' },
-    { name: 'ttt1-part5', path: './release/mods/ttt1-part5.zip', target: 'mods/ttt1' },
-    { name: 'outfit-menu', path: './release/mods/outfit-menu.zip', target: 'mods/outfit-menu' },
-    { name: 'anna-jessica-rabbit', path: './release/mods/anna-jessica-rabbit.zip', target: 'mods/anna-jessica-rabbit' },
-    { name: 'eddy-monochrome', path: './release/mods/eddy-monochrome.zip', target: 'mods/eddy-monochrome' },
-    { name: 'heihachi-tiger-coat', path: './release/mods/heihachi-tiger-coat.zip', target: 'mods/heihachi-tiger-coat' },
-    { name: 'julia-blue', path: './release/mods/julia-blue.zip', target: 'mods/julia-blue' },
-    { name: 'kuma-polar-bear', path: './release/mods/kuma-polar-bear.zip', target: 'mods/kuma-polar-bear' },
-    { name: 'nina-white-satin', path: './release/mods/nina-white-satin.zip', target: 'mods/nina-white-satin' },
-    { name: 'xiaoyu-cherry-blossom', path: './release/mods/xiaoyu-cherry-blossom.zip', target: 'mods/xiaoyu-cherry-blossom' }
+    { name: 'arcade-stages', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/arcade-stages.zip', target: 'mods/arcade-stages' },
+    { name: 'ttt-stages', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt-stages.zip', target: 'mods/ttt-stages' },
+    { name: 'difficulty', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/difficulty.zip', target: 'mods/difficulty' },
+    { name: 'ttt-music', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt-music.zip', target: 'mods/ttt-music' },
+    { name: 'ttt-ps2-laser', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt-ps2-laser.zip', target: 'mods/ttt-ps2-laser' },
+    { name: 'ttt-cinematics', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt-cinematics.zip', target: 'mods/ttt-cinematics' },
+    { name: 'ttt1-part1', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt1-part1.zip', target: 'mods/ttt1' },
+    { name: 'ttt1-part2', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt1-part2.zip', target: 'mods/ttt1' },
+    { name: 'ttt1-part3', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt1-part3.zip', target: 'mods/ttt1' },
+    { name: 'ttt1-part4', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt1-part4.zip', target: 'mods/ttt1' },
+    { name: 'ttt1-part5', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/ttt1-part5.zip', target: 'mods/ttt1' },
+    { name: 'outfit-menu', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/outfit-menu.zip', target: 'mods/outfit-menu' },
+    { name: 'anna-jessica-rabbit', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/anna-jessica-rabbit.zip', target: 'mods/anna-jessica-rabbit' },
+    { name: 'eddy-monochrome', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/eddy-monochrome.zip', target: 'mods/eddy-monochrome' },
+    { name: 'heihachi-tiger-coat', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/heihachi-tiger-coat.zip', target: 'mods/heihachi-tiger-coat' },
+    { name: 'julia-blue', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/julia-blue.zip', target: 'mods/julia-blue' },
+    { name: 'kuma-polar-bear', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/kuma-polar-bear.zip', target: 'mods/kuma-polar-bear' },
+    { name: 'nina-white-satin', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/nina-white-satin.zip', target: 'mods/nina-white-satin' },
+    { name: 'xiaoyu-cherry-blossom', path: 'https://archive.org/cors/tekken-3-definitive-edition-assets/xiaoyu-cherry-blossom.zip', target: 'mods/xiaoyu-cherry-blossom' }
   ];
 
   log("Downloading and integrating complete mod bundles...");
