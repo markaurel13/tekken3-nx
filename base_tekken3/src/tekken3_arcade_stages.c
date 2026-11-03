@@ -1973,7 +1973,7 @@ static void tiles(const Gte *g, const Screen *s, uint32_t ot_a, uint32_t ot_b) {
      * simultaneously. After the suppress window, the tile renders normally.
      * Only applied on genuine entry (s_grace==0 -> GRACE_N), not on re-entry
      * while still in the grace window (s_grace>0 && s_grace<GRACE_N). */
-    enum { GRACE_N = 30 };          /* frames of exit grace = 0.5 s at 60 fps */
+    enum { GRACE_N = 10 };          /* frames of exit grace = 166 ms at 60 fps (prevents edge flicker without accumulating 400+ offscreen tiles) */
     enum { APPEAR_N = 0 };          /* frames of entry suppress: 0 (immediate appearance, avoids 2-frame blackout on camera cuts) */
     static uint8_t s_grace[256];    /* exit-grace countdown per tile */
     static uint8_t s_appear[256];   /* entry-suppress countdown per tile */
@@ -2080,6 +2080,25 @@ static void tiles(const Gte *g, const Screen *s, uint32_t ot_a, uint32_t ot_b) {
                 fprintf(s_probe, "\n");
             }
             if (behind) { s_stat_behind++; continue; }
+            /* Screen-space bounding box rejection: if all vertices are entirely outside
+             * one side of the visible screen (with 16:9 margins), the primitive is 100% offscreen. */
+            {
+                unsigned q_nv = PRIM_VERTS[pr->kind];
+                int all_l = 1, all_r = 1, all_t = 1, all_b = 1;
+                int min_x = -s->margin - 32;
+                int max_x = SCREEN_W + s->margin + 32;
+                for (unsigned q = 0; q < q_nv; q++) {
+                    unsigned idx = pr->idx[q];
+                    if (idx < nv) {
+                        int x = sx[idx], y = sy[idx];
+                        if (x >= min_x) all_l = 0;
+                        if (x <= max_x) all_r = 0;
+                        if (y >= -24) all_t = 0;
+                        if (y <= SCREEN_H + 24) all_b = 0;
+                    }
+                }
+                if (all_l || all_r || all_t || all_b) continue;
+            }
             Prim dark;
             if (night && !(flags & PRIM_KEEPS_COLOUR)) {
                 dark = *pr;

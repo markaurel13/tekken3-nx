@@ -3175,7 +3175,8 @@ void tekken3_ttt1_precach_kazuya(void) {
         "Eddy", "Hwoarang", "Gunjack", "Bryan", "Jin", "Heihachi",
         "Jun", "Kunimitsu", "Baek", "Bruce", "Wang", "Armorking",
         "Ganryu", "Lee", "Roger", "Alex", "DevilJin", "Angel", "Devil",
-        "Jack2", "Pjack", "Trueogre", "Ogre", "Julia", "Kuma"
+        "Jack2", "Pjack", "Trueogre", "Ogre", "Julia", "Kuma",
+        "Lei", "Anna", "Michelle", "Tetsujin", "Mokujin"
     };
     static const char *fighter_exts[] = {
         "-combat.jmv", "-tables.jst", "-sfx.jus", "-voices.juv",
@@ -3194,10 +3195,18 @@ void tekken3_ttt1_precach_kazuya(void) {
         switch_audio_pump_if_needed();
     }
 
-    // 3. Todos los escenarios Arcade (stage00..stage12)
-    for (int i = 0; i <= 12; i++) {
+    // 3. Todos los escenarios Arcade (stage00..stage12) y TTT (stage00..stage14)
+    for (int i = 0; i <= 14; i++) {
         char stg_path[256];
-        snprintf(stg_path, sizeof(stg_path), "sdmc:/switch/tekken3/mods/arcade-stages/stage%02d.ast", i);
+        if (i <= 12) {
+            snprintf(stg_path, sizeof(stg_path), "sdmc:/switch/tekken3/mods/arcade-stages/stage%02d.ast", i);
+            size_t sz = 0;
+            if (switch_cached_file_get(stg_path, &sz)) {
+                total_bytes += sz;
+                loaded++;
+            }
+        }
+        snprintf(stg_path, sizeof(stg_path), "sdmc:/switch/tekken3/mods/ttt-stages/stage%02d.ast", i);
         size_t sz = 0;
         if (switch_cached_file_get(stg_path, &sz)) {
             total_bytes += sz;
