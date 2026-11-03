@@ -65,31 +65,23 @@ sdmc:/
 
 ---
 
-## 🥊 2. Installing Tekken 3 Expanded (You can ignore this for now, will be available soon)
+## 🥊 2. Installing Tekken 3: Definitive Edition (Expanded Content)
 
-**Tekken 3 Expanded** upgrades your game into the definitive fighting experience:
+**Tekken 3: Definitive Edition** upgrades your game into the ultimate fighting experience:
 - **18 Additional Fighters from TTT1:** Kazuya, Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
 - **28 Arcade & TTT 3D Stages:** Full 3D geometry stages from the arcade versions of Tekken 3 (13 stages) and Tekken Tag Tournament (15 stages).
 - **Remastered PS2 Stage BGM:** High-fidelity remastered stage music from the PS2 release (`ps2-music.ttp`).
 - **TTT Ending Cinematics & Embu:** Fully authentic in-engine endings and cinematics.
-- **Alternate Costume Selector & Standalone Outfits:** 7 extra character outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate outfit selection.
-- **New Stage selector on VS MODE** You can now choose which specific stage you would like to fight on in VS MODE.
+- **Alternate Costume Selector & Standalone Outfits:** 7 extra character outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate outfit selection with PC HD textures.
+- **New Stage selector on VS MODE:** You can now choose which specific stage you would like to fight on in VS MODE.
 
-To generate and install the Expanded content easily use the **web installer:**
+### Download & Installation:
 
-👉 **[Tekken 3 Expanded Web Installer](https://markaurel13.github.io/tekken3-expanded-installer/)**  
+👉 **[Download Tekken 3: Definitive Edition Mods Pack (Google Drive)](https://drive.google.com/file/d/1dFQZTuh34nnW12jRc1Qa5V3vW_Ru9tL5/view?usp=sharing)**
 
-### How to use the Web Installer:
-1. Open the web installer in any modern browser (Chrome, Firefox, Safari, Edge).
-2. **Drag and drop** (or select) your legally dumped files:
-   - 🕹️ **Tekken 3 Arcade ROM** (`tekken3.zip` — Namco System 12 MAME set)
-   - 🕹️ **Tekken Tag Tournament Arcade ROM** (`tektagt.zip` — Namco System 12 MAME set)
-   - 💿 **Tekken Tag Tournament PS2 Disc** (`SLUS-20001` — `.iso` or `.bin` USA v1.00 or v2.00)
-3. Once all 3 files are detected, click **⚡ Build Switch Package**. The installer will extract all stage geometry, decrypt and convert the remastered PS2 music, and prepare all 16 mod packs right inside your browser.
-4. When finished, `tekken3-expanded.zip` will download automatically. Extract it and **drag and drop the `switch` folder** onto the root of your Switch microSD card (`sdmc:/`).
-
-> [!NOTE]
-> The Web Installer builds strictly the `mods/` directory containing all 16 mod packages. Make sure you have installed the base game and latest `tekken3_nx.nro` from Section 1.
+1. Download `Tekken3_Definitive_Edition_v1.2_Mods.zip` (~449 MB) from the Google Drive link above.
+2. Extract the `mods` folder directly into `sdmc:/switch/tekken3/` on your microSD card (so it sits right next to `tekken3_nx.nro`).
+3. Launch the game from Homebrew Menu or your forwarder and enjoy!
 
 Your directory structure with Tekken 3 Expanded will look like this:
 
