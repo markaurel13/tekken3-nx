@@ -17,6 +17,9 @@ extern "C" {
 #include "crc32.h"
 #include "mod_plugins.h"
 #include "cpu_state.h"
+void ensure_outfit_catalog_loaded(void);
+#include "gpu_hd_texture_match.h"
+#include "tekken3_anna_skin_match.h"
 }
 #include "build_version.h"
 
@@ -123,6 +126,170 @@ bool Deko3DRenderer::LoadShader(dk::Shader& shader, dk::MemBlock& block, uint32_
     return true;
 }
 
+void Deko3DRenderer::InvalidateSkinMaps() {
+    if (!m_skinMap) return;
+    for (int i = 0; i < T3_SKIN_COUNT; ++i) {
+        ++m_skinMap[i].generation;
+    }
+}
+
+void Deko3DRenderer::LoadAllHdSkinPacks(uint64_t& curImgOffset) {
+    if (!m_skinMap) {
+        m_skinMap = new HdTextureMap[T3_SKIN_COUNT]();
+    }
+    static const char* s_skinFolders[T3_SKIN_COUNT] = {
+        "nina-white-satin",
+        "xiaoyu-cherry-blossom",
+        "anna-jessica-rabbit",
+        "kuma-polar-bear",
+        "eddy-monochrome",
+        "julia-blue",
+        "heihachi-tiger-coat"
+    };
+    static const char* s_skinFiles[T3_SKIN_COUNT] = {
+        "nina",
+        "xiaoyu",
+        "anna",
+        "kuma",
+        "eddy",
+        "julia",
+        "heihachi"
+    };
+    static const char* s_skinLabels[T3_SKIN_COUNT] = {
+        "Nina White Satin",
+        "Xiaoyu Cherry Blossom Ribbon",
+        "Anna Jessica Rabbit",
+        "Kuma Polar Bear",
+        "Eddy Monochrome",
+        "Julia Blue",
+        "Heihachi Tiger Coat"
+    };
+
+    static const char* s_searchRoots[] = {
+        "sdmc:/switch/tekken3/mods/assets",
+        "sdmc:/switch/tekken3/mods",
+        "mods/assets",
+        "mods",
+        "romfs:/mods/assets",
+        "romfs:/mods"
+    };
+    constexpr size_t numRoots = sizeof(s_searchRoots) / sizeof(s_searchRoots[0]);
+
+    for (int i = 0; i < T3_SKIN_COUNT; i++) {
+        m_skinLoaded[i] = false;
+        hd_map_clear(&m_skinMap[i]);
+
+        char foundMapPath[512] = {0};
+        char foundRgbaPath[512] = {0};
+
+        for (size_t r = 0; r < numRoots; r++) {
+            char testMap[512];
+            char testRgba[512];
+            snprintf(testMap, sizeof(testMap), "%s/%s/mapping.bin", s_searchRoots[r], s_skinFolders[i]);
+            snprintf(testRgba, sizeof(testRgba), "%s/%s/%s.rgba", s_searchRoots[r], s_skinFolders[i], s_skinFiles[i]);
+
+            if (!foundMapPath[0]) {
+                FILE* f = fopen(testMap, "rb");
+                if (f) {
+                    fclose(f);
+                    snprintf(foundMapPath, sizeof(foundMapPath), "%s", testMap);
+                }
+            }
+            if (!foundRgbaPath[0]) {
+                FILE* f = fopen(testRgba, "rb");
+                if (f) {
+                    fclose(f);
+                    snprintf(foundRgbaPath, sizeof(foundRgbaPath), "%s", testRgba);
+                }
+            }
+        }
+
+        if (!foundMapPath[0] || !foundRgbaPath[0]) {
+            printf("[Deko3D] HD Skin [%d] %s no encontrada (map=%s, rgba=%s)\n",
+                   i, s_skinLabels[i], foundMapPath[0] ? foundMapPath : "FALTA", foundRgbaPath[0] ? foundRgbaPath : "FALTA");
+            continue;
+        }
+
+        if (!hd_map_load(&m_skinMap[i], foundMapPath)) {
+            printf("[Deko3D] Error al cargar mapping.bin para %s desde %s\n", s_skinLabels[i], foundMapPath);
+            continue;
+        }
+
+        for (uint32_t k = 0; k < m_skinMap[i].count; ++k) {
+            m_skinMap[i].tiles[k].kind = (uint32_t)(3 + i);
+        }
+
+        FILE* f = fopen(foundRgbaPath, "rb");
+        if (!f) {
+            printf("[Deko3D] Error al abrir %s para %s\n", foundRgbaPath, s_skinLabels[i]);
+            hd_map_clear(&m_skinMap[i]);
+            continue;
+        }
+
+        char magic[8];
+        uint32_t w = 0, h = 0;
+        if (fread(magic, 1, 8, f) != 8 || memcmp(magic, "HDRGBA01", 8) != 0 ||
+            fread(&w, 4, 1, f) != 1 || fread(&h, 4, 1, f) != 1 ||
+            !w || !h || w > 4096 || h > 4096) {
+            printf("[Deko3D] Archivo RGBA no valido para %s: %s\n", s_skinLabels[i], foundRgbaPath);
+            fclose(f);
+            hd_map_clear(&m_skinMap[i]);
+            continue;
+        }
+
+        size_t pixelBytes = (size_t)w * h * 4;
+        if (pixelBytes > 32 * 1024 * 1024) {
+            printf("[Deko3D] Textura demasiado grande para %s (%zu bytes)\n", s_skinLabels[i], pixelBytes);
+            fclose(f);
+            hd_map_clear(&m_skinMap[i]);
+            continue;
+        }
+
+        uint8_t* stagingCpu = (uint8_t*)m_memStaging.getCpuAddr();
+        size_t bytesRead = fread(stagingCpu, 1, pixelBytes, f);
+        fclose(f);
+
+        if (bytesRead != pixelBytes) {
+            printf("[Deko3D] Lectura incompleta de %s (%zu / %zu bytes)\n", foundRgbaPath, bytesRead, pixelBytes);
+            hd_map_clear(&m_skinMap[i]);
+            continue;
+        }
+
+        dk::ImageLayout skinLayout;
+        dk::ImageLayoutMaker{m_device}
+            .setFlags(DkImageFlags_BlockLinear | DkImageFlags_Usage2DEngine)
+            .setFormat(DkImageFormat_RGBA8_Unorm)
+            .setDimensions(w, h)
+            .initialize(skinLayout);
+
+        curImgOffset = (curImgOffset + skinLayout.getAlignment() - 1) & ~(skinLayout.getAlignment() - 1);
+        m_skinImages[i].initialize(skinLayout, m_memImages, curImgOffset);
+        curImgOffset += skinLayout.getSize();
+
+        m_memStaging.flushCpuCache(0, pixelBytes);
+
+        m_cmdBufPool[0].clear();
+        m_cmdPoolOffset[0] = m_cmdPoolBase[0] + CmdBufferSize;
+        m_cmdBufPool[0].addMemory(m_memData, m_cmdPoolBase[0], CmdBufferSize);
+
+        dk::ImageView skinView{ m_skinImages[i] };
+        m_cmdBufPool[0].copyBufferToImage(
+            { m_memStaging.getGpuAddr(), 0, 0 },
+            skinView,
+            { 0, 0, 0, w, h, 1 }
+        );
+        m_cmdBufPool[0].barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+        m_queue.submitCommands(m_cmdBufPool[0].finishList());
+        m_queue.waitIdle();
+
+        m_skinLoaded[i] = true;
+        tekken3_outfits_set_available(i, 1);
+        printf("[Deko3D] HD Skin [%d] %s cargada exitosamente: %ux%u (%u tiles, %zu KB).\n",
+               i, s_skinLabels[i], w, h, m_skinMap[i].count, pixelBytes / 1024);
+    }
+    fflush(stdout);
+}
+
 bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widescreen) {
     if (m_initialized) {
         m_vram = vramPtr;
@@ -150,8 +317,8 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
         .create();
 
     // 2. Asignar Memoria GPU
-    // Bloque para Framebuffers y Texturas de VRAM (64 MB para acomodar Framebuffers + VRAM Render Target 2048x1024)
-    m_memImages = dk::MemBlockMaker{m_device, 64 * 1024 * 1024}
+    // Bloque para Framebuffers, VRAM, OSD y Texturas HD (128 MB para acomodar Framebuffers + VRAM Render Target + 7 Skins HD)
+    m_memImages = dk::MemBlockMaker{m_device, 128 * 1024 * 1024}
         .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
         .create();
 
@@ -237,6 +404,10 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     m_osdImage.initialize(osdLayout, m_memImages, curImgOffset);
     curImgOffset += osdLayout.getSize();
 
+    // 6c. Cargar catálogo de trajes y precargar todas las skins HD de los personajes en GPU
+    ensure_outfit_catalog_loaded();
+    LoadAllHdSkinPacks(curImgOffset);
+
     // 7. Configurar NWindow a 1920x1080 máximo y crear Swapchain (con recorte dinámico 720p Handheld / 1080p Docked)
     NWindow* win = nwindowGetDefault();
     nwindowSetDimensions(win, TargetWidth, TargetHeight);
@@ -255,11 +426,11 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     // 9. Mapear buffers en m_memData (32 MB):
     // 0x00000000..0x00800000: Frame 0 Command Pool (8 MB)
     // 0x00800000..0x01000000: Frame 1 Command Pool (8 MB)
-    // 0x01000000..0x01400000: Frame 0 Vertex Pool (4 MB = 131,072 vertices)
-    // 0x01400000..0x01800000: Frame 1 Vertex Pool (4 MB = 131,072 vertices)
-    // 0x01E00000: Image Descriptor Set
-    // 0x01E00100: Sampler Descriptor Set
-    // 0x01E00200: ViewportBlock UBO
+    // 0x01000000..0x01400000: Frame 0 Vertex Pool (4 MB = 98,304 vertices)
+    // 0x01400000..0x01800000: Frame 1 Vertex Pool (4 MB = 98,304 vertices)
+    // 0x01E00000: Image Descriptor Set (32 descriptores = 1024 bytes)
+    // 0x01E00400: Sampler Descriptor Set (32 descriptores = 1024 bytes)
+    // 0x01E00800: ViewportBlock UBO
     uint8_t* dataCpu = (uint8_t*)m_memData.getCpuAddr();
     DkGpuAddr dataGpu = m_memData.getGpuAddr();
 
@@ -276,11 +447,11 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
 
     m_imgDescCpu = dataCpu + 0x01E00000;
     m_imgDescGpu = dataGpu + 0x01E00000;
-    m_smpDescCpu = dataCpu + 0x01E00100;
-    m_smpDescGpu = dataGpu + 0x01E00100;
+    m_smpDescCpu = dataCpu + 0x01E00400;
+    m_smpDescGpu = dataGpu + 0x01E00400;
 
     for (unsigned i = 0; i < NumFrameResources; i++) {
-        m_viewportUboGpuPool[i] = dataGpu + 0x01E00200 + i * DK_UNIFORM_BUF_ALIGNMENT;
+        m_viewportUboGpuPool[i] = dataGpu + 0x01E00800 + i * DK_UNIFORM_BUF_ALIGNMENT;
     }
     m_viewportUboGpu = m_viewportUboGpuPool[0];
 
@@ -290,25 +461,39 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     // Inicializar descriptores en GPU usando pushData y comando en cola
     dk::ImageView rawView{ m_rawVramImage };
     dk::ImageView osdView{ m_osdImage };
-    dk::ImageDescriptor imgDescs[2];
+    dk::ImageDescriptor imgDescs[9];
     imgDescs[0].initialize(rawView);
     imgDescs[1].initialize(osdView);
+    for (int i = 0; i < T3_SKIN_COUNT; i++) {
+        if (m_skinLoaded[i]) {
+            dk::ImageView skinView{ m_skinImages[i] };
+            imgDescs[2 + i].initialize(skinView);
+        } else {
+            imgDescs[2 + i].initialize(rawView);
+        }
+    }
     memcpy(m_imgDescCpu, imgDescs, sizeof(imgDescs));
 
-    dk::Sampler sampler;
-    sampler.setFilter(DkFilter_Nearest, DkFilter_Nearest);
-    sampler.setWrapMode(DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge);
-    dk::SamplerDescriptor smpDesc;
-    smpDesc.initialize(sampler);
-    memcpy(m_smpDescCpu, &smpDesc, sizeof(smpDesc));
+    dk::Sampler samplerNearest;
+    samplerNearest.setFilter(DkFilter_Nearest, DkFilter_Nearest);
+    samplerNearest.setWrapMode(DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge);
+
+    dk::Sampler samplerLinear;
+    samplerLinear.setFilter(DkFilter_Linear, DkFilter_Linear);
+    samplerLinear.setWrapMode(DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge);
+
+    dk::SamplerDescriptor smpDescs[2];
+    smpDescs[0].initialize(samplerNearest);
+    smpDescs[1].initialize(samplerLinear);
+    memcpy(m_smpDescCpu, smpDescs, sizeof(smpDescs));
 
     m_cmdBuf.clear();
     m_cmdPoolOffset[0] = m_cmdPoolBase[0] + CmdBufferSize;
     m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[0], CmdBufferSize);
     m_cmdBuf.pushData(m_imgDescGpu, imgDescs, sizeof(imgDescs));
-    m_cmdBuf.pushData(m_smpDescGpu, &smpDesc, sizeof(smpDesc));
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 2);
-    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 1);
+    m_cmdBuf.pushData(m_smpDescGpu, smpDescs, sizeof(smpDescs));
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 9);
+    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Descriptors);
 
     // Limpiar m_vramTexture a negro inicial
@@ -400,6 +585,14 @@ void Deko3DRenderer::Shutdown() {
     m_swapchain.destroy();
     for (unsigned i = 0; i < NumFrameResources; i++) {
         m_cmdBufPool[i].destroy();
+    }
+    if (m_skinMap) {
+        for (int i = 0; i < T3_SKIN_COUNT; i++) {
+            hd_map_clear(&m_skinMap[i]);
+            m_skinLoaded[i] = false;
+        }
+        delete[] m_skinMap;
+        m_skinMap = nullptr;
     }
     m_memStaging.destroy();
     m_memData.destroy();
@@ -772,18 +965,29 @@ void Deko3DRenderer::FlushBatch() {
     m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
     m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
 
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 2);
-    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 1);
-    m_cmdBuf.bindTextures(DkStage_Fragment, 0, { dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0) });
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 9);
+    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
+    m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
+        dkMakeTextureHandle(0, 0),
+        dkMakeTextureHandle(1, 0),
+        dkMakeTextureHandle(2, 1),
+        dkMakeTextureHandle(3, 1),
+        dkMakeTextureHandle(4, 1),
+        dkMakeTextureHandle(5, 1),
+        dkMakeTextureHandle(6, 1),
+        dkMakeTextureHandle(7, 1),
+        dkMakeTextureHandle(8, 1),
+    });
 
     // 7. Configurar Formato de Vértices y Buffer
-    static const std::array<DkVtxAttribState, 6> vtxAttribState = {{
+    static const std::array<DkVtxAttribState, 7> vtxAttribState = {{
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, pos),        DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, uv),         DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, color),      DkVtxAttribSize_4x8,  DkVtxAttribType_Unorm, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, tpage_clut), DkVtxAttribSize_2x16, DkVtxAttribType_Uint,  0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, flags),      DkVtxAttribSize_1x32, DkVtxAttribType_Uint,  0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, q),          DkVtxAttribSize_1x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, hd_uv),      DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
     }};
     DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
     m_cmdBuf.bindVtxAttribState(vtxAttribState);
@@ -804,9 +1008,9 @@ void Deko3DRenderer::DrawFlatTriangle(int x0, int y0, int x1, int y1, int x2, in
     PS1ColorToRGBA8(color, rgba);
     uint32_t flags = (m_semiEnabled ? 8u : 0u) | ((uint32_t)m_semiMode << 4u);
 
-    PS1Vertex v0 = { {(float)x0, (float)y0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v1 = { {(float)x1, (float)y1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v2 = { {(float)x2, (float)y2}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
+    PS1Vertex v0 = { {(float)x0, (float)y0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {(float)x1, (float)y1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {(float)x2, (float)y2}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
 
     PushTriangle(v0, v1, v2);
 }
@@ -820,9 +1024,9 @@ void Deko3DRenderer::DrawGouraudTriangle(int x0, int y0, uint16_t c0,
     PS1ColorToRGBA8(c2, rgba2);
     uint32_t flags = (m_semiEnabled ? 8u : 0u) | ((uint32_t)m_semiMode << 4u);
 
-    PS1Vertex v0 = { {(float)x0, (float)y0}, {0.0f, 0.0f}, {rgba0[0], rgba0[1], rgba0[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v1 = { {(float)x1, (float)y1}, {0.0f, 0.0f}, {rgba1[0], rgba1[1], rgba1[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v2 = { {(float)x2, (float)y2}, {0.0f, 0.0f}, {rgba2[0], rgba2[1], rgba2[2], 255}, {0, 0}, flags, 0 };
+    PS1Vertex v0 = { {(float)x0, (float)y0}, {0.0f, 0.0f}, {rgba0[0], rgba0[1], rgba0[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {(float)x1, (float)y1}, {0.0f, 0.0f}, {rgba1[0], rgba1[1], rgba1[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {(float)x2, (float)y2}, {0.0f, 0.0f}, {rgba2[0], rgba2[1], rgba2[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
 
     PushTriangle(v0, v1, v2);
 }
@@ -842,9 +1046,59 @@ void Deko3DRenderer::DrawTexturedTriangle(int x0, int y0, int u0, int v0,
     float q2 = m_pqValid ? m_pq[2] : 0.0f;
     m_pqValid = false;
 
-    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q0 };
-    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q1 };
-    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q2 };
+    float hd_uv0[2] = { 0.0f, 0.0f };
+    float hd_uv1[2] = { 0.0f, 0.0f };
+    float hd_uv2[2] = { 0.0f, 0.0f };
+
+    if (clut_y >= 504 && clut_y <= 511 && !m_twMaskX && !m_twMaskY) {
+        int base_x = (texpage & 0xF) * 64;
+        int base_y = ((texpage >> 4) & 1) * 256;
+        int us[3] = { u0, u1, u2 };
+        int vs[3] = { v0, v1, v2 };
+        const HdTextureTile* hd = nullptr;
+        int matchedSkin = -1;
+
+        for (int i = 0; i < T3_SKIN_COUNT; ++i) {
+            if (m_skinLoaded[i] && tekken3_outfits_skin_enabled(i, clut_y)) {
+                hd = (i == T3_SKIN_ANNA ? tekken3_anna_skin_find : hd_map_find)(
+                    &m_skinMap[i], m_vram, base_x, base_y, depth, clut_x, clut_y, us, vs);
+                if (hd) {
+                    matchedSkin = i;
+                    break;
+                }
+            }
+        }
+
+        if (hd) {
+            static unsigned s_hd_seen = 0;
+            if (!(s_hd_seen & (1u << matchedSkin))) {
+                s_hd_seen |= (1u << matchedSkin);
+                printf("[Deko3D] HD Skin emparejada en juego: %d\n", matchedSkin);
+                fflush(stdout);
+            }
+
+            int pp = (depth == 1 ? 2 : 4);
+            float hu0 = (float)(base_x * pp + u0);
+            float hv0 = (float)(base_y + v0);
+            float hu1 = (float)(base_x * pp + u1);
+            float hv1 = (float)(base_y + v1);
+            float hu2 = (float)(base_x * pp + u2);
+            float hv2 = (float)(base_y + v2);
+
+            hd_uv0[0] = hd->map[0] * hu0 + hd->map[1] * hv0 + hd->map[2];
+            hd_uv0[1] = hd->map[3] * hu0 + hd->map[4] * hv0 + hd->map[5];
+            hd_uv1[0] = hd->map[0] * hu1 + hd->map[1] * hv1 + hd->map[2];
+            hd_uv1[1] = hd->map[3] * hu1 + hd->map[4] * hv1 + hd->map[5];
+            hd_uv2[0] = hd->map[0] * hu2 + hd->map[1] * hv2 + hd->map[2];
+            hd_uv2[1] = hd->map[3] * hu2 + hd->map[4] * hv2 + hd->map[5];
+
+            flags |= 0x400u | ((uint32_t)matchedSkin << 11u);
+        }
+    }
+
+    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q0, {hd_uv0[0], hd_uv0[1]} };
+    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q1, {hd_uv1[0], hd_uv1[1]} };
+    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, q2, {hd_uv2[0], hd_uv2[1]} };
 
     PushTriangle(vert0, vert1, vert2);
 }
@@ -868,9 +1122,59 @@ void Deko3DRenderer::DrawShadedTexturedTriangle(int x0, int y0, int u0, int v0, 
     float q2 = m_pqValid ? m_pq[2] : 0.0f;
     m_pqValid = false;
 
-    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba0[0], rgba0[1], rgba0[2], 255}, {texpage, clut}, flags, q0 };
-    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba1[0], rgba1[1], rgba1[2], 255}, {texpage, clut}, flags, q1 };
-    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba2[0], rgba2[1], rgba2[2], 255}, {texpage, clut}, flags, q2 };
+    float hd_uv0[2] = { 0.0f, 0.0f };
+    float hd_uv1[2] = { 0.0f, 0.0f };
+    float hd_uv2[2] = { 0.0f, 0.0f };
+
+    if (clut_y >= 504 && clut_y <= 511 && !m_twMaskX && !m_twMaskY) {
+        int base_x = (texpage & 0xF) * 64;
+        int base_y = ((texpage >> 4) & 1) * 256;
+        int us[3] = { u0, u1, u2 };
+        int vs[3] = { v0, v1, v2 };
+        const HdTextureTile* hd = nullptr;
+        int matchedSkin = -1;
+
+        for (int i = 0; i < T3_SKIN_COUNT; ++i) {
+            if (m_skinLoaded[i] && tekken3_outfits_skin_enabled(i, clut_y)) {
+                hd = (i == T3_SKIN_ANNA ? tekken3_anna_skin_find : hd_map_find)(
+                    &m_skinMap[i], m_vram, base_x, base_y, depth, clut_x, clut_y, us, vs);
+                if (hd) {
+                    matchedSkin = i;
+                    break;
+                }
+            }
+        }
+
+        if (hd) {
+            static unsigned s_hd_seen = 0;
+            if (!(s_hd_seen & (1u << matchedSkin))) {
+                s_hd_seen |= (1u << matchedSkin);
+                printf("[Deko3D] HD Skin emparejada en juego: %d\n", matchedSkin);
+                fflush(stdout);
+            }
+
+            int pp = (depth == 1 ? 2 : 4);
+            float hu0 = (float)(base_x * pp + u0);
+            float hv0 = (float)(base_y + v0);
+            float hu1 = (float)(base_x * pp + u1);
+            float hv1 = (float)(base_y + v1);
+            float hu2 = (float)(base_x * pp + u2);
+            float hv2 = (float)(base_y + v2);
+
+            hd_uv0[0] = hd->map[0] * hu0 + hd->map[1] * hv0 + hd->map[2];
+            hd_uv0[1] = hd->map[3] * hu0 + hd->map[4] * hv0 + hd->map[5];
+            hd_uv1[0] = hd->map[0] * hu1 + hd->map[1] * hv1 + hd->map[2];
+            hd_uv1[1] = hd->map[3] * hu1 + hd->map[4] * hv1 + hd->map[5];
+            hd_uv2[0] = hd->map[0] * hu2 + hd->map[1] * hv2 + hd->map[2];
+            hd_uv2[1] = hd->map[3] * hu2 + hd->map[4] * hv2 + hd->map[5];
+
+            flags |= 0x400u | ((uint32_t)matchedSkin << 11u);
+        }
+    }
+
+    PS1Vertex vert0 = { {(float)x0, (float)y0}, {(float)u0, (float)v0}, {rgba0[0], rgba0[1], rgba0[2], 255}, {texpage, clut}, flags, q0, {hd_uv0[0], hd_uv0[1]} };
+    PS1Vertex vert1 = { {(float)x1, (float)y1}, {(float)u1, (float)v1}, {rgba1[0], rgba1[1], rgba1[2], 255}, {texpage, clut}, flags, q1, {hd_uv1[0], hd_uv1[1]} };
+    PS1Vertex vert2 = { {(float)x2, (float)y2}, {(float)u2, (float)v2}, {rgba2[0], rgba2[1], rgba2[2], 255}, {texpage, clut}, flags, q2, {hd_uv2[0], hd_uv2[1]} };
 
     PushTriangle(vert0, vert1, vert2);
 }
@@ -883,10 +1187,10 @@ void Deko3DRenderer::DrawRect(int x, int y, int w, int h, uint16_t color) {
     float fx0 = (float)x, fy0 = (float)y;
     float fx1 = (float)(x + w), fy1 = (float)(y + h);
 
-    PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
+    PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
 
     PushTriangle(v0, v1, v2);
     PushTriangle(v1, v3, v2);
@@ -911,10 +1215,10 @@ void Deko3DRenderer::DrawTexturedRectScaled(int x, int y, int w, int h,
     float fu0 = (float)u0, fv0 = (float)v0;
     float fu1 = (float)u1, fv1 = (float)v1;
 
-    PS1Vertex vert0 = { {fx0, fy0}, {fu0, fv0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert1 = { {fx1, fy0}, {fu1, fv0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert2 = { {fx0, fy1}, {fu0, fv1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
-    PS1Vertex vert3 = { {fx1, fy1}, {fu1, fv1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0 };
+    PS1Vertex vert0 = { {fx0, fy0}, {fu0, fv0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex vert1 = { {fx1, fy0}, {fu1, fv0}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex vert2 = { {fx0, fy1}, {fu0, fv1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex vert3 = { {fx1, fy1}, {fu1, fv1}, {rgba[0], rgba[1], rgba[2], 255}, {texpage, clut}, flags, 0, {0.0f, 0.0f} };
 
     PushTriangle(vert0, vert1, vert2);
     PushTriangle(vert1, vert3, vert2);
@@ -942,10 +1246,10 @@ void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
     float fx1 = (float)(x + w), fy1 = (float)(y + h);
     uint32_t flags = 0x80000000u; // Coordenadas absolutas, sin textura
 
-    PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
-    PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0 };
+    PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
 
     PushTriangle(v0, v1, v2);
     PushTriangle(v1, v3, v2);
@@ -1024,6 +1328,7 @@ void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* 
 
     FlushBatch();
 
+    InvalidateSkinMaps();
     sw_vram_transfer_in(x, y, w, h, data);
 
     int orig_w = w;
@@ -1282,17 +1587,28 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
     m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
     m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
     m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 2);
-    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 1);
-    m_cmdBuf.bindTextures(DkStage_Fragment, 0, { dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0) });
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 9);
+    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
+    m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
+        dkMakeTextureHandle(0, 0),
+        dkMakeTextureHandle(1, 0),
+        dkMakeTextureHandle(2, 1),
+        dkMakeTextureHandle(3, 1),
+        dkMakeTextureHandle(4, 1),
+        dkMakeTextureHandle(5, 1),
+        dkMakeTextureHandle(6, 1),
+        dkMakeTextureHandle(7, 1),
+        dkMakeTextureHandle(8, 1),
+    });
 
-    static const std::array<DkVtxAttribState, 6> vtxAttribState = {{
+    static const std::array<DkVtxAttribState, 7> vtxAttribState = {{
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, pos),        DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, uv),         DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, color),      DkVtxAttribSize_4x8,  DkVtxAttribType_Unorm, 0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, tpage_clut), DkVtxAttribSize_2x16, DkVtxAttribType_Uint,  0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, flags),      DkVtxAttribSize_1x32, DkVtxAttribType_Uint,  0 },
         DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, q),          DkVtxAttribSize_1x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, hd_uv),      DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
     }};
     DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
     m_cmdBuf.bindVtxAttribState(vtxAttribState);
@@ -1301,10 +1617,10 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
 
     uint32_t startVtx = m_vtxAllocated;
     uint32_t flags = 0x200u; // Modo OSD RGBA8 en psx_fsh.glsl
-    PS1Vertex v0 = { {0.0f, 0.0f},                   {0.0f, 0.0f},           {255, 255, 255, 255}, {0, 0}, flags, 0.0f };
-    PS1Vertex v1 = { {(float)VramWidth, 0.0f},       {(float)ow, 0.0f},      {255, 255, 255, 255}, {0, 0}, flags, 0.0f };
-    PS1Vertex v2 = { {0.0f, (float)VramHeight},      {0.0f, (float)oh},      {255, 255, 255, 255}, {0, 0}, flags, 0.0f };
-    PS1Vertex v3 = { {(float)VramWidth, (float)VramHeight}, {(float)ow, (float)oh}, {255, 255, 255, 255}, {0, 0}, flags, 0.0f };
+    PS1Vertex v0 = { {0.0f, 0.0f},                   {0.0f, 0.0f},           {255, 255, 255, 255}, {0, 0}, flags, 0.0f, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {(float)VramWidth, 0.0f},       {(float)ow, 0.0f},      {255, 255, 255, 255}, {0, 0}, flags, 0.0f, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {0.0f, (float)VramHeight},      {0.0f, (float)oh},      {255, 255, 255, 255}, {0, 0}, flags, 0.0f, {0.0f, 0.0f} };
+    PS1Vertex v3 = { {(float)VramWidth, (float)VramHeight}, {(float)ow, (float)oh}, {255, 255, 255, 255}, {0, 0}, flags, 0.0f, {0.0f, 0.0f} };
 
     m_vtxRingCpu[m_vtxAllocated + 0] = v0;
     m_vtxRingCpu[m_vtxAllocated + 1] = v1;

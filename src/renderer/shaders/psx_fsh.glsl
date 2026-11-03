@@ -7,6 +7,8 @@ layout (location = 2) flat in uvec2 inTPageClut;
 layout (location = 3) flat in uint inFlags;
 layout (location = 4) smooth in vec2 inPerspUV;
 layout (location = 5) flat in uint inIsPersp;
+layout (location = 6) noperspective in vec2 inHdUV;
+layout (location = 7) smooth in vec2 inPerspHdUV;
 
 // Salida de color al framebuffer
 layout (location = 0) out vec4 outColor;
@@ -15,6 +17,8 @@ layout (location = 0) out vec4 outColor;
 layout (binding = 0) uniform usampler2D s_rawVram;
 // Sampler de textura OSD RGBA8 (1024x1024 RGBA8_Unorm para carrusel de trajes/retratos y avisos)
 layout (binding = 1) uniform sampler2D s_osdTex;
+// Samplers para las 7 skins HD de Tekken 3
+layout (binding = 2) uniform sampler2D s_hdSkins[7];
 
 // Uniform block: Parámetros del Viewport y Texture Window
 layout (std140, binding = 0) uniform ViewportBlock {
@@ -110,7 +114,16 @@ void main()
         discard;
     }
 
-    vec3 rgb = col16_to_rgb(raw);
+    bool is_hd = (inFlags & 0x400u) != 0u;
+    vec3 rgb;
+    if (is_hd) {
+        int skinId = int((inFlags >> 11u) & 0x7u);
+        vec2 curHdUV = (inIsPersp != 0u) ? inPerspHdUV : inHdUV;
+        rgb = texture(s_hdSkins[skinId], curHdUV).rgb;
+    } else {
+        rgb = col16_to_rgb(raw);
+    }
+
     bool rawTex = (inFlags & 0x4u) != 0u;
 
     if (!rawTex) {

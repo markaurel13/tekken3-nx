@@ -7,6 +7,7 @@ layout (location = 2) in vec4 inColor;
 layout (location = 3) in uvec2 inTPageClut;
 layout (location = 4) in uint inFlags;
 layout (location = 5) in float inQ;
+layout (location = 6) in vec2 inHdUV;
 
 // Outputs al Fragment Shader
 layout (location = 0) noperspective out vec2 outUV;
@@ -15,6 +16,8 @@ layout (location = 2) flat out uvec2 outTPageClut;
 layout (location = 3) flat out uint outFlags;
 layout (location = 4) smooth out vec2 outPerspUV;
 layout (location = 5) flat out uint outIsPersp;
+layout (location = 6) noperspective out vec2 outHdUV;
+layout (location = 7) smooth out vec2 outPerspHdUV;
 
 // Uniform block: Parámetros de proyección del Viewport
 layout (std140, binding = 0) uniform ViewportBlock {
@@ -44,6 +47,9 @@ void main()
     outUV = inUV;
     outPerspUV = inUV;
     outIsPersp = (inQ > 0.0) ? 1u : 0u;
+
+    outHdUV = inHdUV;
+    outPerspHdUV = inHdUV;
 
     outColor = inColor;
     outTPageClut = inTPageClut;

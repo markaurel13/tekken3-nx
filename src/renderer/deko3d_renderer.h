@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <deko3d.hpp>
 #include <array>
+#include "tekken3_outfits.h"
+
+struct HdTextureMap;
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,16 +21,17 @@ const struct GpuRenderBackend* deko3d_backend_get(void);
 
 #ifdef __cplusplus
 
-// Estructura de vértice optimizada de 32 bytes para la GPU Tegra X1 Maxwell
+// Estructura de vértice optimizada de 40 bytes para la GPU Tegra X1 Maxwell
 struct PS1Vertex {
     float pos[2];          // location 0: 2x32 Float (X, Y coordenadas de VRAM)
     float uv[2];           // location 1: 2x32 Float (U, V coordenadas de textura)
     uint8_t color[4];      // location 2: 4x8 Unorm (R, G, B, A modulación / Gouraud)
     uint16_t tpage_clut[2];// location 3: 2x16 Uint (x: texpage, y: clut)
-    uint32_t flags;        // location 4: 1x32 Uint (depth, raw, semi, blend, textured, abs)
+    uint32_t flags;        // location 4: 1x32 Uint (depth, raw, semi, blend, textured, abs, hd)
     float q;               // location 5: 1x32 Float (peso de perspectiva 1/Z del GTE; 0.0 = afín)
+    float hd_uv[2];        // location 6: 2x32 Float (coordenadas de atlas HD [0..1])
 };
-static_assert(sizeof(PS1Vertex) == 32, "PS1Vertex must be exactly 32 bytes");
+static_assert(sizeof(PS1Vertex) == 40, "PS1Vertex must be exactly 40 bytes");
 
 // Uniform buffer para proyección de Viewport y Texture Window (binding = 0 en psx_vsh.glsl y psx_fsh.glsl)
 struct ViewportUniforms {
@@ -51,7 +55,7 @@ public:
     static constexpr uint32_t OsdMaxHeight = 1024;
     static constexpr unsigned CmdBufferSize = 4 * 1024 * 1024;       // 4 MB slice inicial por frame
     static constexpr unsigned CmdPoolTotalSize = 16 * 1024 * 1024;   // 16 MB pool total para comandos
-    static constexpr unsigned MaxVerticesPerFrame = 131072;          // 128K vértices por frame (~3.5 MB)
+    static constexpr unsigned MaxVerticesPerFrame = 98304;           // 96K vértices por frame (~3.84 MB en VertexRing 4MB)
 
     uint32_t m_internalScale = 2;
     uint32_t m_hrVramWidth = VramWidth * 2;
@@ -185,6 +189,12 @@ private:
     dk::Image m_vramTexture;   // 1024x512 RGBA8 Render Target y Display Source
     dk::Image m_rawVramImage;  // 1024x1024 R16_Uint Fuente de texturas PS1 + High VRAM
     dk::Image m_osdImage;      // 1024x1024 RGBA8_Unorm Superposición OSD (carrusel de trajes/retratos y avisos)
+    dk::Image m_skinImages[T3_SKIN_COUNT]; // Texturas de atlases HD de los 7 personajes
+    bool m_skinLoaded[T3_SKIN_COUNT] = { false };
+    HdTextureMap* m_skinMap = nullptr;
+
+    void LoadAllHdSkinPacks(uint64_t& curImgOffset);
+    void InvalidateSkinMaps();
 
     dk::Shader m_vsh;
     dk::Shader m_fsh;
