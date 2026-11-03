@@ -111,6 +111,30 @@ export class ZipWriter {
     await this.addFile(path, bytes.length, [bytes]);
   }
 
+  async add(path, data) {
+    if (data instanceof Uint8Array) {
+      await this.addBytes(path, data);
+    } else if (data instanceof ArrayBuffer) {
+      await this.addBytes(path, new Uint8Array(data));
+    } else if (data && typeof data.stream === 'function') {
+      async function* blobChunks(b) {
+        const reader = b.stream().getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          yield value;
+        }
+      }
+      await this.addFile(path, data.size, blobChunks(data));
+    } else {
+      throw new Error(`Unsupported data type for zip entry: ${path}`);
+    }
+  }
+
+  async finalize() {
+    await this.finish();
+  }
+
   async finish() {
     const directoryStart = this.offset;
     for (const e of this.entries) {
@@ -162,6 +186,8 @@ export class ZipWriter {
     record.setUint32(88, Math.min(directorySize, 0xffffffff), true);
     record.setUint32(92, directoryStart >= 0xffffffff ? 0xffffffff : directoryStart, true);
     await this.write(new Uint8Array(record.buffer));
-    await this.sink.close();
+    if (typeof this.sink.close === 'function') {
+      await this.sink.close();
+    }
   }
 }

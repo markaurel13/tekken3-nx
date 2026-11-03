@@ -46,6 +46,41 @@
       "name": "outfit-menu",
       "path": "./release/mods/outfit-menu.zip",
       "target": "mods/outfit-menu"
+    },
+    {
+      "name": "anna-jessica-rabbit",
+      "path": "./release/mods/anna-jessica-rabbit.zip",
+      "target": "mods/anna-jessica-rabbit"
+    },
+    {
+      "name": "eddy-monochrome",
+      "path": "./release/mods/eddy-monochrome.zip",
+      "target": "mods/eddy-monochrome"
+    },
+    {
+      "name": "heihachi-tiger-coat",
+      "path": "./release/mods/heihachi-tiger-coat.zip",
+      "target": "mods/heihachi-tiger-coat"
+    },
+    {
+      "name": "julia-blue",
+      "path": "./release/mods/julia-blue.zip",
+      "target": "mods/julia-blue"
+    },
+    {
+      "name": "kuma-polar-bear",
+      "path": "./release/mods/kuma-polar-bear.zip",
+      "target": "mods/kuma-polar-bear"
+    },
+    {
+      "name": "nina-white-satin",
+      "path": "./release/mods/nina-white-satin.zip",
+      "target": "mods/nina-white-satin"
+    },
+    {
+      "name": "xiaoyu-cherry-blossom",
+      "path": "./release/mods/xiaoyu-cherry-blossom.zip",
+      "target": "mods/xiaoyu-cherry-blossom"
     }
   ]
 }

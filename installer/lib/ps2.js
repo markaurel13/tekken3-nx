@@ -41,11 +41,15 @@ export async function identifyTttPs2Disc(blob) {
 
   const files = await reader.listFiles();
   const hasSlus = files.some(f => f.name.toUpperCase() === 'SLUS_200.01');
-  const hasSystemCnf = files.some(f => f.name.toUpperCase() === 'SYSTEM.CNF');
   const hasTekkenBin = files.some(f => f.name.toUpperCase() === 'TEKKEN.BIN');
 
-  if (!hasSlus && !hasTekkenBin) {
-    return { valid: false, reason: "No SLUS_200.01 or TEKKEN.BIN found on disc" };
+  // Strict USA Region Check: Must have SLUS_200.01 (USA release)
+  if (!hasSlus) {
+    return { valid: false, reason: "Incompatible region: SLUS_200.01 not found. Only the USA version (SLUS-20001) is supported." };
+  }
+
+  if (!hasTekkenBin) {
+    return { valid: false, reason: "TEKKEN.BIN not found on disc" };
   }
 
   // Quick verification: test read first sector of stage music

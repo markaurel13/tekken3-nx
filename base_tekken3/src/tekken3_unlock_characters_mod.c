@@ -11,8 +11,13 @@
  */
 #include "mod_plugins.h"
 
+__attribute__((weak)) int config_get_unlock_all_characters(void) {
+    return 0;
+}
+
 static void tekken3_unlock_characters(void)
 {
+    if (!config_get_unlock_all_characters()) return;
     const uint32_t roster_address = 0x80097EF0u;
     const uint32_t roster_mask = 0x001FFFFFu;
     const uint32_t doctor_progress_address = 0x80097EF6u;
@@ -38,6 +43,7 @@ static void tekken3_unlock_characters(void)
 
 static void tekken3_unlock_modes_movies(void)
 {
+    if (!config_get_unlock_all_characters()) return;
     if (!psx_mod_game_started()) return;
     /* SLUS-00402 native menu: mode 7 reads progress+0x36, mode 10
      * reads +0x37. State 3 means available without the NEW-mode blink.

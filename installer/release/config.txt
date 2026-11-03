@@ -12,3 +12,10 @@ supersampling = 2
 # false = 4:3 Clasico con bandas laterales (Original PS1)
 # true  = 16:9 Panoramico
 widescreen = false
+
+# Desbloquear todos los personajes y modos:
+# 0 = OFF (Progresion original: carga solo lo desbloqueado en tu Memory Card) [Por defecto]
+# 1 = ON  (Desbloquea automaticamente todos los personajes, trajes secretos y modos)
+#     ADVERTENCIA: Si guardas la partida mientras esta en ON (1), la Memory Card registrara
+#     el 100% de progresion con todos los personajes desbloqueados en ese archivo de guardado.
+unlocked_all_characters = 0

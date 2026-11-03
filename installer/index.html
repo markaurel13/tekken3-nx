@@ -1,33 +1,45 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tekken 3 Expanded — Nintendo Switch Web Installer</title>
-  <meta name="description" content="Build the complete Tekken 3 Expanded package for Nintendo Switch directly in your browser.">
+  <meta name="description" content="Web package builder for Tekken 3 Expanded on Nintendo Switch featuring 3D arcade stages, TTT1 characters and remastered audio.">
   <meta name="theme-color" content="#0a0b0e">
   <style>
     :root {
-      --bg: #090b10;
-      --panel: rgba(16, 20, 28, 0.88);
-      --panel-hover: rgba(22, 28, 38, 0.95);
-      --card-bg: rgba(11, 14, 20, 0.75);
-      --border: rgba(255, 255, 255, 0.1);
+      --bg: #07080c;
+      --panel: rgba(14, 18, 25, 0.90);
+      --panel-border: rgba(255, 60, 0, 0.25);
+      --card-bg: rgba(9, 12, 17, 0.85);
+      --border: rgba(255, 255, 255, 0.12);
       --border-focus: #ff3b30;
       --text: #f0f3f6;
-      --muted: #8b949e;
+      --muted: #9ba3af;
       --red: #ff3b30;
       --red-hover: #ff5247;
-      --gold: #ff9500;
+      --tekken-red: #e60012;
+      --gold: #ffaa00;
+      --gold-glow: rgba(255, 170, 0, 0.4);
       --good: #34c759;
       --bad: #ff453a;
-      --radius: 12px;
+      --radius: 14px;
       --radius-sm: 8px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      background: var(--bg);
+    [hidden] { display: none !important; }
+    
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(230, 0, 18, 0.22) 0%, rgba(10, 12, 16, 0.85) 60%),
+        linear-gradient(180deg, rgba(7, 8, 12, 0.7) 0%, rgba(7, 8, 12, 0.95) 100%),
+        url('./assets/arcade_poster.jpg');
+      background-position: center top;
+      background-size: cover, cover, 1400px auto;
+      background-repeat: no-repeat;
+      background-attachment: fixed;
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       line-height: 1.5;
@@ -39,144 +51,195 @@
       padding: clamp(16px, 3vw, 40px) 16px;
     }
 
-    /* Ambient background glow */
-    body::before {
-      content: "";
-      position: fixed;
-      top: -20%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 800px;
-      height: 400px;
-      background: radial-gradient(ellipse at center, rgba(255, 59, 48, 0.15) 0%, rgba(255, 149, 0, 0.05) 45%, transparent 70%);
-      pointer-events: none;
-      z-index: 0;
-    }
-
     .container {
       position: relative;
       z-index: 1;
       width: 100%;
-      max-width: 780px;
+      max-width: 820px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    /* Header & Hero Section */
+    header.hero-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 12px;
+      background: radial-gradient(ellipse at center, rgba(30, 16, 16, 0.75) 0%, rgba(10, 12, 16, 0.9) 100%);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      padding: 24px 20px 22px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(14px);
+    }
+
+    .hero-logo-box {
+      margin: 4px 0 2px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .hero-logo {
+      max-width: clamp(260px, 50vw, 420px);
+      height: auto;
+      filter: drop-shadow(0 0 24px rgba(255, 60, 0, 0.55)) drop-shadow(0 8px 16px rgba(0, 0, 0, 0.8));
+      transition: transform 0.3s ease;
+    }
+
+    .hero-logo:hover {
+      transform: scale(1.02);
+    }
+
+    .edition-title {
+      font-size: clamp(1.1rem, 2.4vw, 1.45rem);
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #fff 0%, #ffc000 60%, #ff3b30 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: clamp(0.85rem, 1.8vw, 0.95rem);
+      max-width: 640px;
+      line-height: 1.45;
+    }
+
+    .hero-features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 4px;
+    }
+
+    .feature-pill {
+      font-size: 0.76rem;
+      font-weight: 600;
+      color: #e0e5ed;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 4px 12px;
+      border-radius: 12px;
+    }
+
+    /* Main Card */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: clamp(18px, 2.5vw, 26px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(16px);
       display: flex;
       flex-direction: column;
       gap: 20px;
     }
 
-    header {
+    /* Prerequisites Notice */
+    .prereq-notice {
       display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .top-bar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .badge-pill {
-      display: inline-block;
-      font-size: 0.75rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      background: rgba(255, 59, 48, 0.2);
-      color: var(--red);
-      padding: 3px 10px;
-      border-radius: 20px;
-      border: 1px solid rgba(255, 59, 48, 0.3);
-    }
-
-    .languages {
-      display: flex;
-      gap: 6px;
-    }
-
-    .languages button {
-      background: rgba(255, 255, 255, 0.07);
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 0.8rem;
-      font-weight: 600;
-      padding: 4px 10px;
+      align-items: flex-start;
+      gap: 14px;
+      background: linear-gradient(90deg, rgba(255, 170, 0, 0.1) 0%, rgba(230, 0, 18, 0.06) 100%);
+      border: 1px solid rgba(255, 170, 0, 0.35);
+      border-left: 4px solid var(--gold);
       border-radius: var(--radius-sm);
-      cursor: pointer;
-      transition: all 0.2s ease;
+      padding: 14px 18px;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      color: #f1f4f8;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
     }
 
-    .languages button:hover, .languages button.active {
-      background: var(--red);
-      border-color: var(--red);
-      color: #fff;
+    .prereq-notice-icon {
+      font-size: 1.4rem;
+      line-height: 1;
+      flex-shrink: 0;
+      margin-top: 1px;
+      filter: drop-shadow(0 0 8px rgba(255, 170, 0, 0.5));
     }
 
-    h1 {
-      font-size: clamp(1.6rem, 3.5vw, 2.2rem);
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      background: linear-gradient(135deg, #ffffff 60%, var(--muted) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+    .prereq-notice strong {
+      color: #ffffff;
     }
 
-    .subtitle {
-      color: var(--muted);
-      font-size: clamp(0.9rem, 2vw, 1.05rem);
-    }
-
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: clamp(16px, 2.5vw, 24px);
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
-      backdrop-filter: blur(16px);
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
+    .prereq-notice code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #ffc000;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.83rem;
     }
 
     /* Drag & Drop Zone */
     .drop-zone {
-      border: 2px dashed rgba(255, 255, 255, 0.2);
+      border: 2px dashed rgba(255, 170, 0, 0.38);
       border-radius: var(--radius-sm);
-      background: rgba(0, 0, 0, 0.25);
-      padding: clamp(24px, 4vw, 36px) 20px;
+      background: radial-gradient(circle at center, rgba(230, 0, 18, 0.08) 0%, rgba(5, 7, 10, 0.6) 100%);
+      padding: clamp(28px, 4vw, 42px) 20px;
       text-align: center;
       cursor: pointer;
       transition: all 0.25s ease;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
 
     .drop-zone:hover, .drop-zone.drag-active {
-      border-color: var(--red);
-      background: rgba(255, 59, 48, 0.06);
-      transform: translateY(-1px);
+      border-color: var(--gold);
+      background: radial-gradient(circle at center, rgba(255, 59, 48, 0.16) 0%, rgba(5, 7, 10, 0.8) 100%);
+      box-shadow: 0 0 25px rgba(255, 170, 0, 0.22);
+      transform: translateY(-2px);
     }
 
-    .drop-icon {
-      font-size: 2.4rem;
-      margin-bottom: 4px;
+    .drop-icon-banner {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 2px;
+    }
+
+    .drop-icon-banner .poster-thumb {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      border: 2px solid var(--gold);
+      object-fit: cover;
+      box-shadow: 0 0 14px var(--gold-glow);
+    }
+
+    .drop-icon-symbol {
+      font-size: 2.7rem;
+      filter: drop-shadow(0 0 10px rgba(255, 170, 0, 0.6));
     }
 
     .drop-title {
-      font-size: 1.15rem;
-      font-weight: 700;
-      color: var(--text);
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: -0.01em;
     }
 
     .drop-sub {
-      font-size: 0.85rem;
+      font-size: 0.88rem;
       color: var(--muted);
+      max-width: 580px;
+      line-height: 1.4;
     }
 
     .browse-actions {
       display: flex;
-      gap: 10px;
+      gap: 12px;
       flex-wrap: wrap;
       justify-content: center;
       margin-top: 6px;
@@ -184,36 +247,49 @@
 
     .btn-secondary {
       background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--border);
+      border: 1px solid rgba(255, 255, 255, 0.16);
       color: var(--text);
       font-size: 0.85rem;
-      font-weight: 600;
-      padding: 8px 16px;
+      font-weight: 700;
+      padding: 9px 18px;
       border-radius: var(--radius-sm);
       cursor: pointer;
-      transition: background 0.2s ease;
+      transition: all 0.2s ease;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
 
     .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.18);
+      border-color: rgba(255, 255, 255, 0.35);
+      transform: translateY(-1px);
     }
 
     /* Components Checklist */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 8px;
+    }
+
     .checklist-title {
-      font-size: 0.95rem;
-      font-weight: 700;
-      color: var(--text);
+      font-size: 0.92rem;
+      font-weight: 800;
+      color: #ffffff;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.08em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .checklist {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
     }
 
     .checklist-item {
@@ -223,30 +299,49 @@
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      padding: 12px 16px;
-      gap: 12px;
+      padding: 14px 18px;
+      gap: 16px;
+      transition: border-color 0.2s ease;
+    }
+
+    .checklist-item:hover {
+      border-color: rgba(255, 170, 0, 0.32);
     }
 
     .item-info {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 4px;
     }
 
     .item-name {
-      font-weight: 600;
-      font-size: 0.95rem;
+      font-weight: 700;
+      font-size: 0.98rem;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .item-hint {
-      font-size: 0.8rem;
+      font-size: 0.82rem;
       color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .item-hint code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: #ffc000;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     }
 
     .status-badge {
       font-size: 0.8rem;
-      font-weight: 700;
-      padding: 4px 10px;
+      font-weight: 800;
+      padding: 6px 14px;
       border-radius: 20px;
       white-space: nowrap;
     }
@@ -254,82 +349,54 @@
     .status-badge.bad {
       background: rgba(255, 69, 58, 0.15);
       color: var(--bad);
-      border: 1px solid rgba(255, 69, 58, 0.3);
+      border: 1px solid rgba(255, 69, 58, 0.35);
     }
 
     .status-badge.good {
-      background: rgba(52, 199, 89, 0.15);
-      color: var(--good);
-      border: 1px solid rgba(52, 199, 89, 0.3);
+      background: rgba(52, 199, 89, 0.18);
+      color: #4ade80;
+      border: 1px solid rgba(52, 199, 89, 0.4);
+      box-shadow: 0 0 10px rgba(52, 199, 89, 0.2);
     }
 
     .status-badge.checking {
-      background: rgba(255, 149, 0, 0.15);
+      background: rgba(255, 170, 0, 0.15);
       color: var(--gold);
-      border: 1px solid rgba(255, 149, 0, 0.3);
-    }
-
-    .status-badge.optional {
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--muted);
-      border: 1px solid var(--border);
-    }
-
-    /* Options checklist */
-    .options-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 10px;
-    }
-
-    .opt-label {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 0.85rem;
-      color: var(--text);
-      cursor: pointer;
-      user-select: none;
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      padding: 8px 12px;
-      border-radius: var(--radius-sm);
-    }
-
-    .opt-label input[type="checkbox"] {
-      accent-color: var(--red);
-      width: 16px;
-      height: 16px;
+      border: 1px solid rgba(255, 170, 0, 0.35);
     }
 
     /* Primary Action Button */
     .btn-primary {
-      background: var(--red);
-      color: #fff;
+      background: linear-gradient(135deg, #e60012 0%, #ff3b30 50%, #ff9500 100%);
+      color: #ffffff;
       border: none;
-      font-size: 1.05rem;
-      font-weight: 700;
-      padding: 14px 24px;
+      font-size: 1.12rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 16px 28px;
       border-radius: var(--radius-sm);
       cursor: pointer;
-      transition: all 0.2s ease;
-      box-shadow: 0 4px 16px rgba(255, 59, 48, 0.35);
+      transition: all 0.25s ease;
+      box-shadow: 0 6px 24px rgba(230, 0, 18, 0.45);
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      gap: 10px;
+      margin-top: 4px;
     }
 
     .btn-primary:hover:not(:disabled) {
-      background: var(--red-hover);
-      box-shadow: 0 6px 20px rgba(255, 59, 48, 0.5);
-      transform: translateY(-1px);
+      box-shadow: 0 8px 30px rgba(255, 59, 48, 0.65), 0 0 15px rgba(255, 170, 0, 0.4);
+      transform: translateY(-2px);
+      filter: brightness(1.08);
     }
 
     .btn-primary:disabled {
       opacity: 0.45;
       cursor: not-allowed;
       box-shadow: none;
+      filter: grayscale(0.5);
     }
 
     /* Progress and Logs */
@@ -341,34 +408,35 @@
 
     .progress-bar-bg {
       width: 100%;
-      height: 12px;
+      height: 14px;
       background: rgba(255, 255, 255, 0.08);
-      border-radius: 6px;
+      border-radius: 7px;
       overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
 
     .progress-bar-fill {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, var(--red), var(--gold));
+      background: linear-gradient(90deg, #e60012, #ff9500, #ffea00);
       transition: width 0.2s ease;
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      padding-right: 6px;
-      font-size: 0.65rem;
-      font-weight: 700;
+      padding-right: 8px;
+      font-size: 0.7rem;
+      font-weight: 800;
       color: #000;
     }
 
     .log-box {
-      background: #050608;
+      background: #040507;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 12px;
       font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
-      font-size: 0.78rem;
-      max-height: 180px;
+      font-size: 0.8rem;
+      max-height: 190px;
       overflow-y: auto;
       color: #abb2bf;
       display: flex;
@@ -381,32 +449,34 @@
     /* Result Success Card */
     .result-card {
       background: rgba(52, 199, 89, 0.08);
-      border: 1px solid rgba(52, 199, 89, 0.3);
+      border: 1px solid rgba(52, 199, 89, 0.35);
       border-radius: var(--radius-sm);
-      padding: 16px;
+      padding: 18px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
+      box-shadow: 0 4px 20px rgba(52, 199, 89, 0.15);
     }
 
     .result-title {
-      font-weight: 700;
-      color: var(--good);
-      font-size: 1.05rem;
+      font-weight: 800;
+      color: #4ade80;
+      font-size: 1.15rem;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
 
     pre.tree-box {
-      background: #000;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #030406;
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 6px;
-      padding: 12px;
+      padding: 14px;
       font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-      font-size: 0.8rem;
+      font-size: 0.82rem;
       color: #38ef7d;
       overflow-x: auto;
+      line-height: 1.45;
     }
 
     footer {
@@ -414,111 +484,110 @@
       font-size: 0.8rem;
       color: var(--muted);
       margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
     }
 
     footer a {
-      color: var(--muted);
-      text-decoration: underline;
+      color: var(--gold);
+      text-decoration: none;
     }
 
-    footer a:hover { color: #fff; }
+    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <header>
-    <div class="top-bar">
-      <span class="badge-pill" data-i18n="heroBadge">Nintendo Switch Port</span>
-      <div class="languages" id="languages"></div>
+  <!-- Thematic Hero Header -->
+  <header class="hero-header">
+    <div class="hero-logo-box">
+      <img src="./assets/tekken3_logo.png" alt="Tekken 3 Logo" class="hero-logo">
     </div>
-    <h1 data-i18n="appTitle">Tekken 3 Expanded — Nintendo Switch Installer</h1>
-    <p class="subtitle" data-i18n="subtitle">Build the complete package with TTT1 characters, 3D arcade stages, cinematics, outfits and remixed music from your own copies.</p>
+
+    <div class="edition-title">Tekken 3 Expanded - Nintendo Switch</div>
+    <p class="subtitle">Install Tekken 3 Expanded for your Nintendo Switch with 18 TTT1 characters, 28 3D arcade stages, cinematics, outfits and remastered PS2 stage music directly in your Switch</p>
+
+    <div class="hero-features">
+      <span class="feature-pill">🥋 18 TTT1 Fighters</span>
+      <span class="feature-pill">🏯 28 Arcade 3D Stages</span>
+      <span class="feature-pill">🎵 PS2 Remastered Audio</span>
+      <span class="feature-pill">🎬 TTT Endings & Embu</span>
+      <span class="feature-pill">👘 Outfits & HD Gallery</span>
+    </div>
   </header>
 
-  <!-- Drag & Drop Card -->
+  <!-- Interactive Installer Card -->
   <div class="card">
+
+    <!-- Prerequisites Notice -->
+    <div class="prereq-notice">
+      <div class="prereq-notice-icon">⚠️</div>
+      <div>
+        <strong>IMPORTANT:</strong> Make sure you already have the original base game installed on your SD card (in <code>sdmc:/switch/tekken3/disc/</code>) and that you are using the latest <code>tekken3_nx.nro</code> executable from the GitHub Releases page. Otherwise, the expansion will not function.
+      </div>
+    </div>
+
+    <!-- Drag & Drop Zone -->
     <div class="drop-zone" id="dropZone">
-      <div class="drop-icon">📦</div>
-      <div class="drop-title" data-i18n="dropAreaTitle">Arrastra tus archivos aquí</div>
-      <div class="drop-sub" data-i18n="dropAreaSub">Suelta tekken3.zip, tektagt.zip y tu ISO de Tekken Tag PS2 (o un archivo .7z/.zip con ellos)</div>
+      <div class="drop-icon-banner">
+        <div class="drop-icon-symbol">📦</div>
+      </div>
+      <div class="drop-title">Drag & Drop Your Files Here</div>
+      <div class="drop-sub">Drop <strong>tekken3.zip</strong>, <strong>tektagt.zip</strong> and your <strong>Tekken Tag PS2 ISO</strong> (or a single .zip / .7z archive containing them)</div>
       
       <div class="browse-actions">
         <label class="btn-secondary">
-          📁 <span data-i18n="btnChooseFiles">Seleccionar archivos</span>
+          📁 <span>Select Files</span>
           <input type="file" id="fileInput" multiple style="display: none;">
         </label>
         <label class="btn-secondary">
-          🗂️ <span data-i18n="btnChooseFolder">Seleccionar carpeta</span>
+          🗂️ <span>Select Folder</span>
           <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
         </label>
+        <button type="button" class="btn-secondary" id="btnClear" style="display: none;">
+          🗑️ <span>Clear All</span>
+        </button>
       </div>
     </div>
 
     <!-- Required Components Checklist -->
-    <div class="checklist-title" data-i18n="detectedComponents">Archivos necesarios:</div>
-    <div class="checklist">
-      <div class="checklist-item">
-        <div class="item-info">
-          <div class="item-name" data-i18n="compT3Arcade">Tekken 3 Arcade ROM (tekken3.zip)</div>
-          <div class="item-hint">Namco System 12 MAME set</div>
-        </div>
-        <div class="status-badge bad" id="badgeT3Arcade" data-i18n="statusMissing">No detectado</div>
-      </div>
-
-      <div class="checklist-item">
-        <div class="item-info">
-          <div class="item-name" data-i18n="compTttArcade">Tekken Tag Arcade ROM (tektagt.zip)</div>
-          <div class="item-hint">Namco System 12 MAME set</div>
-        </div>
-        <div class="status-badge bad" id="badgeTttArcade" data-i18n="statusMissing">No detectado</div>
-      </div>
-
-      <div class="checklist-item">
-        <div class="item-info">
-          <div class="item-name" data-i18n="compTttPs2">Tekken Tag PS2 Disc (SLUS-20001)</div>
-          <div class="item-hint">Imagen .iso o .bin/.cue (USA v1.00 o v2.00)</div>
-        </div>
-        <div class="status-badge bad" id="badgeTttPs2" data-i18n="statusMissing">No detectado</div>
-      </div>
-
-      <div class="checklist-item">
-        <div class="item-info">
-          <div class="item-name" data-i18n="compT3Ps1">Tekken 3 PS1 Disc (SLUS-00402)</div>
-          <div class="item-hint" data-i18n="statusOptional">Opcional (si ya lo instalaste antes)</div>
-        </div>
-        <div class="status-badge optional" id="badgeT3Ps1">○ Opcional</div>
+    <div class="section-header">
+      <div class="checklist-title">
+        <span>🎮</span> <span>Required Files:</span>
       </div>
     </div>
 
-    <!-- Options -->
-    <div class="checklist-title" data-i18n="optionsTitle">Opciones del paquete:</div>
-    <div class="options-grid">
-      <label class="opt-label">
-        <input type="checkbox" id="optPs2Music" checked>
-        <span data-i18n="optPs2Music">Música PS2 remasterizada (ps2-music.ttp)</span>
-      </label>
-      <label class="opt-label">
-        <input type="checkbox" id="optStages" checked>
-        <span data-i18n="optStages">28 Escenarios 3D Arcade & TTT (.ast)</span>
-      </label>
-      <label class="opt-label">
-        <input type="checkbox" id="optCinematics" checked>
-        <span data-i18n="optCinematics">Finales y cinemáticas TTT</span>
-      </label>
-      <label class="opt-label">
-        <input type="checkbox" id="optOutfits" checked>
-        <span data-i18n="optOutfits">Menú de trajes y galería HD</span>
-      </label>
-      <label class="opt-label">
-        <input type="checkbox" id="optNro" checked>
-        <span data-i18n="optNro">Incluir ejecutable de Switch (tekken3_nx.nro)</span>
-      </label>
+    <div class="checklist">
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name">Tekken 3 Arcade ROM (tekken3.zip)</div>
+          <div class="item-hint">Namco System 12 MAME set</div>
+        </div>
+        <div class="status-badge bad" id="badgeT3Arcade">✗ Not detected</div>
+      </div>
+
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name">Tekken Tag Arcade ROM (tektagt.zip)</div>
+          <div class="item-hint">Namco System 12 MAME set</div>
+        </div>
+        <div class="status-badge bad" id="badgeTttArcade">✗ Not detected</div>
+      </div>
+
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name">Tekken Tag PS2 Disc (SLUS-20001)</div>
+          <div class="item-hint">ISO or BIN/CUE image (USA v1.00 or v2.00)</div>
+        </div>
+        <div class="status-badge bad" id="badgeTttPs2">✗ Not detected</div>
+      </div>
     </div>
 
     <!-- Primary action button -->
     <button class="btn-primary" id="btnBuild" disabled>
-      ⚡ <span data-i18n="btnBuild">Crear paquete para Switch</span>
+      ⚡ Build Switch Package
     </button>
 
     <!-- Progress & Log Section -->
@@ -532,28 +601,32 @@
     <!-- Post-Build Result Card -->
     <div class="result-card" id="resultCard" hidden>
       <div class="result-title">
-        🎉 <span data-i18n="buildComplete">¡Paquete generado con éxito!</span>
+        🎉 <span>Package Built Successfully!</span>
       </div>
-      <p data-i18n-html="buildSuccessMsg">Tu archivo <strong>tekken3-expanded.zip</strong> se ha descargado. Descomprímelo y copia la carpeta <code>switch</code> directamente en la raíz de tu tarjeta microSD (<code>sdmc:/</code>).</p>
+      <p>Your file <strong>tekken3-expanded.zip</strong> has been downloaded. Extract it and copy the <code>switch</code> folder directly to the root of your microSD card (<code>sdmc:/</code>).</p>
+      <button type="button" class="btn-secondary" id="btnDownloadAgain" style="width: fit-content; margin: 4px 0 8px;">
+        📥 <span>Download tekken3-expanded.zip Again</span>
+      </button>
       <pre class="tree-box">sdmc:/
 └── switch/
     └── tekken3/
-        ├── tekken3_nx.nro
-        ├── config.txt
-        ├── disc/                [Tu copia de Tekken 3 PS1]
+        ├── tekken3_nx.nro       [From GitHub Releases]
+        ├── disc/                [Place your base Tekken 3 PS1 .bin/.cue here]
         └── mods/
-            ├── arcade-stages/   [13 escenarios Tekken 3 Arcade]
-            ├── ttt-stages/      [15 escenarios Tekken Tag Arcade]
-            ├── ttt-ps2-music/   [14 pistas remasterizadas PS2]
-            ├── ttt-music/       [BGM Arcade]
-            ├── ttt-cinematics/  [Finales y cinemáticas TTT]
-            ├── outfit-menu/     [Menú de trajes y galería]
-            └── ttt1/            [Luchadores y movimientos TTT1]</pre>
+            ├── arcade-stages/   [13 Tekken 3 3D Arcade Stages]
+            ├── ttt-stages/      [15 Tekken Tag 3D Arcade Stages]
+            ├── ttt-ps2-music/   [14 Remastered PS2 Stage BGM tracks]
+            ├── ttt-music/       [Namco System 12 Arcade BGM]
+            ├── ttt-cinematics/  [TTT Endings & Cinematics]
+            ├── outfit-menu/     [Costume Selector & Gallery]
+            ├── ttt1/            [TTT1 Characters & Movesets]
+            └── ...              [All 16 Mod packs installed]</pre>
     </div>
   </div>
 
   <footer>
-    Tekken 3 (USA) Native Recompilation Port for Nintendo Switch — Open Source Homebrew
+    <div>Tekken 3 (USA) Native Recompilation Port for Nintendo Switch — Open Source Homebrew</div>
+    <div>Namco System 12 • The King of Iron Fist Tournament</div>
   </footer>
 </div>
 

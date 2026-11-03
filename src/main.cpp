@@ -88,8 +88,13 @@ extern uint32_t g_dirty_ram_last_unsupported_insn;
 struct GameConfig {
     int supersampling = 2; // 1 = 1x (Nativo PS1), 2 = 2x HD (Recomendado), 3 = 3x Ultra HD
     bool widescreen_16_9 = false; // false = 4:3 con bandas negras, true = 16:9 pantalla completa
+    bool unlock_all_characters = false; // false = progresion original (Memory Card), true = desbloquear todos
 };
 static GameConfig g_config;
+
+extern "C" int config_get_unlock_all_characters(void) {
+    return g_config.unlock_all_characters ? 1 : 0;
+}
 extern const char* g_dirty_ram_last_unsupported_reason;
 void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
 
@@ -1883,7 +1888,7 @@ static void load_or_create_config(int argc, char* argv[]) {
         if (create_f) {
             fprintf(create_f,
                 "# ==============================================================================\n"
-                "# Tekken 3 (USA) - Graphics Configuration for Nintendo Switch\n"
+                "# Tekken 3 (USA) - Graphics & Game Configuration for Nintendo Switch\n"
                 "# ==============================================================================\n"
                 "# Place this file in the same directory as 'tekken3_nx.nro' on your microSD card\n"
                 "# (e.g. sdmc:/switch/tekken3/config.txt).\n"
@@ -1895,7 +1900,7 @@ static void load_or_create_config(int argc, char* argv[]) {
                 "#   2 = 2x HD (2048x1024) [RECOMMENDED]\n"
                 "#       -> Sharp edges, optimal configuration\n"
                 "#   3 = 3x Ultra HD (3072x1536)\n"
-                "#       -> Maximum polygon edge definition for 4K / large TV screens (Switch has a 1080p limit, so it is overkill and may cause FPS drops to 55 FPS)\n"
+                "#       -> Maximum polygon edge definition for 4K / large TV screens\n"
                 "# ------------------------------------------------------------------------------\n"
                 "supersampling = 2\n\n"
                 "# ------------------------------------------------------------------------------\n"
@@ -1905,19 +1910,29 @@ static void load_or_create_config(int argc, char* argv[]) {
                 "#   ON  = 16:9 Fullscreen Widescreen\n"
                 "#         -> Fills the entire Switch screen and 16:9 TV display without bars.\n"
                 "# ------------------------------------------------------------------------------\n"
-                "widescreen_16_9 = OFF\n"
+                "widescreen_16_9 = OFF\n\n"
+                "# ------------------------------------------------------------------------------\n"
+                "# Unlock All Characters & Modes:\n"
+                "#   0 = OFF: Authentic progression. Loads only characters unlocked in your save/memory card. [DEFAULT]\n"
+                "#   1 = ON: Automatically unlocks all characters, secret costumes, and modes.\n"
+                "#       WARNING: If you save your game while ON (1), your memory card will record\n"
+                "#       100%% progression with all fighters and modes permanently unlocked.\n"
+                "# ------------------------------------------------------------------------------\n"
+                "unlocked_all_characters = 0\n"
             );
             fclose(create_f);
-            printf("[Config] Archivo 'config.txt' creado exitosamente con valores por defecto (supersampling=2, widescreen=OFF).\n");
+            printf("[Config] Archivo 'config.txt' creado exitosamente con valores por defecto (supersampling=2, widescreen=OFF, unlocked_all_characters=0).\n");
         } else {
             printf("[Config] Advertencia: No se pudo crear 'config.txt'. Usando valores predeterminados en memoria.\n");
         }
         g_config.supersampling = 2;
         g_config.widescreen_16_9 = false;
+        g_config.unlock_all_characters = false;
         return;
     }
 
     printf("[Config] Cargando configuracion grafica desde: '%s'\n", found_path);
+    bool found_unlock_param = false;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         trim_string(line);
@@ -1946,15 +1961,42 @@ static void load_or_create_config(int argc, char* argv[]) {
                        strcmp(val, "no") == 0 || strcmp(val, "4:3") == 0) {
                 g_config.widescreen_16_9 = false;
             }
+        } else if (strstr(key, "unlocked_all_characters") || strstr(key, "unlock_all_characters") ||
+                   strstr(key, "unlock_characters") || strstr(key, "all_characters")) {
+            found_unlock_param = true;
+            if (strcmp(val, "1") == 0 || strcmp(val, "on") == 0 || strcmp(val, "true") == 0 || strcmp(val, "yes") == 0) {
+                g_config.unlock_all_characters = true;
+            } else if (strcmp(val, "0") == 0 || strcmp(val, "off") == 0 || strcmp(val, "false") == 0 || strcmp(val, "no") == 0) {
+                g_config.unlock_all_characters = false;
+            }
         }
     }
     fclose(f);
 
+    if (!found_unlock_param && found_path) {
+        FILE* append_f = fopen(found_path, "a");
+        if (append_f) {
+            fprintf(append_f,
+                "\n# ------------------------------------------------------------------------------\n"
+                "# Unlock All Characters & Modes:\n"
+                "#   0 = OFF: Authentic progression. Loads only characters unlocked in your save/memory card. [DEFAULT]\n"
+                "#   1 = ON: Automatically unlocks all characters, secret costumes, and modes.\n"
+                "#       WARNING: If you save your game while ON (1), your memory card will record\n"
+                "#       100%% progression with all fighters and modes permanently unlocked.\n"
+                "# ------------------------------------------------------------------------------\n"
+                "unlocked_all_characters = 0\n"
+            );
+            fclose(append_f);
+            printf("[Config] Parametro 'unlocked_all_characters = 0' anadido automaticamente a '%s'.\n", found_path);
+        }
+    }
+
     printf("[Config] Configuracion cargada con exito:\n");
-    printf("   [+] supersampling   = %d (%s)\n", g_config.supersampling,
+    printf("   [+] supersampling           = %d (%s)\n", g_config.supersampling,
            g_config.supersampling == 3 ? "3x Ultra HD (3072x1536)" :
            (g_config.supersampling == 2 ? "2x HD (2048x1024)" : "1x Nativo (1024x512)"));
-    printf("   [+] widescreen_16_9 = %s\n", g_config.widescreen_16_9 ? "ON (16:9 Panoramica)" : "OFF (4:3 Original Pillarbox)");
+    printf("   [+] widescreen_16_9         = %s\n", g_config.widescreen_16_9 ? "ON (16:9 Panoramica)" : "OFF (4:3 Original Pillarbox)");
+    printf("   [+] unlocked_all_characters = %s\n", g_config.unlock_all_characters ? "1 (ON - Todos desbloqueados)" : "0 (OFF - Progresion original Memory Card)");
 }
 
 // ============================================================================

@@ -1,34 +1,40 @@
 // Main User Interface Controller for Tekken 3 Expanded Web Installer.
 // Handles Drag & Drop, file inspections, visual status badges, and Service Worker download coordination.
 
-import { LANGUAGES, setLanguage, getLanguage, preferredLanguage, t, formatSize } from './lib/i18n.js';
+import { t, formatSize } from './lib/i18n.js';
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const folderInput = document.getElementById('folderInput');
+const btnClear = document.getElementById('btnClear');
 const btnBuild = document.getElementById('btnBuild');
+const btnDownloadAgain = document.getElementById('btnDownloadAgain');
 const progressContainer = document.getElementById('progressContainer');
 const progressBar = document.getElementById('progressBar');
 const logBox = document.getElementById('logBox');
 const resultCard = document.getElementById('resultCard');
-const languagesContainer = document.getElementById('languages');
 
 // Badges
 const badgeT3Arcade = document.getElementById('badgeT3Arcade');
 const badgeTttArcade = document.getElementById('badgeTttArcade');
 const badgeTttPs2 = document.getElementById('badgeTttPs2');
-const badgeT3Ps1 = document.getElementById('badgeT3Ps1');
-
-// Options
-const optPs2Music = document.getElementById('optPs2Music');
-const optStages = document.getElementById('optStages');
-const optCinematics = document.getElementById('optCinematics');
-const optOutfits = document.getElementById('optOutfits');
-const optNro = document.getElementById('optNro');
 
 let worker = null;
-let downloadHelper = null;
 let inspectedState = null;
+let lastBuiltBlob = null;
+
+function triggerDownload(blob, filename = 'tekken3-expanded.zip') {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    try { document.body.removeChild(a); } catch (e) {}
+    URL.revokeObjectURL(url);
+  }, 60000);
+}
 
 function appendLog(text, isError = false) {
   const line = document.createElement('div');
@@ -41,13 +47,11 @@ function appendLog(text, isError = false) {
 function updateBadge(badgeEl, state, detail = '') {
   badgeEl.className = `status-badge ${state}`;
   if (state === 'good') {
-    badgeEl.textContent = `✓ ${t('statusDetected')} ${detail ? `(${detail})` : ''}`;
+    badgeEl.textContent = `✓ Detected ${detail ? `(${detail})` : ''}`;
   } else if (state === 'checking') {
-    badgeEl.textContent = `⏳ ${t('statusChecking')}`;
-  } else if (state === 'optional') {
-    badgeEl.textContent = `○ ${t('statusOptional')}`;
+    badgeEl.textContent = `⏳ Checking...`;
   } else {
-    badgeEl.textContent = `✗ ${t('statusMissing')}`;
+    badgeEl.textContent = `✗ Not detected`;
   }
 }
 
@@ -56,56 +60,10 @@ function checkBuildReadiness() {
     btnBuild.disabled = true;
     return;
   }
-  // User needs either both arcade zips, or PS2 disc, or all
-  const canBuild = (inspectedState.hasT3Arcade && inspectedState.hasTttArcade) || inspectedState.hasPs2Disc;
+  // All 3 files are strictly required to build the full expansion package
+  const canBuild = inspectedState.hasT3Arcade && inspectedState.hasTttArcade && inspectedState.hasPs2Disc;
   btnBuild.disabled = !canBuild;
 }
-
-// Language initialization
-function applyLanguage(code) {
-  setLanguage(code);
-  document.documentElement.lang = getLanguage();
-
-  for (const el of document.querySelectorAll('[data-i18n]')) {
-    el.textContent = t(el.dataset.i18n);
-  }
-  for (const el of document.querySelectorAll('[data-i18n-html]')) {
-    el.innerHTML = t(el.dataset.i18nHtml);
-  }
-  for (const btn of languagesContainer.querySelectorAll('button')) {
-    btn.classList.toggle('active', btn.dataset.lang === getLanguage());
-  }
-
-  // Refresh badges text
-  if (inspectedState) {
-    updateBadge(badgeT3Arcade, inspectedState.hasT3Arcade ? 'good' : 'bad', inspectedState.t3ArcadeName);
-    updateBadge(badgeTttArcade, inspectedState.hasTttArcade ? 'good' : 'bad', inspectedState.tttArcadeName);
-    updateBadge(badgeTttPs2, inspectedState.hasPs2Disc ? 'good' : 'bad', inspectedState.ps2DiscName);
-    updateBadge(badgeT3Ps1, inspectedState.hasPs1Disc ? 'good' : 'optional');
-  } else {
-    updateBadge(badgeT3Arcade, 'bad');
-    updateBadge(badgeTttArcade, 'bad');
-    updateBadge(badgeTttPs2, 'bad');
-    updateBadge(badgeT3Ps1, 'optional');
-  }
-}
-
-for (const { code, name, short } of LANGUAGES) {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.dataset.lang = code;
-  btn.textContent = short;
-  btn.title = name;
-  btn.addEventListener('click', () => {
-    applyLanguage(code);
-    try { localStorage.setItem('tekken3.lang', code); } catch (e) {}
-  });
-  languagesContainer.appendChild(btn);
-}
-
-let savedLang = null;
-try { savedLang = localStorage.getItem('tekken3.lang'); } catch (e) {}
-applyLanguage(preferredLanguage(savedLang));
 
 // Worker initialization
 function initWorker() {
@@ -125,46 +83,32 @@ function initWorker() {
       updateBadge(badgeT3Arcade, data.hasT3Arcade ? 'good' : 'bad', data.t3ArcadeName);
       updateBadge(badgeTttArcade, data.hasTttArcade ? 'good' : 'bad', data.tttArcadeName);
       updateBadge(badgeTttPs2, data.hasPs2Disc ? 'good' : 'bad', data.ps2DiscName);
-      updateBadge(badgeT3Ps1, data.hasPs1Disc ? 'good' : 'optional');
       checkBuildReadiness();
+      if (btnClear) {
+        btnClear.style.display = (data.hasT3Arcade || data.hasTttArcade || data.hasPs2Disc) ? 'inline-flex' : 'none';
+      }
     } else if (data.type === 'build-finished') {
       btnBuild.disabled = false;
-      btnBuild.textContent = t('btnBuild');
+      btnBuild.textContent = "⚡ Build Switch Package";
       resultCard.hidden = false;
-      appendLog(t('buildComplete'));
+      appendLog("✓ Build complete! Package ready for download.");
+      if (data.blob) {
+        lastBuiltBlob = data.blob;
+        triggerDownload(data.blob);
+      }
     } else if (data.type === 'build-error') {
       btnBuild.disabled = false;
-      btnBuild.textContent = t('btnBuild');
+      btnBuild.textContent = "⚡ Build Switch Package";
       appendLog(data.message, true);
-    } else if (data.type === 'fallback-download') {
-      // Direct blob fallback if service worker streaming unavailable
-      const url = URL.createObjectURL(data.blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'tekken3-expanded.zip';
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
   });
 }
 initWorker();
 
-// Service Worker Registration for streaming downloads
-async function initServiceWorker() {
-  if (!('serviceWorker' in navigator)) return null;
-  try {
-    const reg = await navigator.serviceWorker.register('./sw.js');
-    await navigator.serviceWorker.ready;
-    if (!navigator.serviceWorker.controller) {
-      reg.active?.postMessage({ type: 'claim' });
-    }
-    return navigator.serviceWorker.controller;
-  } catch (err) {
-    console.warn("ServiceWorker not registered, falling back to in-memory blob streaming:", err);
-    return null;
-  }
+// Optional background service worker for offline cache
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
-downloadHelper = initServiceWorker();
 
 // Drag & Drop handlers
 async function handleDroppedItems(items) {
@@ -194,9 +138,15 @@ async function handleDroppedItems(items) {
   }
 
   if (files.length > 0) {
-    updateBadge(badgeT3Arcade, 'checking');
-    updateBadge(badgeTttArcade, 'checking');
-    updateBadge(badgeTttPs2, 'checking');
+    resultCard.hidden = true;
+    progressContainer.hidden = true;
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
+    logBox.innerHTML = '';
+
+    if (!inspectedState?.hasT3Arcade) updateBadge(badgeT3Arcade, 'checking');
+    if (!inspectedState?.hasTttArcade) updateBadge(badgeTttArcade, 'checking');
+    if (!inspectedState?.hasPs2Disc) updateBadge(badgeTttPs2, 'checking');
     worker.postMessage({ type: 'inspect', files });
   }
 }
@@ -224,56 +174,51 @@ dropZone.addEventListener('drop', async (e) => {
 
 fileInput.addEventListener('change', (e) => {
   if (e.target.files.length) handleDroppedItems([...e.target.files]);
+  fileInput.value = '';
 });
 
 folderInput.addEventListener('change', (e) => {
   if (e.target.files.length) handleDroppedItems([...e.target.files]);
+  folderInput.value = '';
 });
+
+if (btnClear) {
+  btnClear.addEventListener('click', () => {
+    resultCard.hidden = true;
+    progressContainer.hidden = true;
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
+    logBox.innerHTML = '';
+    btnBuild.disabled = true;
+    worker.postMessage({ type: 'clear' });
+  });
+}
 
 // Build button click
 btnBuild.addEventListener('click', async () => {
   btnBuild.disabled = true;
-  btnBuild.textContent = t('btnBuilding');
+  btnBuild.textContent = "⏳ Building Package...";
   progressContainer.hidden = false;
   progressBar.style.width = '0%';
   progressBar.textContent = '0%';
   resultCard.hidden = true;
   logBox.innerHTML = '';
 
+  // All expansion components are included
   const options = {
-    includePs2Music: optPs2Music.checked,
-    includeStages: optStages.checked,
-    includeCinematics: optCinematics.checked,
-    includeOutfits: optOutfits.checked,
-    includeNro: optNro.checked,
+    includePs2Music: true,
+    includeStages: true,
+    includeCinematics: true,
+    includeOutfits: true,
   };
 
-  const swController = await downloadHelper;
-  if (swController) {
-    const channel = new MessageChannel();
-    const ack = new MessageChannel();
-    const jobId = `tekken3-${Date.now()}`;
-    const filename = 'tekken3-expanded.zip';
-
-    // Register job with Service Worker
-    swController.postMessage(
-      { type: 'download', id: jobId, filename, size: 0 },
-      [channel.port2, ack.port1]
-    );
-
-    // Wait for ack
-    await new Promise(resolve => { ack.port2.onmessage = () => resolve(); });
-
-    // Open iframe to trigger browser download
-    const iframe = document.createElement('iframe');
-    iframe.hidden = true;
-    iframe.src = `./download/${jobId}/${filename}`;
-    document.body.appendChild(iframe);
-
-    // Tell worker to start and stream into channel.port1
-    worker.postMessage({ type: 'start-build', options }, [channel.port1]);
-  } else {
-    // Fallback mode without service worker
-    worker.postMessage({ type: 'start-build', options });
-  }
+  worker.postMessage({ type: 'start-build', options });
 });
+
+if (btnDownloadAgain) {
+  btnDownloadAgain.addEventListener('click', () => {
+    if (lastBuiltBlob) {
+      triggerDownload(lastBuiltBlob);
+    }
+  });
+}

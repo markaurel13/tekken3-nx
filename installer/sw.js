@@ -15,6 +15,9 @@ const PAGE_FILES = [
   'lib/zip_reader.js',
   'lib/arcade.js',
   'lib/ps2.js',
+  'assets/tekken3_logo.png',
+  'assets/jin_icon.jpg',
+  'assets/arcade_poster.jpg',
   'release/manifest.json'
 ];
 
