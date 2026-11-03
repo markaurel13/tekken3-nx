@@ -49,6 +49,10 @@ static inline void PS1Color24ToRGBA8(uint32_t c, uint8_t rgba[4]) {
     rgba[3] = 255;
 }
 
+// Rango vertical activo de video 24-bit (192p en finales, 220p en intro/theater, 240p full)
+static uint32_t s_depth24_active_y0 = 24;
+static uint32_t s_depth24_active_y1 = 216;
+
 static void DekoDebugCallback(void* userData, const char* context, DkResult result, const char* message) {
     printf("[Deko3D Debug] ctx='%s' res=%d msg='%s'\n", context ? context : "", (int)result, message ? message : "");
     fflush(stdout);
@@ -993,6 +997,21 @@ void Deko3DRenderer::CopyRect(int sx, int sy, int dx, int dy, int w, int h) {
 void Deko3DRenderer::VramTransferIn(int x, int y, int w, int h, const uint16_t* data) {
     if (!m_initialized || !data || w <= 0 || h <= 0) return;
 
+    if (gpu_display_is_depth24() && x < 384) {
+        if (h == 192) {
+            uint32_t rel_y = (y >= 240) ? (uint32_t)(y - 240) : (uint32_t)y;
+            s_depth24_active_y0 = rel_y;
+            s_depth24_active_y1 = rel_y + 192;
+        } else if (h == 224) {
+            uint32_t rel_y = (y >= 240) ? (uint32_t)(y - 240) : (uint32_t)y;
+            s_depth24_active_y0 = rel_y + 2;
+            s_depth24_active_y1 = rel_y + 224 - 2;
+        } else if (h == 240) {
+            s_depth24_active_y0 = 0;
+            s_depth24_active_y1 = 240;
+        }
+    }
+
     s_frame_vram_transfers++;
 
     extern int g_post_fmv_sync_active;
@@ -1425,6 +1444,18 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         static int s_depth24_blank_frames = 0;
         if (di.depth24 && !s_was_depth24) {
             s_depth24_blank_frames = 2;
+            s_depth24_active_y0 = 24;
+            s_depth24_active_y1 = 216;
+            // Limpiar CPU VRAM en las bandas de letterbox de ambos buffers 24-bit (x=0..383)
+            // para que los restos del HUD / retratos de 1P y 2P del combate previo no se muestren como estática
+            if (m_vram) {
+                for (uint32_t y = 0; y < 24; y++) {
+                    memset(m_vram + (size_t)y * VramWidth, 0, 384 * sizeof(uint16_t));
+                    memset(m_vram + (size_t)(y + 216) * VramWidth, 0, 384 * sizeof(uint16_t));
+                    memset(m_vram + (size_t)(y + 240) * VramWidth, 0, 384 * sizeof(uint16_t));
+                    memset(m_vram + (size_t)(y + 456) * VramWidth, 0, 384 * sizeof(uint16_t));
+                }
+            }
             // Limpiar m_vramTexture para eliminar restos de UI de alta resolución del menú previo
             dk::ImageView vramTarget{ m_vramTexture };
             m_cmdBuf.bindRenderTargets(&vramTarget);
@@ -1457,13 +1488,11 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             } else {
                 for (uint32_t y = 0; y < h; y++) {
                     uint32_t* dstRow = slotStagingCpu + (size_t)y * w;
-                    // En Tekken 3 los FMV STR tienen 220 líneas de contenido activo centradas
-                    // dentro del bloque MDEC de 224 líneas (y=8..231). Las líneas extremas
-                    // (y=230..231) contienen el relleno de macrobloque MDEC (que en espacio YUV
-                    // produce la línea verde clásica de PS1), y las líneas 0..7 y 232..239
-                    // son el overscan vertical que en CRT quedaba oculto tras el marco.
-                    // Centramos con 10 líneas de letterbox negro arriba (0..9) y 10 abajo (230..239).
-                    if (h == 240 && (y < 10 || y >= 230)) {
+                    // En Tekken 3 los FMV STR tienen 192 líneas (y=24..215 en finales) o 220 líneas
+                    // activas (y=10..229 en intro/theater). Cualquier línea fuera del rango activo
+                    // del FMV es letterbox y debe ser negro puro para evitar que se muestren
+                    // restos de la VRAM previa (como los dos cuadros de retratos/HUD de 1P y 2P).
+                    if (h == 240 && (y < s_depth24_active_y0 || y >= s_depth24_active_y1)) {
                         for (uint32_t x = 0; x < w; x++) dstRow[x] = 0xFF000000u;
                     } else {
                         gpu_depth24_present_row(&di, y, dstRow, w);
@@ -1535,45 +1564,47 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
         }
 
-        // Superposición OSD 2D (Carrusel de trajes personalizados con L1, selector y avisos)
-        const uint32_t* osdPx = nullptr;
-        int osdW = 0, osdH = 0;
-        int uiScale = (int)curOutH / 480;
-        if (uiScale < 1) uiScale = 1;
-        if (uiScale > 8) uiScale = 8;
-        int osdMargin = 8 * uiScale;
+        // Superposición OSD 2D (solo fuera de FMV 24-bit)
+        if (!di.depth24) {
+            const uint32_t* osdPx = nullptr;
+            int osdW = 0, osdH = 0;
+            int uiScale = (int)curOutH / 480;
+            if (uiScale < 1) uiScale = 1;
+            if (uiScale > 8) uiScale = 8;
+            int osdMargin = 8 * uiScale;
 
-        for (int player = 0; player < 2; ++player) {
-            if (host_osd_outfit_image(player, &osdPx, &osdW, &osdH) && osdPx) {
-                int rx = 0, ry = 0, rdw = 0, rdh = 0;
-                host_osd_outfit_rect(player, (int)dstW, (int)dstH, osdW, osdH, &rx, &ry, &rdw, &rdh);
-                int hiresW = (rdw > (int)OsdMaxWidth) ? (int)OsdMaxWidth : rdw;
-                int hiresH = (rdh > (int)OsdMaxHeight) ? (int)OsdMaxHeight : rdh;
-                if (host_osd_outfit_image_hires(player, &osdPx, hiresW, hiresH) && osdPx) {
-                    DrawOsdImage(osdPx, hiresW, hiresH, (int)dstX + rx, (int)dstY + ry, rdw, rdh, curOutW, curOutH, colorTarget);
-                } else {
-                    DrawOsdImage(osdPx, osdW, osdH, (int)dstX + rx, (int)dstY + ry, rdw, rdh, curOutW, curOutH, colorTarget);
+            for (int player = 0; player < 2; ++player) {
+                if (host_osd_outfit_image(player, &osdPx, &osdW, &osdH) && osdPx) {
+                    int rx = 0, ry = 0, rdw = 0, rdh = 0;
+                    host_osd_outfit_rect(player, (int)dstW, (int)dstH, osdW, osdH, &rx, &ry, &rdw, &rdh);
+                    int hiresW = (rdw > (int)OsdMaxWidth) ? (int)OsdMaxWidth : rdw;
+                    int hiresH = (rdh > (int)OsdMaxHeight) ? (int)OsdMaxHeight : rdh;
+                    if (host_osd_outfit_image_hires(player, &osdPx, hiresW, hiresH) && osdPx) {
+                        DrawOsdImage(osdPx, hiresW, hiresH, (int)dstX + rx, (int)dstY + ry, rdw, rdh, curOutW, curOutH, colorTarget);
+                    } else {
+                        DrawOsdImage(osdPx, osdW, osdH, (int)dstX + rx, (int)dstY + ry, rdw, rdh, curOutW, curOutH, colorTarget);
+                    }
                 }
             }
-        }
-        if (host_osd_image(&osdPx, &osdW, &osdH) && osdPx) {
-            DrawOsdImage(osdPx, osdW, osdH, (int)dstX + osdMargin, (int)dstY + osdMargin, osdW * uiScale, osdH * uiScale, curOutW, curOutH, colorTarget);
-        }
-        if (host_osd_volume_image(&osdPx, &osdW, &osdH) && osdPx) {
-            int vdw = osdW * uiScale;
-            int vdh = osdH * uiScale;
-            int vx = ((int)curOutW > vdw + osdMargin) ? ((int)curOutW - vdw - osdMargin) : osdMargin;
-            int vy = ((int)curOutH > vdh) ? (((int)curOutH - vdh) / 2) : osdMargin;
-            DrawOsdImage(osdPx, osdW, osdH, vx, vy, vdw, vdh, curOutW, curOutH, colorTarget);
-        }
-        const uint32_t* fpsPx = nullptr;
-        int fpsW = 0, fpsH = 0;
-        if (host_osd_fps_image(&fpsPx, &fpsW, &fpsH) && fpsPx) {
-            int fdw = fpsW * uiScale;
-            int fdh = fpsH * uiScale;
-            int fx = ((int)curOutW > fdw + osdMargin) ? ((int)curOutW - fdw - osdMargin) : osdMargin;
-            int fy = osdMargin;
-            DrawOsdImage(fpsPx, fpsW, fpsH, fx, fy, fdw, fdh, curOutW, curOutH, colorTarget);
+            if (host_osd_image(&osdPx, &osdW, &osdH) && osdPx) {
+                DrawOsdImage(osdPx, osdW, osdH, (int)dstX + osdMargin, (int)dstY + osdMargin, osdW * uiScale, osdH * uiScale, curOutW, curOutH, colorTarget);
+            }
+            if (host_osd_volume_image(&osdPx, &osdW, &osdH) && osdPx) {
+                int vdw = osdW * uiScale;
+                int vdh = osdH * uiScale;
+                int vx = ((int)curOutW > vdw + osdMargin) ? ((int)curOutW - vdw - osdMargin) : osdMargin;
+                int vy = ((int)curOutH > vdh) ? (((int)curOutH - vdh) / 2) : osdMargin;
+                DrawOsdImage(osdPx, osdW, osdH, vx, vy, vdw, vdh, curOutW, curOutH, colorTarget);
+            }
+            const uint32_t* fpsPx = nullptr;
+            int fpsW = 0, fpsH = 0;
+            if (host_osd_fps_image(&fpsPx, &fpsW, &fpsH) && fpsPx) {
+                int fdw = fpsW * uiScale;
+                int fdh = fpsH * uiScale;
+                int fx = ((int)curOutW > fdw + osdMargin) ? ((int)curOutW - fdw - osdMargin) : osdMargin;
+                int fy = osdMargin;
+                DrawOsdImage(fpsPx, fpsW, fpsH, fx, fy, fdw, fdh, curOutW, curOutH, colorTarget);
+            }
         }
         host_osd_present_done();
     }
