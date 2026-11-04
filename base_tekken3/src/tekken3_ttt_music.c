@@ -459,14 +459,14 @@ static void produce(void) {
         chip_reset(&pl.a, p);
         pl.snapshot_ok = 0;
     }
-    pl.ring[pl.produced % RING] = a[0];
-    pl.ring_r[pl.produced % RING] = a[1];
+    pl.ring[pl.produced & (RING - 1)] = a[0];
+    pl.ring_r[pl.produced & (RING - 1)] = a[1];
     pl.produced++;
 }
 
-static float stream(int64_t s, int ch) {
+static inline float stream(int64_t s, int ch) {
     if (s < 0) return 0.0f;
-    return (ch ? pl.ring_r : pl.ring)[s % RING] / 32768.0f;
+    return (ch ? pl.ring_r : pl.ring)[s & (RING - 1)] * (1.0f / 32768.0f);
 }
 
 /* MAME 0.289's lofi resampler, 88 200 to 44 100 Hz, at output sample d
@@ -483,7 +483,7 @@ static void resample(int16_t out[2]) {
         float av[4];
         for (int j = 0; j < 4; j++) {
             int64_t i = 3 * (k + j) - first;
-            av[j] = ((0.0f + stream(i, ch)) + stream(i + 1, ch) + stream(i + 2, ch)) / 3.0f;
+            av[j] = ((0.0f + stream(i, ch)) + stream(i + 1, ch) + stream(i + 2, ch)) * (1.0f / 3.0f);
         }
         float y = -av[0] * f0[4096 - c] + av[1] * f1[4096 - c];
         y = y + av[2] * f1[c];

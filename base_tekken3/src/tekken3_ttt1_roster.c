@@ -448,7 +448,14 @@ uint32_t tekken3_guest_pool_alloc(unsigned slot,uint32_t size,uint32_t alignment
         return 0;
     }
     pool_used[slot]=start+size;
-    for(uint32_t i=0;i<size;i+=4)psx_mod_write_word(*area+start+i,0);
+    extern const uint8_t *psx_mod_memory_region(int which, uint32_t *used);
+    uint32_t mod_used = 0;
+    uint8_t *mod_mem = (uint8_t*)psx_mod_memory_region(0, &mod_used);
+    if (mod_mem && *area >= 0x9F000000u && (*area - 0x9F000000u + start + size <= mod_used)) {
+        memset(mod_mem + (*area - 0x9F000000u + start), 0, size);
+    } else {
+        for(uint32_t i=0;i<size;i+=4)psx_mod_write_word(*area+start+i,0);
+    }
     return *area+start;
 }
 void tekken3_guest_pool_reset(unsigned slot){if(slot<2)pool_used[slot]=0;}

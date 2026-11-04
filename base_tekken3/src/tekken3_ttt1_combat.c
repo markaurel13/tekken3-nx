@@ -161,8 +161,17 @@ static unsigned alias_links;
 /* Where slot s's rows and counters start in the merged tables, beyond the
  * native ones: slot 1 follows slot 0's. */
 static unsigned rx_shift[2],push_shift[2],counter_shift[2];
-static uint32_t push_table=0x8001075c;
+static uint32_t push_table=0x8001075cu;
+static uint32_t reactions_table=0x80010ce8u;
+static uint32_t counter_table=0x800177dcu;
+static uint32_t events_table=0x800971f8u;
+static uint32_t spacing_table=0x80098260u;
 uint32_t tekken3_ttt1_push_base(void) {return push_table;}
+uint32_t tekken3_ttt1_reactions_base(void) {return reactions_table;}
+uint32_t tekken3_ttt1_counter_base(void) {return counter_table;}
+uint32_t tekken3_ttt1_events_base(void) {return events_table;}
+uint32_t tekken3_ttt1_spacing_base(void) {return spacing_table;}
+extern void dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len);
 static uint32_t word(const unsigned char *p) {
     return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;
 }
@@ -190,9 +199,25 @@ static void follow_identity(unsigned s) {
     if(switching[s]==SWITCH_TO) {
         free_combat(&retired[s]);
         retired[s]=*c;memset(c,0,sizeof *c);
+        /* Unknown's hit-effect packs (Unknown-TTT1-hiteffect.tim / .hfx) stay
+         * identical across mid-fight style switches: keep them on the active
+         * slot so ready() never re-reads or re-uploads 32 hitspark frames. */
+        c->hit_effect=retired[s].hit_effect;retired[s].hit_effect=NULL;
+        c->hit_effect_frames=retired[s].hit_effect_frames;
+        c->hit_effect_attempted=retired[s].hit_effect_attempted;
+        c->hfx=retired[s].hfx;memset(&retired[s].hfx,0,sizeof retired[s].hfx);
         tekken3_guest_pool_flip(s);
     } else {
-        if(switching[s]!=SWITCH_UNDO)free_combat(&retired[s]);
+        if(switching[s]==SWITCH_UNDO) {
+            if(c->hit_effect && !retired[s].hit_effect) {
+                retired[s].hit_effect=c->hit_effect;c->hit_effect=NULL;
+                retired[s].hit_effect_frames=c->hit_effect_frames;
+                retired[s].hit_effect_attempted=c->hit_effect_attempted;
+                retired[s].hfx=c->hfx;memset(&c->hfx,0,sizeof c->hfx);
+            }
+        } else {
+            free_combat(&retired[s]);
+        }
         free_combat(c);
         tekken3_guest_pool_reset(s);
     }
@@ -365,8 +390,21 @@ void __wrap_func_8002E0BC(CPUState *cpu) {
     __real_func_8002E0BC(cpu);
 }
 static void patch_base(uint32_t high_at,uint32_t low_at,unsigned reg,uint32_t target) {
-    psx_mod_write_code_word(high_at,0x3c000000u|(reg<<16)|((target+0x8000)>>16));
-    psx_mod_write_code_word(low_at,0x24000000u|(reg<<21)|(reg<<16)|(target&65535));
+    uint32_t hi_insn = 0x3c000000u|(reg<<16)|((target+0x8000)>>16);
+    uint32_t lo_insn = 0x24000000u|(reg<<21)|(reg<<16)|(target&65535);
+    if ((high_at & 0x1FFFFFFFu) < 0x000B0000u) {
+        /* Main .text sites are hooked natively in compiled C via
+         * tekken3_ttt1_*_base(); bless the reference image first and then
+         * update RAM via psx_mod_write_word so neither dirty_ram_bitmap nor
+         * text_modified_bitmap is flagged for these .text pages. */
+        dirty_ram_text_bless(high_at & 0x1FFFFFFFu, (const uint8_t *)&hi_insn, 4u);
+        dirty_ram_text_bless(low_at & 0x1FFFFFFFu, (const uint8_t *)&lo_insn, 4u);
+        psx_mod_write_word(high_at, hi_insn);
+        psx_mod_write_word(low_at, lo_insn);
+    } else {
+        psx_mod_write_code_word(high_at, hi_insn);
+        psx_mod_write_code_word(low_at, lo_insn);
+    }
 }
 static int load_tables(unsigned s,const char *root) {
     GuestCombat *c=&slots[s];
@@ -577,7 +615,7 @@ static int load_combat(unsigned s) {
         psx_mod_write_word(c->guest+rp+32,c->guest+cursor);
         unsigned j=0;
         do {native_effect_bones(s,c->data+props+j*4);
-            for(unsigned k=0;k<4;k++)psx_mod_write_byte(c->guest+cursor+k,c->data[props+j*4+k]);cursor+=4;}
+            psx_mod_write_word(c->guest+cursor,word(c->data+props+j*4));cursor+=4;}
         while(ttt1_pack_half(c->data+props+j++*4));
     }
     switch_audio_pump_if_needed();
@@ -700,6 +738,10 @@ static void install_tables(void) {
         }
     }
     switch_audio_pump_if_needed();
+    events_table=merged_events;
+    reactions_table=merged;
+    counter_table=counter_base;
+    push_table=push_base;
     patch_base(0x80041400,0x80041404,2,merged_events);
     patch_base(0x8002d7ac,0x8002d7b4,2,merged);
     patch_base(0x80044590,0x80044598,2,merged);
@@ -707,7 +749,6 @@ static void install_tables(void) {
     patch_base(0x80044664,0x8004466c,2,merged);
     patch_base(0x800445c4,0x800445cc,2,counter_base);
     patch_base(0x80044ac0,0x80044ac4,3,counter_base);
-    push_table=push_base;
     installed[0]=key[0];installed[1]=key[1];
     fprintf(stderr,"TTT1 characters: reaction tables merged: %u rows, %u pushback bytes, %u counters (%s%s%s)\n",
             rows,push,counters,key[0]?tekken3_guest_name_for(0):"",key[0]&&key[1]?" + ":"",key[1]?tekken3_guest_name_for(1):"");
@@ -837,6 +878,7 @@ static int ready(unsigned player) {
        p->counter_shift!=counter_shift[player] || p->other_records!=other_records ||
        p->other_generation!=slots[other].generation || p->links!=alias_links) {
         uint64_t t_alias0 = tek_get_ticks();
+        switch_audio_pump_if_needed();
         uint32_t source=psx_mod_read_word(base+8);
         p->original_alias=psx_mod_read_word(base+12);
         if(!p->alias_table)p->alias_table=tekken3_guest_pool_alloc(player,ALIAS_ENTRIES*4,16);
@@ -849,65 +891,104 @@ static int ready(unsigned player) {
         unsigned native_count=psx_mod_read_word(base)>>16;
         static unsigned char keep[4023];
         keep_native_reactions(c,p->original_alias,source-56,keep);
-        for(unsigned i=0;i<ALIAS_ENTRIES;i++)psx_mod_write_word(p->alias_table+i*4,idle);
-        for(unsigned i=0;i<4023;i++) {
-            uint32_t original=psx_mod_read_word(p->original_alias+i*4);
-            /* Shared engine reactions remain available, and so do the
-             * reactions stored in the Jin cache. Its other moves (attacks)
-             * must never animate the guest. */
-            if(original>=source && original<source+native_count*56 && !keep[i])continue;
-            if(original==source-56)continue; /* native missing-alias record */
-            psx_mod_write_word(p->alias_table+i*4,original);
+
+        extern const uint8_t *psx_mod_memory_region(int which, uint32_t *used);
+        uint32_t mod_used = 0;
+        uint8_t *mod_mem = (uint8_t *)psx_mod_memory_region(0, &mod_used);
+        uint32_t *alias_ptr = (mod_mem && p->alias_table >= 0x9F000000u)
+            ? (uint32_t *)(mod_mem + (p->alias_table - 0x9F000000u)) : NULL;
+        uint8_t *rec_base = (mod_mem && p->records >= 0x9F000000u)
+            ? (mod_mem + (p->records - 0x9F000000u)) : NULL;
+        const uint8_t *src_rec_base = (mod_mem && (c->guest + c->records) >= 0x9F000000u)
+            ? (mod_mem + (c->guest + c->records - 0x9F000000u)) : NULL;
+        uint32_t *hb_base = (mod_mem && p->hit_bones >= 0x9F000000u)
+            ? (uint32_t *)(mod_mem + (p->hit_bones - 0x9F000000u)) : NULL;
+
+        if (alias_ptr) {
+            for(unsigned i=0;i<ALIAS_ENTRIES;i++) alias_ptr[i] = idle;
+            for(unsigned i=0;i<4023;i++) {
+                uint32_t original=psx_mod_read_word(p->original_alias+i*4);
+                if(original>=source && original<source+native_count*56 && !keep[i])continue;
+                if(original==source-56)continue;
+                alias_ptr[i] = original;
+            }
+        } else {
+            for(unsigned i=0;i<ALIAS_ENTRIES;i++)psx_mod_write_word(p->alias_table+i*4,idle);
+            for(unsigned i=0;i<4023;i++) {
+                uint32_t original=psx_mod_read_word(p->original_alias+i*4);
+                if(original>=source && original<source+native_count*56 && !keep[i])continue;
+                if(original==source-56)continue;
+                psx_mod_write_word(p->alias_table+i*4,original);
+            }
         }
+
+        if (rec_base && src_rec_base) {
+            memcpy(rec_base, src_rec_base, c->count * 56u);
+        }
+        if(!p->lasers)p->lasers=calloc(c->count,1);
+        if(!p->blades)p->blades=calloc(c->count,4);
+
         for(unsigned i=0;i<c->count;i++) {
             uint32_t dst=p->records+i*56;
-            for(unsigned j=0;j<56;j+=4)psx_mod_write_word(dst+j,psx_mod_read_word(c->guest+c->records+i*56+j));
+            if (!rec_base || !src_rec_base) {
+                for(unsigned j=0;j<56;j+=4)psx_mod_write_word(dst+j,psx_mod_read_word(c->guest+c->records+i*56+j));
+            }
             /* Reaction row (high half of +48) and counter index (+52) in the
              * merged tables. */
-            uint32_t reaction=psx_mod_read_word(dst+48);
-            if((reaction>>16)>=NATIVE_ROWS)reaction+=rx_shift[player]<<16;
-            psx_mod_write_word(dst+48,reaction);
-            uint32_t counter=psx_mod_read_word(dst+52);
-            if(counter>=NATIVE_COUNTERS)psx_mod_write_word(dst+52,counter+counter_shift[player]);
+            uint32_t *rec_words = rec_base ? (uint32_t *)(rec_base + i * 56u) : NULL;
+            uint32_t reaction = rec_words ? rec_words[12] : psx_mod_read_word(dst+48);
+            if((reaction>>16)>=NATIVE_ROWS) {
+                reaction+=rx_shift[player]<<16;
+                if (rec_words) rec_words[12] = reaction;
+                else psx_mod_write_word(dst+48,reaction);
+            }
+            uint32_t counter = rec_words ? rec_words[13] : psx_mod_read_word(dst+52);
+            if(counter>=NATIVE_COUNTERS) {
+                if (rec_words) rec_words[13] = counter+counter_shift[player];
+                else psx_mod_write_word(dst+52,counter+counter_shift[player]);
+            }
             uint32_t limbs=word(c->data+c->records+i*56+40);
-            if(!p->lasers)p->lasers=calloc(c->count,1);
-            /* A first limb of 24 or more sends T3's hit test (80047BBC) to
-             * the effect-object capsules used by True Ogre's fire breath,
-             * so the laser's actor capsule would never be tested. Keep the
-             * beam type aside and give the engine an ordinary limb: the
-             * sweep wrapper replaces its capsule with the beam anyway. */
-            /* True Ogre on his TTT1 moves: TTT1 breathes his fire through
-             * the laser's virtual limb 24, T3 through its own effect limb 24
-             * (0x8006F0F4 each active frame, then the effect-object capsules):
-             * the engine's flames, their hit and sound, on his T3 model. */
             int fire=(limbs&255)==TTT1_PACK_LASER_LIMB && tekken3_native_moves_id(player)==TRUE_OGRE;
             if(p->lasers)p->lasers[i]=(limbs&255)==TTT1_PACK_LASER_LIMB && !fire?(limbs>>8&255)|0x80:0;
             if(fire)limbs=(limbs&~0xffffu)|EFFECT_FIRE_LIMB;
             else if((limbs&255)==TTT1_PACK_LASER_LIMB)limbs=(limbs&~255u)|17;
-            /* The mist: the engine's own cloud, its hit and its sound. */
             else if((limbs&255)==TTT1_PACK_MIST_LIMB)limbs=(limbs&~255u)|EFFECT_MIST_LIMB;
-            /* Blade points: kept aside for the capsules, the hand for the
-             * engine (the same reason as the laser). */
-            if(!p->blades)p->blades=calloc(c->count,4);
             int blade=0;
             for(unsigned k=0;k<4;k++) {
                 unsigned b=limbs>>(8*k)&255;
                 if(b==TTT1_PACK_BLADE_MID || b==TTT1_PACK_BLADE_TIP){blade=1;limbs=(limbs&~(255u<<(8*k)))|BLADE_BONE<<(8*k);}
             }
             if(p->blades)p->blades[i]=blade?word(c->data+c->records+i*56+40):0;
-            psx_mod_write_word(p->hit_bones+i*8,limbs);
-            psx_mod_write_word(p->hit_bones+i*8+4,0);
-            psx_mod_write_word(dst+40,p->hit_bones+i*8);
-            psx_mod_write_word(p->alias_table+(slot_base(player)+i)*4,dst);
+            if (hb_base && rec_words && alias_ptr) {
+                hb_base[i*2] = limbs;
+                hb_base[i*2+1] = 0;
+                rec_words[10] = p->hit_bones+i*8;
+                alias_ptr[slot_base(player)+i] = dst;
+            } else {
+                psx_mod_write_word(p->hit_bones+i*8,limbs);
+                psx_mod_write_word(p->hit_bones+i*8+4,0);
+                psx_mod_write_word(dst+40,p->hit_bones+i*8);
+                psx_mod_write_word(p->alias_table+(slot_base(player)+i)*4,dst);
+            }
         }
         /* The other player's guest moves too, for the reactions it plays on
          * this fighter (a throw's victim). */
-        if(other_records)for(unsigned i=0;i<slots[other].count;i++)
-            psx_mod_write_word(p->alias_table+(slot_base(other)+i)*4,other_records+i*56);
-        psx_mod_write_word(p->alias_table+3*4,p->records+c->neutral*56);
-        for(unsigned i=0;i<4023;i++)if(c->native_aliases[i]) {
-            unsigned index=c->native_aliases[i]==3?c->neutral:c->native_aliases[i]-SLOT_BASE;
-            psx_mod_write_word(p->alias_table+i*4,p->records+index*56);
+        if (alias_ptr) {
+            if(other_records)for(unsigned i=0;i<slots[other].count;i++)
+                alias_ptr[slot_base(other)+i] = other_records+i*56;
+            alias_ptr[3] = p->records+c->neutral*56;
+            for(unsigned i=0;i<4023;i++)if(c->native_aliases[i]) {
+                unsigned index=c->native_aliases[i]==3?c->neutral:c->native_aliases[i]-SLOT_BASE;
+                alias_ptr[i] = p->records+index*56;
+            }
+        } else {
+            if(other_records)for(unsigned i=0;i<slots[other].count;i++)
+                psx_mod_write_word(p->alias_table+(slot_base(other)+i)*4,other_records+i*56);
+            psx_mod_write_word(p->alias_table+3*4,p->records+c->neutral*56);
+            for(unsigned i=0;i<4023;i++)if(c->native_aliases[i]) {
+                unsigned index=c->native_aliases[i]==3?c->neutral:c->native_aliases[i]-SLOT_BASE;
+                psx_mod_write_word(p->alias_table+i*4,p->records+index*56);
+            }
         }
         gon_breath_rule(player);
         psx_mod_write_word(p->header+12,p->alias_table);
@@ -2477,6 +2558,7 @@ static void install_cpu_table(void) {
         uint32_t from=CPU_TABLE+(id<CPU_NATIVE_ROWS?id:CPU_DEFAULT_ROW)*CPU_ROW;
         for(unsigned i=0;i<CPU_ROW;i+=4)psx_mod_write_word(table+id*CPU_ROW+i,psx_mod_read_word(from+i));
     }
+    spacing_table=table;
     patch_base(0x800616cc,0x800616d4,4,table);
 }
 /* Tekken Force's overlay (0x800B2658) picks each stage's boss from a route:
@@ -3083,6 +3165,12 @@ void tekken3_ttt1_preload_player(unsigned p) {
             (void)switch_cached_file_get(path, NULL);
             snprintf(path, sizeof path, "%s/%s-arcade-P%u.tim", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-arcade-P%u.face", root, d_prefix, c);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-arcade-P%u.acc", root, d_prefix, c);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-arcade-P%u.hilt", root, d_prefix, c);
+            (void)switch_cached_file_get(path, NULL);
         }
         if (!strncmp(d_prefix, "Unknown", 7)) {
             snprintf(path, sizeof path, "%s/Unknown-TTT1-wolf.glow", root);
@@ -3104,6 +3192,10 @@ void tekken3_ttt1_preload_player(unsigned p) {
             snprintf(path, sizeof path, "%s/%s-sfx.jus", root, donor_pfx);
             (void)switch_cached_file_get(path, NULL);
             snprintf(path, sizeof path, "%s/%s-idle.poses", root, donor_pfx);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-movelist.bin", root, donor_pfx);
+            (void)switch_cached_file_get(path, NULL);
+            snprintf(path, sizeof path, "%s/%s-combos.bin", root, donor_pfx);
             (void)switch_cached_file_get(path, NULL);
             switch_audio_pump_if_needed();
         }
@@ -3244,9 +3336,15 @@ void tekken3_ttt1_precach_kazuya(void) {
         "Unknown-TTT1-arcade-P1.3dm",
         "Unknown-TTT1-arcade-P1.relocs",
         "Unknown-TTT1-arcade-P1.tim",
+        "Unknown-TTT1-arcade-P1.face",
+        "Unknown-TTT1-arcade-P1.acc",
+        "Unknown-TTT1-arcade-P1.hilt",
         "Unknown-TTT1-arcade-P2.3dm",
         "Unknown-TTT1-arcade-P2.relocs",
         "Unknown-TTT1-arcade-P2.tim",
+        "Unknown-TTT1-arcade-P2.face",
+        "Unknown-TTT1-arcade-P2.acc",
+        "Unknown-TTT1-arcade-P2.hilt",
         "Unknown-TTT1-voices.juv",
         "Unknown-TTT1-hiteffect.tim",
         "Unknown-TTT1-hiteffect64.hfx",
@@ -3268,7 +3366,8 @@ void tekken3_ttt1_precach_kazuya(void) {
     }
 
     static const char *donor_exts[] = {
-        "-combat.jmv", "-tables.jst", "-sfx.jus", "-idle.poses"
+        "-combat.jmv", "-tables.jst", "-sfx.jus", "-idle.poses",
+        "-movelist.bin", "-combos.bin"
     };
     for (size_t f = 0; f < sizeof(common_fighters)/sizeof(common_fighters[0]); f++) {
         const char *dname = common_fighters[f];

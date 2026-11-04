@@ -47,6 +47,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __SWITCH__
+extern void switch_audio_pump_if_needed(void);
+#else
+static inline void switch_audio_pump_if_needed(void) {}
+#endif
+
 enum {
     ACTOR0=0x800a9228, ACTOR_SIZE=0x188c,
     SLOTS=0x4f0, SLOT_SIZE=40, PARTS=24,
@@ -160,13 +166,8 @@ static void upload_pack(void) {
     const unsigned char *p=pack.pack+18;
     for(unsigned r=0,n=half(pack.pack+6);r<n;r++) {
         unsigned x=half(p),y=half(p+2),w=half(p+4),h=half(p+6);
-        uint16_t *pixels=malloc(2u*w*h);
-        if(pixels) {
-            memcpy(pixels,p+8,2u*w*h);
-            psx_mod_gpu_high_vram_tag("wolf");  /* [HighVram_CLASH_Diag] */
-            psx_mod_gpu_high_vram_upload((int)x,(int)y,(int)w,(int)h,pixels);
-            free(pixels);
-        }
+        psx_mod_gpu_high_vram_tag("wolf");  /* [HighVram_CLASH_Diag] */
+        psx_mod_gpu_high_vram_upload((int)x,(int)y,(int)w,(int)h,(const uint16_t*)(p+8));
         p+=8+2u*w*h;
     }
 }
@@ -209,6 +210,9 @@ static int load(void) {
     free(relocs);
     pack.memory=psx_mod_alloc_guest_memory(pack.model_size,16);
     pack.gpu=psx_mod_alloc_gpu_dma_memory(2*PACKETS+2*2*SPRITES*SPRITE,16);
+    extern uint32_t g_wolf_dma_start, g_wolf_dma_end;
+    g_wolf_dma_start = pack.gpu & 0x00FFFFFFu;
+    g_wolf_dma_end = g_wolf_dma_start + 2*PACKETS + 2*2*SPRITES*SPRITE;
     for(unsigned p=0;p<2;p++) wolves[p].actor=psx_mod_alloc_guest_memory(ACTOR_SIZE,16);
     if(!pack.memory || !pack.gpu || !wolves[0].actor || !wolves[1].actor ||
        !psx_mod_gpu_high_vram_source(pack.gpu,2*PACKETS+2*2*SPRITES*SPRITE)) {
@@ -518,13 +522,13 @@ static int fighting(void) {
 }
 
 int g_wolf_debug_suppress = 0;
+uint32_t g_wolf_dma_start = 0;
+uint32_t g_wolf_dma_end = 0;
 
 int tekken3_ttt1_is_wolf_packet_addr(uint32_t addr) {
-    if (!pack.gpu) return 0;
-    uint32_t start = pack.gpu & 0x00FFFFFFu;
-    uint32_t end = start + 2*PACKETS + 2*2*SPRITES*SPRITE;
+    if (!g_wolf_dma_end) return 0;
     uint32_t a = addr & 0x00FFFFFFu;
-    return (a >= start && a < end);
+    return (a >= g_wolf_dma_start && a < g_wolf_dma_end);
 }
 
 /* src/tekken3_cine.c's 0x8003B4F8 wrapper, once an actor is drawn. */
@@ -545,7 +549,7 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     unsigned buffer=psx_mod_read_word(BUFFER)&1;
     if(psx_mod_read_half(PHASE)<6 || now-wolves[p].last_drawn>8*FRAME_CYCLES) wolves[p].live=0;
     if(psx_mod_read_half(PHASE)<6) return;
-    if(!pack.uploaded || now-pack.uploaded_at>600*FRAME_CYCLES || !wolves[p].live) {
+    if(!pack.uploaded || !wolves[p].live) {
         upload_pack(); pack.uploaded=1; pack.uploaded_at=now;
     }
     if(wolves[p].built_from!=psx_mod_read_word(MODELS+p*4) || !wolves[p].live) build(p);
@@ -612,6 +616,7 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     uint64_t t_copy=tekken3_host_ns();
 
     psx_mod_write_word(PAUSE,1);
+    switch_audio_pump_if_needed();
     call(cpu,SOLVE,a);
     if(tracing()) {
         static unsigned n;
@@ -625,6 +630,7 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     uint64_t t_solve=tekken3_host_ns();
     call(cpu,BODY,a);
     psx_mod_write_word(PAUSE,pause);
+    switch_audio_pump_if_needed();
     uint64_t t_body=tekken3_host_ns();
 
     /* The engine wrote each drawn packet's command over ours: semi-transparent again.

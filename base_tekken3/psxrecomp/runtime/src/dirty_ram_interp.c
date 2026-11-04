@@ -1442,12 +1442,9 @@ static int interp_enter_compiled(CPUState *cpu, uint32_t target) {
         }
     }
 #endif
-    /* Decline when the target page no longer matches the static game image.
-     * Returning 0 lets the JAL/JALR handler fall through to local-flow interp
-     * of the live RAM bytes instead of running stale compiled code. */
-    if (!psx_game_text_native_ok(target)) return 0;
     if (psx_mixed_owner_enabled()
         && interp_host_stack_used() > psx_mixed_stack_watermark()) {
+        if (!psx_game_text_native_ok(target)) return 0;
         cpu->pc = target;
         g_psx_call_bail = 1;
         return 1;
@@ -3345,7 +3342,9 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         /* Guest call returns advance without transferred set. Re-check the
          * resume PC so a patched entry can hand its unchanged tail back to
          * compiled code without adding probes to ordinary dirty overlay runs. */
-        if (clean_game_text_miss && interp_enter_compiled(cpu, pc)) {
+        if (clean_game_text_miss &&
+            ((insn >> 26) == 0x03u || (insn & 0xFC00003Fu) == 0x00000009u) &&
+            interp_enter_compiled(cpu, pc)) {
             g_dirty_ram_native_handoffs++;
             g_dirty_ram_blocks_run++;
             if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;

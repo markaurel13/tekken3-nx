@@ -520,9 +520,9 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         }
 #endif
 
-        // 1. Priming: acumular al menos 14 bloques (~233 ms) al inicio, o 3 bloques (~50 ms) tras un underrun
+        // 1. Priming: acumular 3 bloques (~50 ms) al inicio, o 1 bloque (~16 ms) tras un underrun
         if (!primed) {
-            uint32_t target_prime = has_last_block ? 3 : 14;
+            uint32_t target_prime = has_last_block ? 1 : 3;
             if (occupancy >= target_prime) {
                 primed = true;
             } else {
@@ -530,16 +530,11 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             }
         }
 
-        // 2. Control de desbordamiento de búfer anular (48 slots = ~800 ms):
-        // En Nintendo Switch bloqueada a 60 FPS, el juego genera exactamente 44100 muestras/seg
-        // y audren consume exactamente 44100 muestras/seg (1:1 lockstep físico por hardware).
-        // El tono se mantiene SIEMPRE FIJO a 1.0000x (sin desafinaciones ni efecto cinta gastada).
-        // Solo descartamos exceso si la ocupación se aproxima al límite físico del ring buffer
-        // (por ejemplo tras fast-forward extremo o saltos largos de cinemáticas).
-        // Durante juego normal, un colchón de 16-43 slots absorbe cualquier variación sin jamás
-        // cortar el audio ni producir chasquidos o saltos perceptibles.
-        if (occupancy >= 44) {
-            uint32_t drop_count = occupancy - 36;
+        // 2. Control de latencia del búfer anular:
+        // Mantener el anillo entre 2 y 4 bloques (~33-66 ms) para latencia imperceptible.
+        // Si tras una carga se acumulan demasiados bloques (> 8), recortamos el exceso.
+        if (occupancy > 8) {
+            uint32_t drop_count = occupancy - 4;
             g_at.trim_drops.fetch_add(drop_count, std::memory_order_relaxed);
             r += drop_count;
             self->m_ringReadIdx.store(r, std::memory_order_release);
@@ -679,6 +674,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
 }
 
 static u64 s_last_audio_update_tick = 0;
+static u64 s_last_vblank_audio_tick = 0;
 static std::atomic<bool> s_in_audio_update{false};
 
 void SwitchAudio::Update() {
@@ -694,15 +690,28 @@ void SwitchAudio::Update() {
         }
     } guard;
 
+    u64 now_tick = armGetSystemTick();
+    uint64_t vblank_elapsed_ns = (s_last_vblank_audio_tick != 0) ? armTicksToNs(now_tick - s_last_vblank_audio_tick) : 0;
+    s_last_vblank_audio_tick = now_tick;
+
     int blocks_to_render = 1;
     if (m_threadCreated) {
         uint32_t cur_w = m_ringWriteIdx.load(std::memory_order_relaxed);
         uint32_t cur_r = m_ringReadIdx.load(std::memory_order_relaxed);
         uint32_t cur_occ = (cur_w >= cur_r) ? (cur_w - cur_r) : 0;
-        if (cur_occ < 4) {
-            blocks_to_render = 3;
-        } else if (cur_occ < 8) {
+        if (cur_occ == 0) {
             blocks_to_render = 2;
+        } else if (cur_occ == 1 && vblank_elapsed_ns > 0 && vblank_elapsed_ns < 13500000ULL) {
+            // Solo recargamos un 2do bloque preventivo en frames ligeros (< 13.5 ms),
+            // manteniendo el colchon en 2-3 bloques sin empujar frames pesados por encima de 16.67 ms.
+            blocks_to_render = 2;
+        } else if (cur_occ >= 5) {
+            // Si el anillo ya tiene >= 5 bloques (~83 ms), no renderizamos en este VBlank
+            // para drenar suavemente de vuelta a 3-4 bloques sin recortes ni retraso.
+            s_last_audio_update_tick = now_tick;
+            blocks_to_render = 0;
+        } else {
+            blocks_to_render = 1;
         }
     }
 
@@ -823,13 +832,10 @@ void switch_audio_pump_if_needed(void) {
         s_last_audio_update_tick = now;
         return;
     }
-    // 320.000 ticks = 1 frame a 60 Hz (19.2 MHz / 60)
-    constexpr u64 TICKS_PER_AUDIO_FRAME = 320000;
-    int pumped = 0;
-    while (now - s_last_audio_update_tick >= TICKS_PER_AUDIO_FRAME && pumped < 4) {
+    // 400.000 ticks = ~20.8 ms (solo actúa si un frame se bloquea más de un VBlank completo, p.ej. carga de disco)
+    constexpr u64 TICKS_PUMP_THRESHOLD = 400000;
+    if (now - s_last_audio_update_tick >= TICKS_PUMP_THRESHOLD) {
         SwitchAudio::Instance().Update();
-        pumped++;
-        now = armGetSystemTick();
     }
 }
 

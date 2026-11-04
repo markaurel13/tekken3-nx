@@ -659,6 +659,8 @@ uint32_t g_dma2_last_actual_words = 0;
 uint32_t g_dma2_last_start_addr = 0;
 
 __attribute__((weak)) int tekken3_ttt1_is_wolf_packet_addr(uint32_t addr) { (void)addr; return 0; }
+__attribute__((weak)) uint32_t g_wolf_dma_start = 0;
+__attribute__((weak)) uint32_t g_wolf_dma_end = 0;
 extern uint64_t g_prof_dma2_wolf_walk_ns;
 extern uint32_t g_prof_dma2_wolf_pkts;
 extern uint32_t g_prof_dma2_wolf_words;
@@ -834,13 +836,11 @@ static uint32_t execute_ch2_gpu(void) {
                 }
             }
 
-            int is_wolf = tekken3_ttt1_is_wolf_packet_addr(addr);
-#if defined(__aarch64__) || defined(__SWITCH__)
-            uint64_t t_w0 = 0;
-            if (is_wolf) {
-                __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_w0));
+            int is_wolf = 0;
+            if (__builtin_expect(g_wolf_dma_end != 0, 0)) {
+                uint32_t a = addr & 0x00FFFFFFu;
+                is_wolf = (a >= g_wolf_dma_start && a < g_wolf_dma_end);
             }
-#endif
             if (emit && num_words > 0) {
                 gpu_set_gp0_linked_list_node(addr, num_words);
                 actual_words += 1u;
@@ -857,15 +857,10 @@ static uint32_t execute_ch2_gpu(void) {
                 }
                 actual_words += num_words;
             }
-#if defined(__aarch64__) || defined(__SWITCH__)
             if (is_wolf) {
-                uint64_t t_w1;
-                __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_w1));
-                g_prof_dma2_wolf_walk_ns += ((t_w1 - t_w0) * 625u) / 12u;
                 g_prof_dma2_wolf_pkts++;
                 g_prof_dma2_wolf_words += num_words;
             }
-#endif
 
             if (next == 0xFFFFFFu || next == 0u) {
                 last_addr = 0x00FFFFFFu;
@@ -874,7 +869,7 @@ static uint32_t execute_ch2_gpu(void) {
             addr = (next >= PSX_MOD_GPU_DMA_APERTURE_BASE && next - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)
                 ? (next & 0x00FFFFFCu)
                 : (next & 0x001FFFFCu);
-            if ((cur_total_nodes & 1) == 0 && (slow_addr & 0xFFFFFFu) != 0xFFFFFFu) {
+            if (cur_total_nodes > 512u && (cur_total_nodes & 1) == 0 && (slow_addr & 0xFFFFFFu) != 0xFFFFFFu) {
                 uint32_t can_slow = slow_addr & 0x00FFFFFFu;
                 uint32_t slow_hdr;
                 if (can_slow + 4u <= 0x00200000u) {
@@ -923,6 +918,10 @@ static uint32_t execute_ch2_gpu(void) {
 
         channels[2].madr = last_addr;
         gpu_ws_end_linked_list();
+#ifdef __SWITCH__
+        extern void switch_audio_pump_if_needed(void);
+        switch_audio_pump_if_needed();
+#endif
 #if defined(__aarch64__) || defined(__SWITCH__)
         __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t_walk1));
         extern uint64_t g_prof_dma2_walk_ns;

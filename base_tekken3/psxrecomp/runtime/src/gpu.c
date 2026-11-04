@@ -5357,9 +5357,17 @@ int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h, const uint16_t *pix
     if (!s_hivram || !pixels || w <= 0 || h <= 0 || x < 0 || y < 512 ||
         x + w > 1024 || y + h > 1024)
         return 0;
-    for (int row = 0; row < h; row++)
-        memcpy(s_hivram + (size_t)(y - 512 + row) * 1024u + (unsigned)x,
-               pixels + (size_t)row * (unsigned)w, (size_t)w * sizeof *pixels);
+    int changed = 0;
+    for (int row = 0; row < h; row++) {
+        uint16_t *dst = s_hivram + (size_t)(y - 512 + row) * 1024u + (unsigned)x;
+        const uint16_t *src = pixels + (size_t)row * (unsigned)w;
+        if (memcmp(dst, src, (size_t)w * sizeof *pixels) != 0) {
+            memcpy(dst, src, (size_t)w * sizeof *pixels);
+            changed = 1;
+        }
+    }
+    if (!changed)
+        return 1;
     gr_high_vram_written(x, y - 512, w, h);
     {
         extern void tekken3_stage_vram_write_watch(const char *tag, int x, int y, int w, int h);
@@ -5387,8 +5395,9 @@ int psx_mod_gpu_high_vram_source(uint32_t address, uint32_t size) {
     return 1;
 }
 
-static int hivram_trusted(void) {
+static inline int hivram_trusted(void) {
     uint32_t a = gp0_cmd_source_addr & 0x00FFFFFFu;
+    if (__builtin_expect(a < PSX_MOD_GPU_DMA_APERTURE_BASE, 1)) return 0;
     for (int i = 0; i < s_hivram_nsrc; i++)
         if (a >= s_hivram_src[i].lo && a < s_hivram_src[i].hi) return 1;
     return 0;

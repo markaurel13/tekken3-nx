@@ -1598,6 +1598,9 @@ static uint32_t psx_read_word_raw(uint32_t addr);
  * exception context (ISR work replays live), never under DMA (DMA writes
  * poison the window via ds_note_dma_write instead). */
 uint32_t psx_read_word(uint32_t addr) {
+#if defined(__SWITCH__)
+    return psx_read_word_raw(addr);
+#else
     if (g_ls_mode == 2) return ls_read_hook(addr, 4, 0u);
     if (g_ds_recording && g_dma_exec_depth == 0 && !psx_get_in_exception())
         ds_note_read(addr, 4);
@@ -1607,6 +1610,7 @@ uint32_t psx_read_word(uint32_t addr) {
     s_ls_op_active = 0;
     if (!psx_get_in_exception()) ls_read_hook(addr, 4, v);
     return v;
+#endif
 }
 /* Physical address of a CPU/DMA main-RAM access. Fold KUSEG/KSEG0/KSEG1 first
  * (0x1FFFFFFF), then fold the 2nd-4th main-RAM mirrors: real hardware mirrors the
@@ -1638,11 +1642,36 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
          * issue millions of aligned main-RAM LWs per second. */
         uint32_t v;
         memcpy(&v, &ram[phys], sizeof(v));
+#if !defined(__SWITCH__)
         /* Targeted main-RAM read watch (debug). Flag is 0 in normal runs, so the
          * hot read path pays only a predictable branch. */
         if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(phys, v);
+#endif
         return v;
     }
+#if defined(__SWITCH__)
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FCu) {
+        uint32_t v;
+        __builtin_memcpy(&v, scratchpad + (phys - 0x1F800000u), 4);
+        return v;
+    }
+    if (phys >= MOD_MEMORY_BASE && phys - MOD_MEMORY_BASE <= MOD_MEMORY_SIZE - 4u &&
+        phys - MOD_MEMORY_BASE + 4u <= mod_memory_used) {
+        uint32_t v;
+        __builtin_memcpy(&v, mod_memory + (phys - MOD_MEMORY_BASE), 4);
+        return v;
+    }
+    {
+        uint32_t can = phys & 0x00FFFFFFu;
+        if (can >= PSX_MOD_GPU_DMA_APERTURE_BASE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE <= PSX_MOD_GPU_DMA_APERTURE_SIZE - 4u &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= mod_gpu_dma_memory_used) {
+            uint32_t v;
+            __builtin_memcpy(&v, mod_gpu_dma_memory + (can - PSX_MOD_GPU_DMA_APERTURE_BASE), 4);
+            return v;
+        }
+    }
+#endif
     if (phys < 0x00800000u) {
         uint32_t off = phys - RAM_SIZE;
         uint32_t v;
@@ -1762,6 +1791,9 @@ static inline void log_extended_ram_store(uint32_t addr, uint32_t val, uint32_t 
 }
 
 void psx_write_word(uint32_t addr, uint32_t val) {
+#if defined(__SWITCH__)
+    psx_write_word_raw(addr, val);
+#else
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
     if (g_ls_mode == 2) { ls_write_hook(addr, 4, val); return; }
@@ -1774,6 +1806,7 @@ void psx_write_word(uint32_t addr, uint32_t val) {
     s_ls_op_active = 1;
     psx_write_word_raw(addr, val);
     s_ls_op_active = 0;
+#endif
 }
 typedef struct {
     uint32_t frame;
@@ -1867,6 +1900,24 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         log_extended_ram_store(addr, val, 4);
         uint32_t off = phys - RAM_SIZE;
         __builtin_memcpy(s_ram_overflow + off, &val, 4);
+        return;
+    }
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FCu) {
+        __builtin_memcpy(scratchpad + (phys - 0x1F800000u), &val, 4);
+        return;
+    }
+    {
+        uint32_t can = phys & 0x00FFFFFFu;
+        if (can >= PSX_MOD_GPU_DMA_APERTURE_BASE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE <= PSX_MOD_GPU_DMA_APERTURE_SIZE - 4u &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= mod_gpu_dma_memory_used) {
+            __builtin_memcpy(mod_gpu_dma_memory + (can - PSX_MOD_GPU_DMA_APERTURE_BASE), &val, 4);
+            return;
+        }
+    }
+    if (phys >= MOD_MEMORY_BASE && phys - MOD_MEMORY_BASE <= MOD_MEMORY_SIZE - 4u &&
+        phys - MOD_MEMORY_BASE + 4u <= mod_memory_used) {
+        __builtin_memcpy(mod_memory + (phys - MOD_MEMORY_BASE), &val, 4);
         return;
     }
 #endif
@@ -2008,6 +2059,9 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
 
 static uint16_t psx_read_half_raw(uint32_t addr);
 uint16_t psx_read_half(uint32_t addr) {
+#if defined(__SWITCH__)
+    return psx_read_half_raw(addr);
+#else
     if (g_ls_mode == 2) return (uint16_t)ls_read_hook(addr, 2, 0u);
     if (g_ds_recording && g_dma_exec_depth == 0 && !psx_get_in_exception())
         ds_note_read(addr, 2);
@@ -2017,6 +2071,7 @@ uint16_t psx_read_half(uint32_t addr) {
     s_ls_op_active = 0;
     if (!psx_get_in_exception()) ls_read_hook(addr, 2, v);
     return v;
+#endif
 }
 static uint16_t psx_read_half_raw(uint32_t addr) {
         /* KSEG2 guard — see psx_read_word_raw. */
@@ -2024,8 +2079,33 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
     uint32_t phys = psx_phys_addr(addr);
 
     if (phys < RAM_SIZE) {
-        return (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
+        uint16_t v;
+        __builtin_memcpy(&v, ram + phys, 2);
+        return v;
     }
+#if defined(__SWITCH__)
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FEu) {
+        uint16_t v;
+        __builtin_memcpy(&v, scratchpad + (phys - 0x1F800000u), 2);
+        return v;
+    }
+    if (phys >= MOD_MEMORY_BASE && phys - MOD_MEMORY_BASE <= MOD_MEMORY_SIZE - 2u &&
+        phys - MOD_MEMORY_BASE + 2u <= mod_memory_used) {
+        uint16_t v;
+        __builtin_memcpy(&v, mod_memory + (phys - MOD_MEMORY_BASE), 2);
+        return v;
+    }
+    {
+        uint32_t can = phys & 0x00FFFFFFu;
+        if (can >= PSX_MOD_GPU_DMA_APERTURE_BASE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE <= PSX_MOD_GPU_DMA_APERTURE_SIZE - 2u &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE + 2u <= mod_gpu_dma_memory_used) {
+            uint16_t v;
+            __builtin_memcpy(&v, mod_gpu_dma_memory + (can - PSX_MOD_GPU_DMA_APERTURE_BASE), 2);
+            return v;
+        }
+    }
+#endif
     if (phys < 0x00800000u) {
         uint32_t off = phys - RAM_SIZE;
         return (uint16_t)s_ram_overflow[off] | ((uint16_t)s_ram_overflow[off + 1] << 8);
@@ -2060,6 +2140,9 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
 
 static void psx_write_half_raw(uint32_t addr, uint16_t val);
 void psx_write_half(uint32_t addr, uint16_t val) {
+#if defined(__SWITCH__)
+    psx_write_half_raw(addr, val);
+#else
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
     if (g_ls_mode == 2) { ls_write_hook(addr, 2, val); return; }
@@ -2072,6 +2155,7 @@ void psx_write_half(uint32_t addr, uint16_t val) {
     s_ls_op_active = 1;
     psx_write_half_raw(addr, val);
     s_ls_op_active = 0;
+#endif
 }
 static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     g_guest_store_count++;
@@ -2095,6 +2179,24 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         log_extended_ram_store(addr, (uint32_t)val, 2);
         uint32_t off = phys - RAM_SIZE;
         __builtin_memcpy(s_ram_overflow + off, &val, 2);
+        return;
+    }
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FEu) {
+        __builtin_memcpy(scratchpad + (phys - 0x1F800000u), &val, 2);
+        return;
+    }
+    {
+        uint32_t can = phys & 0x00FFFFFFu;
+        if (can >= PSX_MOD_GPU_DMA_APERTURE_BASE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE <= PSX_MOD_GPU_DMA_APERTURE_SIZE - 2u &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE + 2u <= mod_gpu_dma_memory_used) {
+            __builtin_memcpy(mod_gpu_dma_memory + (can - PSX_MOD_GPU_DMA_APERTURE_BASE), &val, 2);
+            return;
+        }
+    }
+    if (phys >= MOD_MEMORY_BASE && phys - MOD_MEMORY_BASE <= MOD_MEMORY_SIZE - 2u &&
+        phys - MOD_MEMORY_BASE + 2u <= mod_memory_used) {
+        __builtin_memcpy(mod_memory + (phys - MOD_MEMORY_BASE), &val, 2);
         return;
     }
 #endif
@@ -2161,6 +2263,9 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
 
 static uint8_t psx_read_byte_raw(uint32_t addr);
 uint8_t psx_read_byte(uint32_t addr) {
+#if defined(__SWITCH__)
+    return psx_read_byte_raw(addr);
+#else
     if (g_ls_mode == 2) return (uint8_t)ls_read_hook(addr, 1, 0u);
     if (g_ls_mode != 1 || s_ls_op_active || g_ls_suppress_record || g_dma_exec_depth > 0) return psx_read_byte_raw(addr);
     s_ls_op_active = 1;
@@ -2168,6 +2273,7 @@ uint8_t psx_read_byte(uint32_t addr) {
     s_ls_op_active = 0;
     if (!psx_get_in_exception()) ls_read_hook(addr, 1, v);
     return v;
+#endif
 }
 static uint8_t psx_read_byte_raw(uint32_t addr) {
         /* KSEG2 guard — see psx_read_word_raw. */
@@ -2177,6 +2283,23 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
     if (phys < RAM_SIZE) {
         return ram[phys];
     }
+#if defined(__SWITCH__)
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
+        return scratchpad[phys - 0x1F800000u];
+    }
+    if (phys >= MOD_MEMORY_BASE && phys - MOD_MEMORY_BASE < MOD_MEMORY_SIZE &&
+        phys - MOD_MEMORY_BASE < mod_memory_used) {
+        return mod_memory[phys - MOD_MEMORY_BASE];
+    }
+    {
+        uint32_t can = phys & 0x00FFFFFFu;
+        if (can >= PSX_MOD_GPU_DMA_APERTURE_BASE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE < PSX_MOD_GPU_DMA_APERTURE_SIZE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE < mod_gpu_dma_memory_used) {
+            return mod_gpu_dma_memory[can - PSX_MOD_GPU_DMA_APERTURE_BASE];
+        }
+    }
+#endif
     if (phys < 0x00800000u) {
         return s_ram_overflow[phys - RAM_SIZE];
     }
@@ -2379,6 +2502,53 @@ static inline int psx_cyc_main_ram_fast_addr(uint32_t addr, uint32_t width,
 #endif
 
 /* Slow paths for the inlined helpers in psx_cyc.h (MMIO / lockstep / shards). */
+#ifdef __SWITCH__
+uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys < 0x1F801000u || phys >= 0x1F804000u, 1)) {
+        (void)cpu; (void)rt; (void)reg_mask;
+        psx_cyc_charge(2u);
+        return psx_read_word_raw(addr);
+    }
+    psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
+    return psx_read_word_raw(addr);
+}
+uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys < 0x1F801000u || phys >= 0x1F804000u, 1)) {
+        (void)cpu; (void)rt; (void)reg_mask;
+        psx_cyc_charge(2u);
+        return psx_read_half_raw(addr);
+    }
+    psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask);
+    return psx_read_half_raw(addr);
+}
+void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
+                                   uint32_t rt, uint32_t reg_mask) {
+    psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
+}
+uint8_t psx_cyc_load_byte_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys < 0x1F801000u || phys >= 0x1F804000u, 1)) {
+        (void)cpu; (void)rt; (void)reg_mask;
+        psx_cyc_charge(2u);
+        return psx_read_byte_raw(addr);
+    }
+    psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
+    return psx_read_byte_raw(addr);
+}
+
+uint32_t psx_cyc_lwc2_read_slow(CPUState* cpu, uint32_t addr) {
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys < 0x1F801000u || phys >= 0x1F804000u, 1)) {
+        (void)cpu;
+        psx_cyc_charge(2u);
+        return psx_read_word_raw(addr);
+    }
+    psx_cyc_readmem(cpu, phys, 4u, 1u, 0x20u);
+    return psx_read_word_raw(addr);
+}
+#else
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
     return psx_read_word(addr);
@@ -2391,17 +2561,6 @@ void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
                                    uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
 }
-#ifdef __SWITCH__
-uint8_t psx_cyc_load_byte_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
-    return psx_read_byte(addr);
-}
-
-uint32_t psx_cyc_lwc2_read_slow(CPUState* cpu, uint32_t addr) {
-    psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u);
-    return psx_read_word(addr);
-}
-#else
 uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
@@ -2441,6 +2600,9 @@ uint8_t  psx_guest_read_byte(uint32_t addr) { return psx_read_byte(addr); }
 
 static void psx_write_byte_raw(uint32_t addr, uint8_t val);
 void psx_write_byte(uint32_t addr, uint8_t val) {
+#if defined(__SWITCH__)
+    psx_write_byte_raw(addr, val);
+#else
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
     if (g_ls_mode == 2) { ls_write_hook(addr, 1, val); return; }
@@ -2449,6 +2611,7 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
     s_ls_op_active = 1;
     psx_write_byte_raw(addr, val);
     s_ls_op_active = 0;
+#endif
 }
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
@@ -2471,6 +2634,24 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     if (phys < 0x00800000u) {
         log_extended_ram_store(addr, (uint32_t)val, 1);
         s_ram_overflow[phys - RAM_SIZE] = val;
+        return;
+    }
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
+        scratchpad[phys - 0x1F800000u] = val;
+        return;
+    }
+    {
+        uint32_t can = phys & 0x00FFFFFFu;
+        if (can >= PSX_MOD_GPU_DMA_APERTURE_BASE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE < PSX_MOD_GPU_DMA_APERTURE_SIZE &&
+            can - PSX_MOD_GPU_DMA_APERTURE_BASE < mod_gpu_dma_memory_used) {
+            mod_gpu_dma_memory[can - PSX_MOD_GPU_DMA_APERTURE_BASE] = val;
+            return;
+        }
+    }
+    if (phys >= MOD_MEMORY_BASE && phys - MOD_MEMORY_BASE < MOD_MEMORY_SIZE &&
+        phys - MOD_MEMORY_BASE < mod_memory_used) {
+        mod_memory[phys - MOD_MEMORY_BASE] = val;
         return;
     }
 #endif

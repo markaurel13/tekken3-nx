@@ -255,7 +255,7 @@ void debug_server_trace_mmio_write(uint32_t a, uint32_t b, uint8_t c) { (void)a;
 void debug_server_trace_write_check(uint32_t a, uint32_t b, uint32_t c, uint8_t d) { (void)a; (void)b; (void)c; (void)d; }
 void debug_server_log_sio_write(uint32_t a, uint32_t b, uint8_t c) {
     (void)c;
-    if (a == 0x1F801050u || a == 0x1F801040u) {
+    if (a == 0x1F801050u) {
         if (b >= 32 && b <= 126) {
             bios_tty_putc((char)b);
         } else if (b == '\n' || b == '\r') {
@@ -1625,7 +1625,6 @@ static void switch_vblank_callback(void) {
                (unsigned long long)s_frame_count, real_frame_ms, (unsigned)hw_vsyncs_passed, repeated_frames,
                cur_guest_ms, cur_loop_ms,
                (double)audio_ns / 1e6, (double)render_ns / 1e6, (double)input_ns / 1e6, (double)other_ns / 1e6);
-        fflush(stdout);
     }
 
     if (cur_guest_ms > 25.0 && s_frame_count > 10) {

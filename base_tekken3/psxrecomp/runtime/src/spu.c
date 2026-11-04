@@ -750,11 +750,21 @@ static inline uint32_t rev_mbase(void) {
  * escapes it, whatever the register values. */
 static uint32_t rev_ea(uint32_t reg_addr, int32_t bias) {
     uint32_t base = rev_mbase();
-    uint32_t size = SPU_RAM_SIZE - base;
+    int64_t  size = (int64_t)(SPU_RAM_SIZE - base);
     int64_t  rel  = (int64_t)rev_cur - (int64_t)base
                   + ((int64_t)RREG(reg_addr) << 3) + (int64_t)bias;
-    rel %= (int64_t)size;
-    if (rel < 0) rel += (int64_t)size;
+    if (rel >= 0) {
+        if (rel >= size) {
+            rel -= size;
+            if (rel >= size) rel %= size;
+        }
+    } else {
+        rel += size;
+        if (rel < 0) {
+            rel %= size;
+            if (rel < 0) rel += size;
+        }
+    }
     return (base + (uint32_t)rel) & 0x7FFFEu;
 }
 
@@ -1302,16 +1312,13 @@ void spu_render(int16_t* out_stereo, int frames) {
             sweep_env_step(&sweep_main_env[1], spu_regs[reg_index(0x1F801D82u)]);
             if (any_voice) {
                 for (int v = 0; v < SPU_VOICE_COUNT; v++) {
+                    if (!voices[v].active && !s_shadow_tap_on) continue;
                     sweep_env_step(&sweep_voice_env[v][0], voice_reg(v, 0));
                     sweep_env_step(&sweep_voice_env[v][1], voice_reg(v, 1));
-                }
-            }
-
-            if (any_voice) {
-                for (int v = 0; v < SPU_VOICE_COUNT; v++) {
                     int16_t s = voice_next_sample(v);
                     if (v == 1) v1_out = s;
                     if (v == 3) v3_out = s;
+                    if (!s && !s_shadow_tap_on) continue;
                     int16_t vl = chan_volume(voice_reg(v, 0), &sweep_voice_env[v][0]);
                     int16_t vr = chan_volume(voice_reg(v, 1), &sweep_voice_env[v][1]);
                     if (s_shadow_tap_on && f < SPU_SHADOW_TAP_FRAMES) {
