@@ -43,14 +43,14 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
 3. (Optional) Use Sphaira to generate a Home Menu shortcut so you can launch the game directly without entering the Homebrew Menu.
 
-Your directory structure on the microSD card should look like this (Base game):
+Your directory structure on the microSD card should look like this:
 
 ```text
 sdmc:/
 └── switch/
     └── tekken3/
         ├── tekken3_nx.nro              # Nintendo Switch native executable (from Releases)
-        ├── config.txt                  # Graphics & options config
+        ├── config.txt                  # It's going to auto-generate once you've launched the game for the first time
         ├── disc/
         │   ├── Tekken 3 (USA).cue       
         │   ├── Tekken 3 (USA) (Track 1).bin
