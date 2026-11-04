@@ -67,7 +67,7 @@ sdmc:/
 
 ## 🥊 2. Installing Tekken 3 Expanded
 
-**Tekken 3: Definitive Edition** upgrades your game into the ultimate fighting experience:
+**Tekken 3 Expanded** upgrades your game into the ultimate fighting experience:
 - **18 Additional Fighters from TTT1:** Kazuya, Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
 - **28 Arcade & TTT 3D Stages:** Full 3D geometry stages from the arcade versions of Tekken 3 (13 stages) and Tekken Tag Tournament (15 stages).
 - **Remastered PS2 Stage BGM:** High-fidelity remastered stage music from the PS2 release (`ps2-music.ttp`).
