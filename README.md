@@ -65,7 +65,7 @@ sdmc:/
 
 ---
 
-## 🥊 2. Installing Tekken 3: Definitive Edition (Expanded Content)
+## 🥊 2. Installing Tekken 3 Expanded
 
 **Tekken 3: Definitive Edition** upgrades your game into the ultimate fighting experience:
 - **18 Additional Fighters from TTT1:** Kazuya, Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
@@ -77,7 +77,7 @@ sdmc:/
 
 To install the Definitive Edition expansion easily, use the official **Web Installer**:
 
-👉 **[Tekken 3: Definitive Edition Web Installer](https://markaurel13.github.io/tekken3-nx/)**
+👉 **https://markaurel13.github.io/tekken3-nx/**
 
 ### How to use the Web Installer:
 1. Open the Web Installer in your browser: [https://markaurel13.github.io/tekken3-nx/](https://markaurel13.github.io/tekken3-nx/)
