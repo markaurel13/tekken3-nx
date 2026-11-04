@@ -219,6 +219,7 @@ No proprietary game assets, disc ROMs, BIOS dumps, or copyrighted code are distr
 ## 🏆 Credits & Acknowledgments
 
 - **[markaurel13](https://github.com/markaurel13):** Nintendo Switch native port author, custom deko3d rendering backend, audren sound engine, input handling, and platform integration.
+- **[omarma](https://github.com/omarma):** Creator and author of the incredible [tekken3-expanded](https://github.com/omarma/tekken3-expanded) project, bringing the 18 *Tekken Tag Tournament* characters, arcade 3D stages, movesets, and expanded asset toolchain to life.
 - **[FishB0nes98](https://github.com/FishB0nes98):** Author of the original [Tekken 3 Recompiled](https://github.com/FishB0nes98/Tekken3Recompiled) project.
 - **[mstan](https://github.com/mstan):** Creator of the groundbreaking [psxrecomp](https://github.com/mstan/psxrecomp) static recompiler and [recomp-ui](https://github.com/mstan/recomp-ui).
 - **[FinCS](https://github.com/fincs):** Creator of the [deko3d](https://github.com/fincs/deko3d) low-level graphics library for the Nintendo Switch Nvidia Tegra X1 GPU.
