@@ -75,7 +75,7 @@ sdmc:/
 - **Alternate Costume Selector & Standalone Outfits:** 7 extra character outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate outfit selection with PC HD textures.
 - **New Stage selector on VS MODE:** You can now choose which specific stage you would like to fight on in VS MODE.
 
-To install the Definitive Edition expansion easily, use the official **Web Installer**:
+To install Tekken 3 Expanded easily, use the official **Web Installer**:
 
 👉 **https://markaurel13.github.io/tekken3-nx/**
 
