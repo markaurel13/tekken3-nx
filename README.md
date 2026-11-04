@@ -38,7 +38,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 
 ## 📁 1. Installing Tekken 3 (Base game)
 
-1. Download the latest release (`tekken3_nx.zip`) from the [Releases](https://github.com/markaurel13/tekken3_nx/releases) page and extract it onto the root of your Nintendo Switch microSD card (`sdmc:/`).
+1. Download the latest release (`tekken3_nx.zip`) from the [Releases](#https://github.com/markaurel13/tekken3_nx/releases) page and extract it onto the root of your Nintendo Switch microSD card (`sdmc:/`).
 2. Place your own copy of **Tekken 3 (USA)** disc image (`.cue` and `.bin`) inside the `switch/tekken3/disc/` subfolder.
    - **Supported Version:** NTSC-U / SLUS-00402 (USA version).
 3. (Optional) Use Sphaira to generate a Home Menu shortcut so you can launch the game directly without entering the Homebrew Menu.
