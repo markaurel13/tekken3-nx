@@ -39,6 +39,8 @@ struct ViewportUniforms {
     float offset[2];       // m_offsetX, m_offsetY
     int32_t texWindow[4];  // mask_x, mask_y, off_x, off_y
     float extra[4];        // extra[0]: subpixel shift (0.5 / scale), extra[1]: scale
+    float wideParams[4];   // x: u_xoff, y: u_yoff, z: u_xhalf, w: u_xscale
+    float wideCenter[4];   // x: u_xcenter, y,z,w: padding
 };
 
 class Deko3DRenderer {
@@ -62,6 +64,22 @@ public:
     uint32_t m_hrVramHeight = VramHeight * 2;
     bool m_widescreen = false;
 
+    // Estado del compositor panorámico (Fase 1: Native-Wide Sidecar)
+    int m_wideW = 0;              // Ancho nativo wide (ej. 490 para 16:9 en Tekken 3)
+    int m_wideOff = 0;            // Offset de centrado en px nativos (ej. 61)
+    int m_wideCurIdx = -1;        // Índice de superficie wide activa (-1 = ninguna, 0 = buffer 0, 1 = buffer 1)
+    int m_wideCurBase = 0;        // Base X del framebuffer activo (0 o 368)
+
+    // Deltas y propiedades por primitiva (enviados desde gpu.c / tekken3_widescreen_mod)
+    int m_widePrimDx = 0;
+    int m_widePrimDy = 0;
+    int m_widePrimClipBottom = -1;
+    int m_widePrimSuppressed = 0;
+    int m_widePrimUnclipped = 0;
+    int m_widePrimExpanded = 0;
+    int m_wideMirrorAuthoritative = 0;
+    int m_wideSidecarComplete = 0;
+
     static Deko3DRenderer& Instance();
 
     bool Init(uint16_t* vramPtr, uint32_t internalScale = 2, bool widescreen = false);
@@ -76,6 +94,22 @@ public:
     void SetSemiTransparency(int enabled, int mode);
     void SetPerspectiveTriangle(int enabled, float q0, float q1, float q2);
     void SetColorModulation(int r, int g, int b, int raw);
+
+    // Métodos del compositor Native-Wide
+    void WideConfigure(int wide_w, int offset);
+    void WideSetTarget(int base_x);
+    void WideDisableTarget();
+    void WideSetPrimitiveDelta(int dx, int dy);
+    void WideSetPrimitiveClipBottom(int y);
+    void WideFadeWhite(int x, int y, int w, int h);
+    void WideSetPrimitiveSuppressed(int suppressed);
+    void WideSetPrimitiveUnclipped(int unclipped);
+    void WideSetPrimitiveExpanded(int expanded);
+    void WideClear(int base_x, int y, int h, uint16_t color);
+    void WideClearMargins(int base_x, int y, int h, uint16_t color, int sides);
+    void WideSetMirrorAuthoritative(int authoritative);
+    void WideSetSidecarComplete(int complete);
+    int RenderWideDisplay(uint32_t* out, int pitch, int base_x, int disp_y, int disp_h);
 
     // Primitivas de PS1 aceleradas por hardware GPU Maxwell
     void DrawFlatTriangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color);
@@ -186,8 +220,9 @@ private:
     dk::MemBlock m_memStaging;
 
     dk::Image m_framebuffers[NumFramebuffers];
-    dk::Image m_vramTexture;   // 1024x512 RGBA8 Render Target y Display Source
-    dk::Image m_rawVramImage;  // 1024x1024 R16_Uint Fuente de texturas PS1 + High VRAM
+    dk::Image m_vramTexture;      // 1024x512 RGBA8 Render Target y Display Source (canónico 4:3)
+    dk::Image m_wideTextures[2];   // Superficies Native-Wide (para base_x = 0 y base_x = 368)
+    dk::Image m_rawVramImage;     // 1024x1024 R16_Uint Fuente de texturas PS1 + High VRAM
     dk::Image m_osdImage;      // 1024x1024 RGBA8_Unorm Superposición OSD (carrusel de trajes/retratos y avisos)
     dk::Image m_skinImages[T3_SKIN_COUNT]; // Texturas de atlases HD de los 7 personajes
     bool m_skinLoaded[T3_SKIN_COUNT] = { false };
@@ -221,6 +256,8 @@ private:
 
     DkGpuAddr m_viewportUboGpuPool[NumFrameResources] = {0, 0};
     DkGpuAddr m_viewportUboGpu = 0;
+    DkGpuAddr m_wideViewportUboGpuPool[NumFrameResources] = {0, 0};
+    DkGpuAddr m_wideViewportUboGpu = 0;
 
     uint32_t* m_vramStagingCpu = nullptr;
     DkGpuAddr m_vramStagingGpu = 0;

@@ -385,11 +385,17 @@ static int t3_retained_gameplay_active(void) {
 
 int gpu_ws_present_native_43(void) {
     if (!ws_engaged()) return 0;
-    /* Tekken 3's selector is a deliberately complete 2D sidecar scene.  Its
-     * packet fingerprint is stronger than the generic gameplay detector, so
-     * let it opt into native-wide even when ordinary 2D menus are configured
-     * to stay on the inexpensive canonical 4:3 path. */
+    /* Tekken 3's selector and loading screens are deliberately complete 2D sidecar scenes.
+     * Their packet fingerprint is authoritative: keep them in 16:9 native-wide even
+     * after leaving special 4:3 modes. */
     if (t3_loading_frame.active || t3_selector_session_frame.active) return 0;
+
+    /* Tekken Ball: the beach backdrop and arena have finite 4:3 PS1 geometry.
+     * Force authentic, clean 4:3 pillarbox for Tekken Ball gameplay (mode 7). */
+    uint32_t t3_mode = psx_read_word(0x800afa88u) & 0xFFu;
+    if (t3_mode == 7u) {
+        return 1;
+    }
     /* Check retained scanout only on the quiet path. Active gameplay keeps
      * its existing cheap per-primitive mode check and cached movie test. */
     if (!ws_game_mode() || ws_2d_only_scene())
@@ -2613,6 +2619,9 @@ static void ws_refresh_current_reveal_margins(void) {
         const int world_mode = ws_game_mode();
         const int world_entry = world_mode && !ws_fb_world_mode[i];
         ws_fb_world_mode[i] = world_mode;
+
+        uint16_t clear_color = 0;
+
         /* Compose an authoritative sidecar from the current camera frame.
          * Screen-space background history retains the old view's silhouettes
          * wherever the new view has no polygon coverage. */
@@ -2620,15 +2629,26 @@ static void ws_refresh_current_reveal_margins(void) {
             /* Gameplay cannot retain the previous menu's artwork, including
              * rows outside its letterboxed draw area. Later partial updates
              * (pause) preserve the current stage below their clip region. */
-            gr_wide_clear((int)base, 0, 512, 0);
+            gr_wide_clear((int)base, 0, 512, clear_color);
         else if (ws_nw_full_mirror)
             gr_wide_clear((int)base, (int)draw_area_top,
                 (int)(draw_area_bottom < 512u ? draw_area_bottom + 1u : 512u) -
-                    (int)draw_area_top, 0);
+                    (int)draw_area_top, clear_color);
         else
-            gr_wide_clear_margins((int)base, 0, 512, 0, 3);
+            gr_wide_clear_margins((int)base, 0, 512, clear_color, 3);
         return;
     }
+}
+
+static inline void ws_refresh_current_reveal_margins_fast(void) {
+    static uint32_t s_last_refresh_frame = 0xFFFFFFFFu;
+    static uint32_t s_last_refresh_base = 0xFFFFFFFFu;
+    if (__builtin_expect(s_last_refresh_frame == (uint32_t)s_frame_count && s_last_refresh_base == draw_area_left, 1)) {
+        return;
+    }
+    ws_refresh_current_reveal_margins();
+    s_last_refresh_frame = (uint32_t)s_frame_count;
+    s_last_refresh_base = draw_area_left;
 }
 
 /* A native-wide sidecar is host-owned and is not automatically redrawn like
@@ -4104,17 +4124,6 @@ static void gp0_exec_mono_rect(void) {
     x0 += ws_nw_hud_shift(x0, w);   /* native-wide HUD corner re-anchor (no-op else) */
     x0 += draw_offset_x; y0 += draw_offset_y;
     int is_out = draw_area_out_rect(x0, y0, w, h);
-    if (h >= 400) {
-        static uint32_t s_mono_rect_cnt = 0;
-        if (++s_mono_rect_cnt <= 10 || (s_mono_rect_cnt % 60) == 0) {
-            fprintf(stdout, "[GPU_MonoRect_Diag] #%u: x0=%d y0=%d w=%d h=%d col=0x%04x doff=(%d,%d) clip_out=%d darea=(%d,%d..%d,%d)\n",
-                    s_mono_rect_cnt, (int)x0, (int)y0, w, h, (unsigned)color,
-                    (int)draw_offset_x, (int)draw_offset_y, is_out,
-                    (int)draw_area_left, (int)draw_area_top,
-                    (int)draw_area_right, (int)draw_area_bottom);
-            fflush(stdout);
-        }
-    }
     if (is_out) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     gr_draw_flat_rect(x0, y0, w, h, color);
@@ -4983,6 +4992,22 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         } else {
             t3_selector_forget_frame();
         }
+
+        static int s_diag_last_active = -1;
+        static int s_diag_last_kind = -1;
+        static int s_diag_last_sess = -1;
+        if (t3_selector_frame.active != s_diag_last_active ||
+            t3_selector_frame.layout_kind != s_diag_last_kind ||
+            t3_selector_session_frame.active != s_diag_last_sess) {
+            printf("[Selector_Diag] Frame #%llu: pkts=%u act=%d kind=%d sess=%d started=%d\n",
+                   (unsigned long long)s_frame_count, t3_selector_prepass_count,
+                   t3_selector_frame.active, t3_selector_frame.layout_kind,
+                   t3_selector_session_frame.active, t3_selector_started);
+            fflush(stdout);
+            s_diag_last_active = t3_selector_frame.active;
+            s_diag_last_kind = t3_selector_frame.layout_kind;
+            s_diag_last_sess = t3_selector_session_frame.active;
+        }
     }
     /* The exact selector fingerprint proves this 2D frame is completely
      * represented in the sidecar. Disable GL's centre-only batch elision now,
@@ -5004,8 +5029,10 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
          * preceding scene. Clear once on selector entry. Do not clear every
          * selector frame: the guest retains its static lower cabinet/portrait
          * pixels while later y<=339 passes redraw only the upper composition. */
-        if (selector_complete && (t3_selector_started || t3_loading_started))
-            gr_wide_clear((int)draw_area_left, 0, 512, 0);
+        if (selector_complete && (t3_selector_started || t3_loading_started)) {
+            gr_wide_clear(0, 0, 512, 0);
+            gr_wide_clear(368, 0, 512, 0);
+        }
     }
     if (!ws_engaged() || ws_ui_prepass_count == 0) {
         ws_ui_prepass_count = 0;
@@ -5500,7 +5527,7 @@ static void gp0_execute_command_now(void) {
 
     if (__builtin_expect(ws_engaged() || t3_selector_frame.active || t3_loading_frame.active || t3_force_background_active, 0)) {
         if (ws_nw_full_mirror && opcode >= 0x20u && opcode < 0x80u)
-            ws_refresh_current_reveal_margins();
+            ws_refresh_current_reveal_margins_fast();
         /* Do this after the complete GP0 packet has been collected, but before it
          * reaches either the canonical renderer or the native-wide sidecar. */
         if (opcode >= 0x20u && opcode <= 0x3Fu &&
@@ -5554,6 +5581,37 @@ static void gp0_execute_command_now(void) {
                 (gp0_cmd_buf[1] & 0xffffu) == 0 &&
                 (gp0_cmd_buf[2] & 0xffffu) == 368)
                 expand_sidecar = ws_nw_offset() > 0;
+
+            /* Top HUD banner full-width expansion (Tekken Ball / match HUD):
+             * Expands a full-width banner at y <= 40 across the 16:9 screen (0..490)
+             * so it eliminates the top-left and top-right black margin holes. */
+            if (!expand_sidecar && ws_nw_offset() > 0) {
+                if ((opcode & 0xF8) == 0x60) {
+                    int32_t x0 = (int16_t)(gp0_cmd_buf[1] & 0xffffu);
+                    int32_t y0 = (int16_t)((gp0_cmd_buf[1] >> 16) & 0xffffu);
+                    int32_t w = (opcode & 0x04) ? (int32_t)(gp0_cmd_buf[3] & 0x3ffu) : (int32_t)(gp0_cmd_buf[2] & 0xffffu);
+                    int32_t h = (opcode & 0x04) ? (int32_t)((gp0_cmd_buf[3] >> 16) & 0x1ffu) : (int32_t)((gp0_cmd_buf[2] >> 16) & 0xffffu);
+                    if (x0 <= 0 && x0 + w >= 360 && y0 <= 40 && h <= 100) {
+                        expand_sidecar = 1;
+                    }
+                } else if ((opcode & 0xF8) == 0x28) {
+                    int32_t vx0, vy0, vx1, vy1, vy2;
+                    parse_vertex(gp0_cmd_buf[1], &vx0, &vy0);
+                    if (opcode & 0x04) {
+                        parse_vertex(gp0_cmd_buf[3], &vx1, &vy1);
+                        int32_t dummy_x;
+                        parse_vertex(gp0_cmd_buf[5], &dummy_x, &vy2);
+                    } else {
+                        parse_vertex(gp0_cmd_buf[2], &vx1, &vy1);
+                        int32_t dummy_x;
+                        parse_vertex(gp0_cmd_buf[3], &dummy_x, &vy2);
+                    }
+                    if (vx0 <= 0 && vx1 >= 360 && vy0 <= 40 && vy2 <= 100) {
+                        expand_sidecar = 1;
+                    }
+                }
+            }
+
             gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
             gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
             gr_wide_set_primitive_suppressed(suppress_sidecar);

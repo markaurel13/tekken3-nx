@@ -195,6 +195,10 @@ extern void     gte_set_display_aspect(int num, int den);
 extern void     gte_ws_set_suppress(int on);  /* 8C: un-squash far backdrop draws */
 /* Real output aspect used by exact native-wide stage projection sites. */
 extern void     gte_ws_set_dome_aspect(int num, int den);
+extern void     gte_ws_set_dome_expand(int on, int aspect_num, int aspect_den);
+extern void     gte_ws_set_far_threshold(int t);
+extern int      gte_ws_get_far_threshold(void);
+extern void     gte_ws_get_sz_stats(int* mn, int* mx, unsigned* n, unsigned* far_n);
 extern void     gte_ws_configure_dome_sites(const uint32_t* sites, int count,
                                              int overscan_num,
                                              int overscan_den, int min_sz);

@@ -1990,14 +1990,29 @@ static const char *const ps2_hfx_names[]={"Jin","Heihachi","Kazuya","Devil","Ang
 enum { PS2_HFX=sizeof ps2_hfx_names/sizeof *ps2_hfx_names };
 static Hfx ps2_hfx[PS2_HFX];static int ps2_hfx_tried[PS2_HFX];
 static int s_in_hfx_preload = 0;
+
+extern int tekken3_guest_character(unsigned id);
+extern int tekken3_ttt1_embu_effect_guest(unsigned player);
+static int is_guest_fighter(unsigned p) {
+    if(p >= 2) return 0;
+    if(tekken3_devil_jin_player(p)) return 1;
+    if(tekken3_ttt1_embu_effect_guest(p)) return 1;
+    if(tekken3_ttt1_roster_enabled()) {
+        unsigned id = psx_mod_read_half(FX_IDS + p * 0x188c);
+        return tekken3_guest_character(id) >= 0;
+    }
+    return 0;
+}
+
 static const Hfx *ps2_hfx_for(unsigned p) {
     if(!hfx.on || !tekken3_ps2_effects_on() || tekken3_devil_jin_player(p))return NULL;
     if(!s_in_hfx_preload && psx_mod_read_word(0x800ae204)!=8)return NULL;
     int which=-1;
-    const char *prefix=tekken3_guest_data_prefix_for(p);
-    for(int k=2;prefix && k<PS2_HFX;k++)
-        if(!strncmp(prefix,ps2_hfx_names[k],strlen(ps2_hfx_names[k])) && !strcmp(prefix+strlen(ps2_hfx_names[k]),"-TTT1"))which=k;
-    if(which<0) {
+    if(is_guest_fighter(p)) {
+        const char *prefix=tekken3_guest_data_prefix_for(p);
+        for(int k=2;prefix && k<PS2_HFX;k++)
+            if(!strncmp(prefix,ps2_hfx_names[k],strlen(ps2_hfx_names[k])) && !strcmp(prefix+strlen(ps2_hfx_names[k]),"-TTT1"))which=k;
+    } else {
         unsigned id=psx_mod_read_half(FX_IDS+p*0x188c);
         which=id==9?0:id==13?1:-1;
     }
@@ -2055,7 +2070,9 @@ static const Hfx *hit_effect_64_pack(unsigned p) {
     if(own && *own && tekken3_cine_frame()>=0)return cine_hfx(own);
     const Hfx *ps2=ps2_hfx_for(p);
     if(ps2)return ps2;
-    if(s_in_hfx_preload || tekken3_guest_data_prefix_for(p) || hit_effect_in_fight[p] || tekken3_ttt1_embu_effect_guest(p))return slots[p].hfx.data?&slots[p].hfx:NULL;
+    if(is_guest_fighter(p)) {
+        return slots[p].hfx.data?&slots[p].hfx:NULL;
+    }
     return native_hfx(psx_mod_read_half(FX_IDS+p*0x188c));
 }
 /* A pack in its cells (image k at cells[k], palette p at row pal_y + p of
@@ -2237,11 +2254,18 @@ static void preload_player_hit_effects(void) {
     sparks_tick();
     sparks_place();
     for(unsigned p=0;p<2;p++) {
-        load_hit_effect(p);
+        if(is_guest_fighter(p)) {
+            load_hit_effect(p);
+        }
         const Hfx *h=hit_effect_64_pack(p);
         if(h) {
             place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
-            const char *who = tekken3_guest_name_for(p);
+            const char *who = is_guest_fighter(p) ? tekken3_guest_name_for(p) : NULL;
+            if(!who) {
+                unsigned id = psx_mod_read_half(FX_IDS + p * 0x188c);
+                if(id == 17 || id == 19) id = 13;
+                if(id < HFX_NATIVES) who = hfx_native_names[id];
+            }
             printf("[HFX_Preload] P%u (%s): preloaded %u frames, %u palettes into High VRAM\n",
                    p+1, who ? who : "Native", h->images, h->palettes);
             fflush(stdout);

@@ -20,27 +20,32 @@ SwitchInput& SwitchInput::Instance() {
 
 bool SwitchInput::Init() {
     if (m_initialized) return true;
-    printf("[SwitchInput] Inicializando sistema de mandos (1 mando completo por jugador, hasta 2 jugadores)...\n");
+    printf("[SwitchInput] Inicializando sistema de mandos con soporte para Joy-Cons individuales y duales...\n");
 
-    // Exigir mandos completos por jugador: Handheld, Pro Controller / FullKey, o par de Joy-Cons (JoyDual).
-    // Se desactivan JoyLeft/JoyRight individuales para que cada jugador disponga de todos los botones de Tekken 3.
-    padConfigureInput(MaxPlayers, HidNpadStyleTag_NpadFullKey | HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual);
-    hidSetNpadJoyHoldType(HidNpadJoyHoldType_Vertical);
+    // Permitir todos los tipos de mandos: Handheld, Pro Controller / FullKey, par de Joy-Cons (JoyDual),
+    // y Joy-Cons individuales horizontales (JoyLeft / JoyRight).
+    padConfigureInput(MaxPlayers, HidNpadStyleTag_NpadFullKey | HidNpadStyleTag_NpadHandheld |
+                                  HidNpadStyleTag_NpadJoyDual | HidNpadStyleTag_NpadJoyLeft |
+                                  HidNpadStyleTag_NpadJoyRight);
+    hidSetNpadJoyHoldType(HidNpadJoyHoldType_Horizontal);
 
-    // Jugador 1 (Handheld o primer mando completo conectado)
+    // Jugador 1 (Handheld o primer mando conectado)
     padInitializeDefault(&m_pads[0]);
 
-    // Jugador 2 (Segundo mando completo conectado automáticamente)
+    // Jugador 2 (Segundo mando conectado automáticamente)
     padInitialize(&m_pads[1], HidNpadIdType_No2);
 
     m_initialized = true;
     m_exitRequested = false;
-    printf("[SwitchInput] Mandos listos (1 mando completo en P1; P2 se activa automáticamente al conectar un 2do mando).\n");
+    printf("[SwitchInput] Mandos listos (Soporte Joy-Cons individuales horizontales activado).\n");
     return true;
 }
 
 void SwitchInput::ShowControllerApplet() {
     printf("[SwitchInput] Abriendo menú nativo de conexión de mandos (Change Grip/Order)...\n");
+
+    // Asegurar que el modo de sujeción horizontal esté configurado
+    hidSetNpadJoyHoldType(HidNpadJoyHoldType_Horizontal);
 
     HidLaControllerSupportArg args{};
     hidLaCreateControllerSupportArg(&args);
@@ -60,58 +65,124 @@ uint16_t SwitchInput::TranslatePadState(const PadState& pad, int playerIdx,
                                        uint8_t& outLx, uint8_t& outLy,
                                        uint8_t& outRx, uint8_t& outRy) {
     u64 kHeld = padGetButtons(&pad);
+    u32 style = padGetStyleSet(&pad);
+    bool isSingleJoy = (style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight)) != 0;
 
     // En PS1 los botones activos son 0 (activo en nivel bajo), por lo que 0xFFFF = ninguno pulsado
     uint16_t ps1State = 0xFFFF;
 
-    // Tekken 3 Layout estándar de combate:
-    // Botón B  -> PS1 Cross (X)     - Patada Izquierda (LK)
-    // Botón A  -> PS1 Circle (O)    - Patada Derecha (RK)
-    // Botón Y  -> PS1 Square ([])   - Puño Izquierdo (LP)
-    // Botón X  -> PS1 Triangle (/\) - Puño Derecho (RP)
-    if (kHeld & HidNpadButton_B) ps1State &= ~PS1_CROSS;
-    if (kHeld & HidNpadButton_A) ps1State &= ~PS1_CIRCLE;
-    if (kHeld & HidNpadButton_Y) ps1State &= ~PS1_SQUARE;
-    if (kHeld & HidNpadButton_X) ps1State &= ~PS1_TRIANGLE;
+    if (isSingleJoy) {
+        if (style & HidNpadStyleTag_NpadJoyRight) {
+            // Joy-Con Derecho individual en horizontal:
+            // Mapeo solicitado por el usuario:
+            // Y: Triángulo (RP)
+            // B: Cuadrado (LP)
+            // A: Equis (LK)
+            // X: Círculo (RK)
+            if (kHeld & HidNpadButton_Y) ps1State &= ~PS1_TRIANGLE;
+            if (kHeld & HidNpadButton_B) ps1State &= ~PS1_SQUARE;
+            if (kHeld & HidNpadButton_A) ps1State &= ~PS1_CROSS;
+            if (kHeld & HidNpadButton_X) ps1State &= ~PS1_CIRCLE;
+        } else {
+            // Joy-Con Izquierdo individual (flechas d-pad):
+            // Definido por el usuario en posición VERTICAL exacta de la cruceta:
+            // Flecha Arriba    -> Cuadrado (LP)
+            // Flecha Abajo     -> Círculo (RK)
+            // Flecha Izquierda -> Equis / Cross (LK)
+            // Flecha Derecha   -> Triángulo (RP)
+            if (kHeld & HidNpadButton_Up)    ps1State &= ~PS1_SQUARE;
+            if (kHeld & HidNpadButton_Down)  ps1State &= ~PS1_CIRCLE;
+            if (kHeld & HidNpadButton_Left)  ps1State &= ~PS1_CROSS;
+            if (kHeld & HidNpadButton_Right) ps1State &= ~PS1_TRIANGLE;
+        }
 
-    // D-Pad y Stick Izquierdo
-    if (kHeld & HidNpadButton_Up)    ps1State &= ~PS1_UP;
-    if (kHeld & HidNpadButton_Down)  ps1State &= ~PS1_DOWN;
-    if (kHeld & HidNpadButton_Left)  ps1State &= ~PS1_LEFT;
-    if (kHeld & HidNpadButton_Right) ps1State &= ~PS1_RIGHT;
+        // Gatillos SL y SR asignados a L2 y R2
+        if (kHeld & (HidNpadButton_LeftSL | HidNpadButton_RightSL)) ps1State &= ~PS1_L2;
+        if (kHeld & (HidNpadButton_LeftSR | HidNpadButton_RightSR)) ps1State &= ~PS1_R2;
 
-    // Gatillos y hombros
-    if (kHeld & HidNpadButton_L)  ps1State &= ~PS1_L1;
-    if (kHeld & HidNpadButton_ZL) ps1State &= ~PS1_L2;
-    if (kHeld & HidNpadButton_R)  ps1State &= ~PS1_R1;
-    if (kHeld & HidNpadButton_ZR) ps1State &= ~PS1_R2;
+        // Botón + o - como Start
+        if (kHeld & (HidNpadButton_Plus | HidNpadButton_Minus)) ps1State &= ~PS1_START;
+    } else {
+        // Layout estándar para mandos completos (Handheld, Pro Controller, JoyDual):
+        if (kHeld & HidNpadButton_B) ps1State &= ~PS1_CROSS;
+        if (kHeld & HidNpadButton_A) ps1State &= ~PS1_CIRCLE;
+        if (kHeld & HidNpadButton_Y) ps1State &= ~PS1_SQUARE;
+        if (kHeld & HidNpadButton_X) ps1State &= ~PS1_TRIANGLE;
 
-    // Botones de Joy-Con horizontal (SL / SR)
-    if (kHeld & (HidNpadButton_StickL | HidNpadButton_StickR)) {
-        // En Joy-Con individual o click de stick
+        if (kHeld & HidNpadButton_Up)    ps1State &= ~PS1_UP;
+        if (kHeld & HidNpadButton_Down)  ps1State &= ~PS1_DOWN;
+        if (kHeld & HidNpadButton_Left)  ps1State &= ~PS1_LEFT;
+        if (kHeld & HidNpadButton_Right) ps1State &= ~PS1_RIGHT;
+
+        if (kHeld & HidNpadButton_L)  ps1State &= ~PS1_L1;
+        if (kHeld & HidNpadButton_ZL) ps1State &= ~PS1_L2;
+        if (kHeld & HidNpadButton_R)  ps1State &= ~PS1_R1;
+        if (kHeld & HidNpadButton_ZR) ps1State &= ~PS1_R2;
+
+        if (kHeld & HidNpadButton_Plus)  ps1State &= ~PS1_START;
+        if (kHeld & HidNpadButton_Minus) ps1State &= ~PS1_SELECT;
         if (kHeld & HidNpadButton_StickL) ps1State &= ~PS1_L3;
         if (kHeld & HidNpadButton_StickR) ps1State &= ~PS1_R3;
     }
-
-    // Start y Select
-    if (kHeld & HidNpadButton_Plus)  ps1State &= ~PS1_START;
-    if (kHeld & HidNpadButton_Minus) ps1State &= ~PS1_SELECT;
 
     // Lectura de sticks analógicos
     HidAnalogStickState stickL = padGetStickPos(&pad, 0);
     HidAnalogStickState stickR = padGetStickPos(&pad, 1);
 
-    // Mapear de [-32768, 32767] a [0, 255] con centro en 128
-    outLx = (uint8_t)(((stickL.x + 32768) >> 8) & 0xFF);
-    outLy = (uint8_t)(((32767 - stickL.y) >> 8) & 0xFF); // Eje Y invertido
+    int32_t stick_x = stickL.x;
+    int32_t stick_y = stickL.y;
+
+    if (isSingleJoy) {
+        if (style & HidNpadStyleTag_NpadJoyRight) {
+            // Joy-Con Derecho en horizontal (girado 90° en sentido horario):
+            // Arriba en horizontal = izquierda en vertical (-X_raw) -> Y_horiz = -X_raw
+            // Abajo en horizontal = derecha en vertical (+X_raw)   -> Y_horiz = -X_raw
+            // Izquierda en horizontal = abajo en vertical (-Y_raw) -> X_horiz = Y_raw
+            // Derecha en horizontal = arriba en vertical (+Y_raw)  -> X_horiz = Y_raw
+            int32_t raw_x = (stickR.x != 0 || stickR.y != 0) ? stickR.x : stickL.x;
+            int32_t raw_y = (stickR.x != 0 || stickR.y != 0) ? stickR.y : stickL.y;
+            stick_x = raw_y;
+            stick_y = -raw_x;
+        } else {
+            // Joy-Con Izquierdo en horizontal (girado 90° en sentido anti-horario):
+            // Arriba en horizontal = derecha en vertical (+X_raw) -> Y_horiz = X_raw
+            // Abajo en horizontal = izquierda en vertical (-X_raw) -> Y_horiz = X_raw
+            // Izquierda en horizontal = arriba en vertical (+Y_raw) -> X_horiz = -Y_raw
+            // Derecha en horizontal = abajo en vertical (-Y_raw) -> X_horiz = -Y_raw
+            int32_t raw_x = stickL.x;
+            int32_t raw_y = stickL.y;
+            stick_x = -raw_y;
+            stick_y = raw_x;
+        }
+
+        // En Joy-Con horizontal, las direcciones del D-Pad se activan con el stick correctamente rotado
+        if (stick_y > 16000)  ps1State &= ~PS1_UP;
+        if (stick_y < -16000) ps1State &= ~PS1_DOWN;
+        if (stick_x < -16000) ps1State &= ~PS1_LEFT;
+        if (stick_x > 16000)  ps1State &= ~PS1_RIGHT;
+
+        static uint32_t s_joy_log_cnt = 0;
+        if ((stick_x != 0 || stick_y != 0) && (++s_joy_log_cnt % 60 == 1)) {
+            printf("[JoyStick] P%d (%s): raw=(%d,%d) -> rot=(%d,%d) ps1=0x%04x\n",
+                   playerIdx + 1, (style & HidNpadStyleTag_NpadJoyRight) ? "JoyRight" : "JoyLeft",
+                   (style & HidNpadStyleTag_NpadJoyRight) ? stickR.x : stickL.x,
+                   (style & HidNpadStyleTag_NpadJoyRight) ? stickR.y : stickL.y,
+                   stick_x, stick_y, (unsigned)ps1State);
+            fflush(stdout);
+        }
+    } else {
+        // Zonas muertas del stick para asegurar registro en D-Pad en mandos completos
+        if (stick_y > 16000)  ps1State &= ~PS1_UP;
+        if (stick_y < -16000) ps1State &= ~PS1_DOWN;
+        if (stick_x < -16000) ps1State &= ~PS1_LEFT;
+        if (stick_x > 16000)  ps1State &= ~PS1_RIGHT;
+    }
+
+    // Mapear de [-32768, 32767] a [0, 255] con centro en 128 para PS1 SIO
+    outLx = (uint8_t)(((stick_x + 32768) >> 8) & 0xFF);
+    outLy = (uint8_t)(((32767 - stick_y) >> 8) & 0xFF); // Eje Y invertido (arriba = 0, abajo = 255)
     outRx = (uint8_t)(((stickR.x + 32768) >> 8) & 0xFF);
     outRy = (uint8_t)(((32767 - stickR.y) >> 8) & 0xFF);
-
-    // Inclusión de zonas muertas del stick para mover el D-Pad en Tekken
-    if (stickL.y > 16000)  ps1State &= ~PS1_UP;
-    if (stickL.y < -16000) ps1State &= ~PS1_DOWN;
-    if (stickL.x < -16000) ps1State &= ~PS1_LEFT;
-    if (stickL.x > 16000)  ps1State &= ~PS1_RIGHT;
 
     (void)playerIdx;
     return ps1State;
@@ -161,10 +232,17 @@ void SwitchInput::Update() {
     // Start + Select es una combinación nativa del juego (ej. reiniciar posición / menú en Practice Mode)
     // y el cierre de la aplicación se maneja de forma nativa mediante el botón HOME de la Switch.
 
-    // Combinación para abrir menú de cambio de mandos en plena partida: ZL + ZR + Minus
+    // Combinación para abrir menú de cambio de mandos en cualquier momento:
+    // Mando completo: ZL + ZR + Minus  o  L + R + Minus
+    // Joy-Con individual horizontal: SL + SR + Minus/Plus
     u64 p1Held = padGetButtons(&m_pads[0]);
     u64 p1Down = padGetButtonsDown(&m_pads[0]);
-    if ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Minus)) {
+    bool combo_full = ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Minus)) ||
+                      ((p1Held & HidNpadButton_L) && (p1Held & HidNpadButton_R) && (p1Down & HidNpadButton_Minus));
+    bool combo_single = (p1Held & (HidNpadButton_LeftSL | HidNpadButton_RightSL)) &&
+                        (p1Held & (HidNpadButton_LeftSR | HidNpadButton_RightSR)) &&
+                        (p1Down & (HidNpadButton_Minus | HidNpadButton_Plus));
+    if (combo_full || combo_single) {
         ShowControllerApplet();
     }
 

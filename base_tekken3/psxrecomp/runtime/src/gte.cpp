@@ -489,9 +489,9 @@ static int32_t  s_ws_dome_overscan_num = 1, s_ws_dome_overscan_den = 1;
 static int32_t  s_ws_dome_site_min_sz = 0;
 static int      s_ws_dome_camera_y_comp = 0;
 extern "C" void gte_ws_set_dome_aspect(int aspect_num, int aspect_den) {
-    // widen ratio = aspect/(4:3), plus a title-authored finite-mesh overscan.
-    int32_t n = 3 * aspect_num * s_ws_dome_overscan_num;
-    int32_t d = 4 * aspect_den * s_ws_dome_overscan_den;
+    // widen ratio = aspect/(4:3) = (3*num)/(4*den); reduced to lowest terms.
+    int32_t n = 3 * aspect_num;
+    int32_t d = 4 * aspect_den;
     if (n <= 0 || d <= 0 || n <= d) { s_ws_dome_num = s_ws_dome_den = 1; return; }
     int32_t a = n, b = d;
     while (b) { int32_t t = a % b; a = b; b = t; }

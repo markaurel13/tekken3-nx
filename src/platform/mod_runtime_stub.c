@@ -49,13 +49,23 @@ static ModFuncEntry s_func_plugins[MAX_MOD_PLUGINS];
 static int s_func_count = 0;
 
 static int s_plugins_activated = 0;
+static int s_switch_true_widescreen_enabled = 0;
+
+void switch_set_true_widescreen_enabled(int enabled) {
+    s_switch_true_widescreen_enabled = enabled ? 1 : 0;
+}
+
+int switch_get_true_widescreen_enabled(void) {
+    return s_switch_true_widescreen_enabled;
+}
 
 /* Filter out debug/test or intrusive plugins that should stay off by default on Switch */
 static int is_plugin_enabled_on_switch(const char *id) {
     if (!id || !*id) return 0;
     if (strcmp(id, "tekken3.high-vram-test") == 0) return 0;
     if (strcmp(id, "tekken3.selector-timer") == 0) return 0;
-    if (strcmp(id, "tekken3.true-widescreen") == 0) return 0;
+    if (strcmp(id, "tekken3.true-widescreen") == 0) return s_switch_true_widescreen_enabled;
+    if (strcmp(id, "tekken3.fight-camera") == 0) return s_switch_true_widescreen_enabled;
     return 1;
 }
 

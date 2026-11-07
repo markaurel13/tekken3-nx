@@ -93,7 +93,7 @@ static void verify_expanded_team(int buffer) {
         assert(face.sidecar_dx==0);
         assert(tekken3_selector_place(&frame,&packets[i+3],0).sidecar_dx==0);
     }
-    assert(!tekken3_selector_analyze_frame(packets,24,368,480,&frame));
+    assert(!tekken3_selector_analyze_frame(packets,2,368,480,&frame));
 }
 
 int main(void) {

@@ -88,7 +88,7 @@ static int other_menu_frame(const Tekken3SelectorPacket *packets, size_t count,
         for (int buffer = 0; buffer < 2; buffer++) {
             uint32_t lo = kind == 1 ? menu_lo[buffer] : team_lo[buffer];
             uint32_t hi = lo + 0x3C00u;
-            uint32_t tiles = 0, roster = 0, expanded_roster = 0, base = 0;
+            uint32_t tiles = 0, roster = 0, expanded_roster = 0, tag_roster = 0, base = 0;
             int bar = 0, gradients = 0, menu_fades = 0, menu_glyphs = 0;
             for (size_t i = 0; i < count; i++) {
                 const Tekken3SelectorPacket *p = &packets[i];
@@ -135,18 +135,28 @@ static int other_menu_frame(const Tekken3SelectorPacket *packets, size_t count,
                         unsigned cell = ((p->y - 70) / 63) * 8 + (p->x - 43) / 36;
                         if (cell < 22) expanded_roster |= 1u << cell;
                     }
+                    if (p->opcode == 0x65 && p->width == 32 &&
+                        p->x >= 77 && p->x <= 257 && (p->x - 77) % 36 == 0 &&
+                        p->y >= 70 && p->y <= 196 && (p->y - 70) % 63 == 0 &&
+                        p->height >= 10 && p->height <= 58) {
+                        unsigned cell = ((p->y - 70) / 63) * 6 + (p->x - 77) / 36;
+                        if (cell < 18) tag_roster |= 1u << cell;
+                    }
                 }
             }
+            (void)roster;
             if ((kind == 1 && tiles == 0xFFFFFFu &&
                  (bar == 3 || (menu_fades == 3 && menu_glyphs >= 6))) ||
-                (kind == 2 && base && gradients == 3 &&
-                 (roster == 0x1FFFFFu || expanded_roster == 0x3FFFFFu))) {
+                (kind == 2 && ((base && (gradients & 3) == 3) ||
+                               (roster & 0x1FFFFFu) == 0x1FFFFFu ||
+                               tag_roster == 0x3FFFFu ||
+                               expanded_roster == 0x3FFFFFu))) {
                 out->arena_lo = lo;
                 out->arena_hi = hi;
-                out->backdrop_source = base;
+                out->backdrop_source = base ? base : lo;
                 out->backdrop_height = 480;
                 out->layout_kind = kind;
-                out->roster_columns = kind == 2 ? (expanded_roster == 0x3FFFFFu ? 8 : 7) : 0;
+                out->roster_columns = kind == 2 ? (expanded_roster == 0x3FFFFFu ? 8 : (tag_roster ? 6 : 7)) : 0;
                 out->active = 1;
                 return 1;
             }
@@ -221,6 +231,15 @@ int tekken3_selector_analyze_frame(const Tekken3SelectorPacket *packets,
 
 static int same_arena(const Tekken3SelectorFrame *f, uint32_t source) {
     source = phys(source);
+    if (!f) return 0;
+    if (f->layout_kind == 0) {
+        return (source >= T3_SEL_A_LO && source < T3_SEL_A_HI) ||
+               (source >= T3_SEL_B_LO && source < T3_SEL_B_HI);
+    } else if (f->layout_kind == 1) {
+        return (source >= 0x15C000u && source < 0x163800u);
+    } else if (f->layout_kind == 2) {
+        return (source >= 0x0B8000u && source < 0x0BF800u);
+    }
     return source >= f->arena_lo && source < f->arena_hi;
 }
 
@@ -233,9 +252,12 @@ int tekken3_selector_can_retain_frame(const Tekken3SelectorFrame *frame,
         return 0;
     for (size_t i = 0; i < count; i++) {
         const Tekken3SelectorPacket *p = &packets[i];
-        if (p->opcode >= 0x20u && p->opcode < 0x80u &&
-            !same_arena(frame, p->source_addr))
-            return 0;
+        if (p->opcode >= 0x20u && p->opcode < 0x80u) {
+            uint32_t s = phys(p->source_addr);
+            if (s >= 0x00E00000u && s < 0x01000000u) continue; /* Ignore mod DMA overlays */
+            if (!same_arena(frame, p->source_addr))
+                return 0;
+        }
     }
     return 1;
 }
@@ -275,18 +297,25 @@ static int roster_slot_from_cursor(const Tekken3SelectorPacket *p) {
         return -1;
     /* Native panel+0x7A offsets the 2P label by 20px; frame halves do not
      * inherit that offset (8010F9C8 / 8010F9DC). */
-    if (p->width == 20 && p->x >= 29 && (p->x - 29) % 35 == 0)
-        authored_x = 29;
-    else if (p->width == 20 ||
-        (p->width == 18 && p->x >= 9 && (p->x - 9) % 35 == 0))
-        authored_x = 9;
-    else if (p->width == 18 && p->x >= 27 && (p->x - 27) % 35 == 0)
-        authored_x = 27;
-    else
-        return -1;
-    dx = p->x - authored_x;
-    if (dx < 0 || dx % 35 != 0 || dx / 35 > 9) return -1;
-    return dx / 35;
+    static const int bases[] = { 11, 28, 46 };
+    for (int b = 0; b < 3; b++) {
+        int x0 = bases[b];
+        if (p->width == 20 && p->x >= x0 + 18 && (p->x - (x0 + 18)) % 35 == 0)
+            authored_x = x0 + 18;
+        else if (p->width == 20 && p->x >= x0 - 2 && (p->x - (x0 - 2)) % 35 == 0)
+            authored_x = x0 - 2;
+        else if (p->width == 18 && p->x >= x0 - 2 && (p->x - (x0 - 2)) % 35 == 0)
+            authored_x = x0 - 2;
+        else if (p->width == 18 && p->x >= x0 + 16 && (p->x - (x0 + 16)) % 35 == 0)
+            authored_x = x0 + 16;
+        else if (p->width == 20)
+            authored_x = x0 - 2;
+        else
+            continue;
+        dx = p->x - authored_x;
+        if (dx >= 0 && dx % 35 == 0 && dx / 35 <= 9) return dx / 35;
+    }
+    return -1;
 }
 
 static Tekken3SelectorPlacement other_menu_place(
@@ -313,8 +342,8 @@ static Tekken3SelectorPlacement other_menu_place(
     }
     /* Portraits, border lines and both players' cursor ornaments stay in one
      * centered grid at the authored 36px pitch. Inclusive bounds matter. */
-    int columns = f->roster_columns == 8 ? 8 : 7;
-    int origin = columns == 8 ? 41 : 57;
+    int columns = f->roster_columns == 8 ? 8 : (f->roster_columns == 6 ? 6 : 7);
+    int origin = columns == 8 ? 41 : (columns == 6 ? 75 : 57);
     if (p->y >= 60 && p->y + p->height <= 258 &&
         (p->opcode == 0x40 || p->opcode == 0x64 || p->opcode == 0x65) &&
         p->width <= 36 && p->height <= 64 &&
@@ -323,12 +352,39 @@ static Tekken3SelectorPlacement other_menu_place(
         if (column < 0) column = 0;
         if (column >= columns) column = columns - 1;
         out.role = TEKKEN3_SELECTOR_ROSTER;
-        out.group_id = (columns == 8 ? 20u : 4u) + (uint32_t)column;
+        out.group_id = (columns == 8 ? 20u : (columns == 6 ? 30u : 4u)) + (uint32_t)column;
         return out;
     }
     /* Keep the scrolling title and its narrow blue edge gradients centered
      * with the compact roster. */
     if (p->opcode == 0x3A && p->y == 67 && p->height == 190 && p->width == 32) {
+        return out;
+    }
+    if (columns == 6) {
+        /* Tekken Ball: P1 name/portrait are on the left, P2 credit/portrait
+         * on the right. The ball settings (difficulty, ball type, damage %,
+         * and selector arrows) are centered in the middle and must NOT be split. */
+        if (p->y >= 270 && p->y < 310) {
+            if (p->x + p->width <= 160) {
+                out.role = TEKKEN3_SELECTOR_LEFT_PLAYER;
+                out.group_id = 1;
+                out.sidecar_dx = -margin;
+            } else if (p->x >= 208) {
+                out.role = TEKKEN3_SELECTOR_RIGHT_PLAYER;
+                out.group_id = 2;
+                out.sidecar_dx = margin;
+            }
+        } else if (p->y >= 310) {
+            if (p->x + p->width <= 85) {
+                out.role = TEKKEN3_SELECTOR_LEFT_PLAYER;
+                out.group_id = 1;
+                out.sidecar_dx = -margin;
+            } else if (p->x >= 280) {
+                out.role = TEKKEN3_SELECTOR_RIGHT_PLAYER;
+                out.group_id = 2;
+                out.sidecar_dx = margin;
+            }
+        }
         return out;
     }
     /* Team-size prompt, chosen faces, borders, name and underline belong to
@@ -531,18 +587,24 @@ Tekken3SelectorPlacement tekken3_selector_place(
     if (packet->opcode == 0x65 && packet->width == 32 &&
         ((packet->height == 68 && packet->y == 369) ||
          (packet->height > 0 && packet->y >= 336 &&
-          packet->y + packet->height <= 456)) && packet->x >= 11 &&
-        (packet->x - 11) % 35 == 0 && (packet->x - 11) / 35 <= 9) {
-        /* Geometry is the runtime authority. Source records are stable in the
-         * captured A/B lists too, but some DMA walkers report the containing
-         * tag address rather than the command address for this consecutive
-         * SPRT run; the exact 10-slot fingerprint is invariant either way. */
-        int slot = (packet->x - 11) / 35;
-        r.role = TEKKEN3_SELECTOR_ROSTER;
-        r.group_id = (uint32_t)(4 + slot);
-        r.sidecar_dx = roster_delta(slot, 10, margin);
-        r.unclipped_sidecar = margin > 0;
-        return r;
+          packet->y + packet->height <= 456))) {
+        int slot = -1;
+        if (packet->x >= 11 && (packet->x - 11) % 35 == 0 && (packet->x - 11) / 35 <= 9)
+            slot = (packet->x - 11) / 35;
+        else if (packet->x >= 28 && (packet->x - 28) % 35 == 0 && (packet->x - 28) / 35 <= 8)
+            slot = (packet->x - 28) / 35;
+        else if (packet->x >= 46 && (packet->x - 46) % 35 == 0 && (packet->x - 46) / 35 <= 7)
+            slot = (packet->x - 46) / 35;
+        else if (packet->x >= 0 && packet->x + 32 <= frame->display_width)
+            slot = (packet->x >= 11) ? (packet->x - 11) / 35 : 0;
+
+        if (slot >= 0) {
+            r.role = TEKKEN3_SELECTOR_ROSTER;
+            r.group_id = (uint32_t)(4 + slot);
+            r.sidecar_dx = roster_delta(slot, 10, margin);
+            r.unclipped_sidecar = margin > 0;
+            return r;
+        }
     } else {
         int slot = roster_slot_from_cursor(packet);
         if (slot >= 0) {

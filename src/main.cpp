@@ -28,6 +28,10 @@
 // Referencias a los componentes de psxrecomp
 extern "C" {
 extern void mod_runtime_activate_plugins(void);
+extern void switch_set_true_widescreen_enabled(int enabled);
+extern void gpu_ws_set_clear_reveal(int on);
+extern void gpu_ws_set_nw_full_mirror(int on);
+extern void gpu_ws_set_nw_textured_edges(int on, int scale_pct);
 extern void ensure_outfit_catalog_loaded(void);
 extern void host_osd_outfit_preload(void);
 extern void host_osd_fps_update(double fps, double ms);
@@ -1906,8 +1910,9 @@ static void load_or_create_config(int argc, char* argv[]) {
                 "# Screen Aspect Ratio:\n"
                 "#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]\n"
                 "#         -> Preserves authentic retro proportions for characters and stages.\n"
-                "#   ON  = 16:9 Fullscreen Widescreen\n"
-                "#         -> Fills the entire Switch screen and 16:9 TV display without bars.\n"
+                "#   ON  = 16:9 True Widescreen (Native-Wide Sidecar)\n"
+                "#         -> Real panoramic 16:9 3D view with expanded FOV, correct geometry,\n"
+                "#            and non-stretched characters/stages (PC Tekken3Recompiled feature).\n"
                 "# ------------------------------------------------------------------------------\n"
                 "widescreen_16_9 = OFF\n\n"
                 "# ------------------------------------------------------------------------------\n"
@@ -2217,19 +2222,28 @@ int main(int argc, char* argv[]) {
     gpu_init();
 
     // Configurar relación de aspecto y perspectiva según config.txt
-    gpu_ws_set_gte_game_mode(0);
     if (g_config.widescreen_16_9) {
-        gte_ws_set_dome_aspect(16, 9);
-        gte_set_display_aspect(16, 9);
-        gpu_ws_configure(16, 9, 0, 0, 1);
+        switch_set_true_widescreen_enabled(1);
+        gte_ws_set_dome_expand(0, 4, 3);
+        gte_set_display_aspect(4, 3); // En Modo 2 (True Widescreen) el GTE no debe aplastar geometría 3D; el FOV es panorámico nativo
+        gpu_ws_set_gte_game_mode(1);
+        gpu_ws_set_clear_reveal(1);
+        gpu_ws_set_nw_full_mirror(1);
+        gpu_ws_set_nw_textured_edges(1, 0);
+        gpu_ws_configure(16, 9, 0, 0, 2); // Modo 2: True Widescreen (Native-Wide Sidecar)
     } else {
-        gte_ws_set_dome_aspect(4, 3);
+        switch_set_true_widescreen_enabled(0);
+        gte_ws_set_dome_expand(0, 4, 3);
         gte_set_display_aspect(4, 3);
-        gpu_ws_configure(4, 3, 0, 0, 0);
+        gpu_ws_set_gte_game_mode(0);
+        gpu_ws_set_clear_reveal(0);
+        gpu_ws_set_nw_full_mirror(0);
+        gpu_ws_set_nw_textured_edges(0, 0);
+        gpu_ws_configure(4, 3, 0, 0, 0); // Modo 0: 4:3 canónico
     }
     gpu_texture_correction_set(0);
     printf("[Main] Aspecto: %s | SSAA: %ux (Resolucion interna: %ux%u)\n",
-           g_config.widescreen_16_9 ? "16:9 Pantalla Completa" : "4:3 Original (Pillarbox)",
+           g_config.widescreen_16_9 ? "16:9 True Widescreen (Native-Wide Sidecar)" : "4:3 Original (Pillarbox)",
            g_config.supersampling,
            1024 * g_config.supersampling, 512 * g_config.supersampling);
 

@@ -21,22 +21,42 @@ layout (location = 7) smooth out vec2 outPerspHdUV;
 
 // Uniform block: Parámetros de proyección del Viewport
 layout (std140, binding = 0) uniform ViewportBlock {
-    vec2 u_ScreenSize; // 1024.0, 512.0
-    vec2 u_Offset;     // Draw offset (m_offsetX, m_offsetY)
-    ivec4 u_TexWindow; // Texture window (mask_x, mask_y, off_x, off_y)
-    vec4 u_Extra;      // x = subpixel shift (0.5 / Scale), y = scale
+    vec2 u_ScreenSize;   // 1024.0, 512.0
+    vec2 u_Offset;       // Draw offset (m_offsetX, m_offsetY)
+    ivec4 u_TexWindow;   // Texture window (mask_x, mask_y, off_x, off_y)
+    vec4 u_Extra;        // x = subpixel shift (0.5 / Scale), y = scale
+    vec4 u_WideParams;   // x = u_xoff, y = u_yoff, z = u_xhalf, w = u_xscale
+    vec4 u_WideCenter;   // x = u_xcenter, y,z,w = unused
 };
 
 void main()
 {
     // Las coordenadas inPos ya incluyen el draw offset aplicado por gpu.c en CPU.
-    // Mapeo a NDC para Deko3D (VRAM 1024x512, origen en esquina superior izquierda):
-    // NDC X: [0..1024] -> [-1.0..+1.0]
-    // NDC Y: [0..512]  -> [-1.0..+1.0] (Y=0 es -1.0 [fila 0], Y=512 es +1.0 [fila 512])
+    // Soporte Native-Wide Sidecar y estiramiento de cielo 2D:
+    // u_xoff: traslación horizontal al espacio del Wide FBO (0.0 en canónico 4:3)
+    // u_yoff: traslación vertical al espacio del Wide FBO (0.0 en canónico 4:3)
+    // u_xhalf: semiancho de proyección horizontal (512.0 en canónico 4:3, wide_w * 0.5 en Wide)
+    // u_xscale / u_xcenter: estiramiento de cielo/backdrop 2D alrededor de u_xcenter (1.0 / 0.0 en 3D y canónico)
     float shift = u_Extra.x; // Alineación dinámica de subpíxeles según el factor de Supersampling
+    float xhalf = (u_WideParams.z > 0.0) ? u_WideParams.z : 512.0;
+    float xscale = u_WideParams.w;
+    float xcenter = u_WideCenter.x;
+
+    float xb = inPos.x;
+    if (xscale < 0.0) {
+        float s = -xscale;
+        float native_half = (u_WideCenter.y > 0.0) ? u_WideCenter.y : (xhalf / s);
+        float l = xcenter - native_half;
+        float r = xcenter + native_half;
+        if (xb < l) xb = l + (xb - l) * s;
+        else if (xb > r) xb = r + (xb - r) * s;
+    } else {
+        xb = (xb - xcenter) * xscale + xcenter;
+    }
+
     vec2 ndc;
-    ndc.x = (inPos.x + shift) / 512.0 - 1.0;
-    ndc.y = 1.0 - (inPos.y + shift) / 256.0;
+    ndc.x = (xb + shift + u_WideParams.x) / xhalf - 1.0;
+    ndc.y = 1.0 - (inPos.y + shift + u_WideParams.y) / 256.0;
 
     // Corrección de perspectiva 3D para texturas:
     // La división por perspectiva por hardware de la GPU interpola outPerspUV hiperbólicamente

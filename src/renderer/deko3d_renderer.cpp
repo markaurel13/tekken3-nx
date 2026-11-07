@@ -14,10 +14,12 @@ extern "C" {
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
 #include "host_osd.h"
+#include "native_wide_present_authority.h"
 #include "crc32.h"
 #include "mod_plugins.h"
 #include "cpu_state.h"
 void ensure_outfit_catalog_loaded(void);
+int ws_native_wide_active(void);
 #include "gpu_hd_texture_match.h"
 #include "tekken3_anna_skin_match.h"
 }
@@ -380,6 +382,21 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     m_vramTexture.initialize(vramLayout, m_memImages, curImgOffset);
     curImgOffset += vramLayout.getSize();
 
+    // 5b. Configurar Texturas Render Target Native-Wide (para base_x = 0 y base_x = 368)
+    // Dimensiones máximas: 512 * m_internalScale x 512 * m_internalScale RGBA8 (4 MB c/u a 2x SSAA)
+    dk::ImageLayout wideLayout;
+    dk::ImageLayoutMaker{m_device}
+        .setFlags(DkImageFlags_BlockLinear | DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine)
+        .setFormat(DkImageFormat_RGBA8_Unorm)
+        .setDimensions(512 * m_internalScale, 512 * m_internalScale)
+        .initialize(wideLayout);
+
+    for (int i = 0; i < 2; i++) {
+        curImgOffset = (curImgOffset + wideLayout.getAlignment() - 1) & ~(wideLayout.getAlignment() - 1);
+        m_wideTextures[i].initialize(wideLayout, m_memImages, curImgOffset);
+        curImgOffset += wideLayout.getSize();
+    }
+
     // 6. Configurar Textura Raw VRAM (1024x1024 R16_Uint: y=0..511 estándar, y=512..1023 High VRAM)
     dk::ImageLayout rawLayout;
     dk::ImageLayoutMaker{m_device}
@@ -452,8 +469,10 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
 
     for (unsigned i = 0; i < NumFrameResources; i++) {
         m_viewportUboGpuPool[i] = dataGpu + 0x01E00800 + i * DK_UNIFORM_BUF_ALIGNMENT;
+        m_wideViewportUboGpuPool[i] = dataGpu + 0x01E00B00 + i * DK_UNIFORM_BUF_ALIGNMENT;
     }
     m_viewportUboGpu = m_viewportUboGpuPool[0];
+    m_wideViewportUboGpu = m_wideViewportUboGpuPool[0];
 
     m_vramStagingCpu = (uint32_t*)m_memStaging.getCpuAddr();
     m_vramStagingGpu = m_memStaging.getGpuAddr();
@@ -461,7 +480,9 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     // Inicializar descriptores en GPU usando pushData y comando en cola
     dk::ImageView rawView{ m_rawVramImage };
     dk::ImageView osdView{ m_osdImage };
-    dk::ImageDescriptor imgDescs[9];
+    dk::ImageView wideView0{ m_wideTextures[0] };
+    dk::ImageView wideView1{ m_wideTextures[1] };
+    dk::ImageDescriptor imgDescs[11];
     imgDescs[0].initialize(rawView);
     imgDescs[1].initialize(osdView);
     for (int i = 0; i < T3_SKIN_COUNT; i++) {
@@ -472,6 +493,8 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
             imgDescs[2 + i].initialize(rawView);
         }
     }
+    imgDescs[9].initialize(wideView0);
+    imgDescs[10].initialize(wideView1);
     memcpy(m_imgDescCpu, imgDescs, sizeof(imgDescs));
 
     dk::Sampler samplerNearest;
@@ -492,14 +515,19 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[0], CmdBufferSize);
     m_cmdBuf.pushData(m_imgDescGpu, imgDescs, sizeof(imgDescs));
     m_cmdBuf.pushData(m_smpDescGpu, smpDescs, sizeof(smpDescs));
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 9);
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 11);
     m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Descriptors);
 
-    // Limpiar m_vramTexture a negro inicial
+    // Limpiar m_vramTexture y m_wideTextures a negro inicial
     dk::ImageView vramTarget{ m_vramTexture };
     m_cmdBuf.bindRenderTargets(&vramTarget);
     m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+    for (int i = 0; i < 2; i++) {
+        dk::ImageView wideTarget{ m_wideTextures[i] };
+        m_cmdBuf.bindRenderTargets(&wideTarget);
+        m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+    }
     m_cmdBuf.bindRenderTargets({});
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
 
@@ -516,6 +544,20 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     m_stagingUploadOffset = StagingRingStart;
     m_vramDirty = true;
     m_initialized = true;
+
+    // Reset de estado Native-Wide
+    m_wideW = 0;
+    m_wideOff = 0;
+    m_wideCurIdx = -1;
+    m_wideCurBase = 0;
+    m_widePrimDx = 0;
+    m_widePrimDy = 0;
+    m_widePrimClipBottom = -1;
+    m_widePrimSuppressed = 0;
+    m_widePrimUnclipped = 0;
+    m_widePrimExpanded = 0;
+    m_wideMirrorAuthoritative = 0;
+    m_wideSidecarComplete = 0;
 
     printf("[Deko3D] Hardware GPU Renderer activo (Doble Búfer con Fences y 60 FPS target).\n");
     return true;
@@ -559,6 +601,7 @@ void Deko3DRenderer::BeginFrame() {
     m_vtxRingCpu = m_vtxRingCpuPool[m_frameResIdx];
     m_vtxRingGpu = m_vtxRingGpuPool[m_frameResIdx];
     m_viewportUboGpu = m_viewportUboGpuPool[m_frameResIdx];
+    m_wideViewportUboGpu = m_wideViewportUboGpuPool[m_frameResIdx];
 
     m_cmdBuf.clear();
     m_cmdPoolOffset[m_frameResIdx] = m_cmdPoolBase[m_frameResIdx] + CmdBufferSize;
@@ -670,6 +713,302 @@ void Deko3DRenderer::SetColorModulation(int r, int g, int b, int raw) {
     m_modG = g;
     m_modB = b;
     m_rawTex = raw;
+}
+
+void Deko3DRenderer::WideConfigure(int wide_w, int offset) {
+    FlushBatch();
+    if (wide_w <= 0) {
+        m_wideW = 0;
+        m_wideOff = 0;
+        m_wideCurIdx = -1;
+        m_wideCurBase = 0;
+        m_wideMirrorAuthoritative = 0;
+        m_wideSidecarComplete = 0;
+        return;
+    }
+    m_wideW = wide_w;
+    m_wideOff = offset;
+}
+
+void Deko3DRenderer::WideSetTarget(int base_x) {
+    FlushBatch();
+    m_wideCurBase = base_x;
+    if (base_x == 0) {
+        m_wideCurIdx = 0;
+    } else if (base_x == 368) {
+        m_wideCurIdx = 1;
+    } else {
+        m_wideCurIdx = (base_x > 0) ? 1 : 0;
+    }
+}
+
+void Deko3DRenderer::WideDisableTarget() {
+    FlushBatch();
+    m_wideCurIdx = -1;
+    m_wideCurBase = 0;
+    m_widePrimDx = 0;
+    m_widePrimDy = 0;
+    m_widePrimClipBottom = -1;
+    m_widePrimSuppressed = 0;
+    m_widePrimUnclipped = 0;
+    m_widePrimExpanded = 0;
+}
+
+void Deko3DRenderer::WideSetPrimitiveDelta(int dx, int dy) {
+    if (m_widePrimDx != dx || m_widePrimDy != dy) {
+        FlushBatch();
+        m_widePrimDx = dx;
+        m_widePrimDy = dy;
+    }
+}
+
+void Deko3DRenderer::WideSetPrimitiveClipBottom(int y) {
+    if (m_widePrimClipBottom != y) {
+        FlushBatch();
+        m_widePrimClipBottom = y;
+    }
+}
+
+void Deko3DRenderer::WideSetPrimitiveSuppressed(int suppressed) {
+    int s = suppressed ? 1 : 0;
+    if (m_widePrimSuppressed != s) {
+        FlushBatch();
+        m_widePrimSuppressed = s;
+    }
+}
+
+void Deko3DRenderer::WideSetPrimitiveUnclipped(int unclipped) {
+    int u = unclipped ? 1 : 0;
+    if (m_widePrimUnclipped != u) {
+        FlushBatch();
+        m_widePrimUnclipped = u;
+    }
+}
+
+void Deko3DRenderer::WideSetPrimitiveExpanded(int expanded) {
+    if (m_widePrimExpanded != expanded) {
+        FlushBatch();
+        m_widePrimExpanded = expanded;
+    }
+}
+
+void Deko3DRenderer::WideSetMirrorAuthoritative(int authoritative) {
+    m_wideMirrorAuthoritative = authoritative ? 1 : 0;
+    if (!m_wideMirrorAuthoritative) {
+        m_wideSidecarComplete = 0;
+    }
+}
+
+void Deko3DRenderer::WideSetSidecarComplete(int complete) {
+    m_wideSidecarComplete = complete ? 1 : 0;
+}
+
+void Deko3DRenderer::WideFadeWhite(int x, int y, int w, int h) {
+    if (m_wideCurIdx < 0 || w <= 0 || h <= 0) return;
+    FlushBatch();
+
+    // Dibujar directamente y ÚNICAMENTE sobre la textura de la superficie Wide (m_wideTextures)
+    // NUNCA escribir en la VRAM canónica (m_vramTexture), replicando glb_wide_fade_white de PC OpenGL.
+    dk::ImageView wideTarget{ m_wideTextures[m_wideCurIdx] };
+    m_cmdBuf.bindRenderTargets(&wideTarget);
+
+    uint32_t wideW_hr = (uint32_t)(m_wideW * m_internalScale);
+    uint32_t wideH_hr = (uint32_t)(512 * m_internalScale);
+    DkViewport wideViewport{ 0.0f, 0.0f, (float)wideW_hr, (float)wideH_hr, 0.0f, 1.0f };
+    m_cmdBuf.setViewports(0, { wideViewport });
+
+    int sx = (int)(x * m_internalScale);
+    int sy = (int)(y * m_internalScale);
+    int sw = (int)(w * m_internalScale);
+    int sh = (int)(h * m_internalScale);
+    if (sx < 0) { sw += sx; sx = 0; }
+    if (sy < 0) { sy = 0; }
+    if (sx + sw > (int)wideW_hr) sw = (int)wideW_hr - sx;
+    if (sy + sh > (int)wideH_hr) sh = (int)wideH_hr - sy;
+    if (sw <= 0 || sh <= 0) {
+        m_cmdBuf.bindRenderTargets({});
+        return;
+    }
+
+    DkScissor scissor{ (uint32_t)sx, (uint32_t)sy, (uint32_t)sw, (uint32_t)sh };
+    m_cmdBuf.setScissors(0, { scissor });
+
+    // Habilitar mezcla alfa estándar por hardware: GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+    dk::BlendState bState;
+    bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
+    bState.setFactors(DkBlendFactor_SrcAlpha, DkBlendFactor_InvSrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
+    m_cmdBuf.bindBlendStates(0, { bState });
+
+    dk::ColorState cState;
+    cState.setBlendEnable(0, true);
+    m_cmdBuf.bindColorState(cState);
+
+    dk::ColorWriteState cwState;
+    cwState.setMask(0, DkColorMask_RGB);
+    m_cmdBuf.bindColorWriteState(cwState);
+
+    m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
+
+    // Configurar Viewport UBO para proyección wide directa: xoff=0, yoff=0, xhalf=wideW*0.5
+    ViewportUniforms fadeUbo{};
+    fadeUbo.screenSize[0] = (float)VramWidth;
+    fadeUbo.screenSize[1] = (float)VramHeight;
+    fadeUbo.extra[0] = 0.5f / (float)m_internalScale;
+    fadeUbo.extra[1] = (float)m_internalScale;
+    fadeUbo.wideParams[0] = 0.0f;
+    fadeUbo.wideParams[1] = 0.0f;
+    fadeUbo.wideParams[2] = (float)m_wideW * 0.5f;
+    fadeUbo.wideParams[3] = 1.0f;
+    fadeUbo.wideCenter[0] = 0.0f;
+
+    m_cmdBuf.pushConstants(m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), &fadeUbo);
+    m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+    m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+
+    if (m_vtxAllocated + 6 > MaxVerticesPerFrame) {
+        m_vtxAllocated = 0;
+    }
+    uint32_t first = m_vtxAllocated;
+
+    uint32_t flags = 0x80000000u; // Pase directo de color con alpha interpolado
+    float fx0 = (float)x, fy0 = (float)y;
+    float fx1 = (float)(x + w), fy1 = (float)(y + h);
+
+    PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {255, 255, 255, 0},   {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {255, 255, 255, 0},   {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {255, 255, 255, 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {255, 255, 255, 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+
+    m_vtxRingCpu[m_vtxAllocated + 0] = v0;
+    m_vtxRingCpu[m_vtxAllocated + 1] = v1;
+    m_vtxRingCpu[m_vtxAllocated + 2] = v2;
+    m_vtxRingCpu[m_vtxAllocated + 3] = v1;
+    m_vtxRingCpu[m_vtxAllocated + 4] = v3;
+    m_vtxRingCpu[m_vtxAllocated + 5] = v2;
+    m_vtxAllocated += 6;
+    m_vtxBatchStart = m_vtxAllocated;
+
+    static const std::array<DkVtxAttribState, 7> vtxAttribState = {{
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, pos),        DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, uv),         DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, color),      DkVtxAttribSize_4x8,  DkVtxAttribType_Unorm, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, tpage_clut), DkVtxAttribSize_2x16, DkVtxAttribType_Uint,  0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, flags),      DkVtxAttribSize_1x32, DkVtxAttribType_Uint,  0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, q),          DkVtxAttribSize_1x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, hd_uv),      DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+    }};
+    DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
+    m_cmdBuf.bindVtxAttribState(vtxAttribState);
+    m_cmdBuf.bindVtxBufferState({ vtxBufferState });
+    m_cmdBuf.bindVtxBuffer(0, m_vtxRingGpu, VertexRingSliceSize);
+
+    m_cmdBuf.barrier(DkBarrier_Primitives, DkInvalidateFlags_Shader | DkInvalidateFlags_Descriptors | DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+    m_cmdBuf.draw(DkPrimitive_Triangles, 6, 1, first, 0);
+
+    // Restaurar estado
+    m_cmdBuf.bindRenderTargets({});
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+}
+
+void Deko3DRenderer::WideClear(int base_x, int y, int h, uint16_t color) {
+    int idx = (base_x == 0) ? 0 : 1;
+    FlushBatch();
+
+    uint8_t rgba[4];
+    PS1ColorToRGBA8(color, rgba);
+    float r = rgba[0] / 255.0f;
+    float g = rgba[1] / 255.0f;
+    float b = rgba[2] / 255.0f;
+
+    dk::ImageView wideTarget{ m_wideTextures[idx] };
+    m_cmdBuf.bindRenderTargets(&wideTarget);
+
+    int sy = y * (int)m_internalScale;
+    int sh = h * (int)m_internalScale;
+    if (sy < 0) sy = 0;
+    if (sy + sh > (int)(512 * m_internalScale)) sh = (int)(512 * m_internalScale) - sy;
+    if (sh > 0) {
+        float a = (color == 0) ? 0.0f : 1.0f;
+        uint32_t wideW_hr = (uint32_t)(512 * m_internalScale);
+        DkScissor scissor{ 0, (uint32_t)sy, wideW_hr, (uint32_t)sh };
+        m_cmdBuf.setScissors(0, { scissor });
+        m_cmdBuf.clearColor(0, DkColorMask_RGBA, r, g, b, a);
+    }
+    m_cmdBuf.bindRenderTargets({});
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+}
+
+void Deko3DRenderer::WideClearMargins(int base_x, int y, int h, uint16_t color, int sides) {
+    if (m_wideOff <= 0) return;
+    int idx = (base_x == 0) ? 0 : 1;
+    FlushBatch();
+
+    uint8_t rgba[4];
+    PS1ColorToRGBA8(color, rgba);
+    float r = rgba[0] / 255.0f;
+    float g = rgba[1] / 255.0f;
+    float b = rgba[2] / 255.0f;
+
+    dk::ImageView wideTarget{ m_wideTextures[idx] };
+    m_cmdBuf.bindRenderTargets(&wideTarget);
+
+    int sy = y * (int)m_internalScale;
+    int sh = h * (int)m_internalScale;
+    if (sy < 0) sy = 0;
+    if (sy + sh > (int)(512 * m_internalScale)) sh = (int)(512 * m_internalScale) - sy;
+    if (sh > 0) {
+        float a = (color == 0) ? 0.0f : 1.0f;
+        uint32_t marginW_hr = (uint32_t)(m_wideOff * m_internalScale);
+        uint32_t wideW_hr = (m_wideW > 0) ? (uint32_t)(m_wideW * m_internalScale) : (512 * m_internalScale);
+
+        if (sides & 1) { // Margen izquierdo
+            DkScissor scissorLeft{ 0, (uint32_t)sy, marginW_hr, (uint32_t)sh };
+            m_cmdBuf.setScissors(0, { scissorLeft });
+            m_cmdBuf.clearColor(0, DkColorMask_RGBA, r, g, b, a);
+        }
+        if (sides & 2) { // Margen derecho
+            uint32_t rightX = (wideW_hr > marginW_hr) ? (wideW_hr - marginW_hr) : 0;
+            DkScissor scissorRight{ rightX, (uint32_t)sy, marginW_hr, (uint32_t)sh };
+            m_cmdBuf.setScissors(0, { scissorRight });
+            m_cmdBuf.clearColor(0, DkColorMask_RGBA, r, g, b, a);
+        }
+    }
+    m_cmdBuf.bindRenderTargets({});
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+}
+
+int Deko3DRenderer::RenderWideDisplay(uint32_t* out, int pitch, int base_x, int disp_y, int disp_h) {
+    if (m_wideW <= 0) {
+        m_wideMirrorAuthoritative = 0;
+        return 0;
+    }
+    int idx = (base_x == 0) ? 0 : 1;
+    FlushBatch();
+
+    // Si se requiere empalme del centro canónico:
+    bool spliceNeeded = psx_ws_wide_center_splice_required(
+        1, m_wideMirrorAuthoritative, m_wideSidecarComplete
+    );
+    if (spliceNeeded && m_wideOff > 0) {
+        int native_w = m_wideW - 2 * m_wideOff;
+        if (native_w > 0) {
+            uint32_t nativeW_hr = (uint32_t)(native_w * m_internalScale);
+            uint32_t canoSrcX = (uint32_t)(base_x * m_internalScale);
+            uint32_t wideDstX = (uint32_t)(m_wideOff * m_internalScale);
+            uint32_t copyY = (uint32_t)(disp_y * m_internalScale);
+            uint32_t copyH = (uint32_t)(disp_h * m_internalScale);
+
+            dk::ImageView vramTexView{ m_vramTexture };
+            dk::ImageView wideTexView{ m_wideTextures[idx] };
+            m_cmdBuf.copyImage(
+                vramTexView, { canoSrcX, copyY, 0, nativeW_hr, copyH, 1 },
+                wideTexView, { wideDstX, copyY, 0, nativeW_hr, copyH, 1 }
+            );
+            m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+        }
+    }
+
+    return m_wideW * disp_h;
 }
 
 static void wrap_diag(const char *what);   /* [Deko3D_Wrap], defined below */
@@ -880,6 +1219,156 @@ void Deko3DRenderer::FlushBatch() {
     ubo.extra[1] = (float)m_internalScale;
     ubo.extra[2] = 0.0f;
     ubo.extra[3] = 0.0f;
+    ubo.wideParams[0] = 0.0f;  // u_xoff
+    ubo.wideParams[1] = 0.0f;  // u_yoff
+    ubo.wideParams[2] = 512.0f;// u_xhalf (canónico)
+    ubo.wideParams[3] = 1.0f;  // u_xscale (sin estirar)
+    ubo.wideCenter[0] = 0.0f;  // u_xcenter
+    ubo.wideCenter[1] = 0.0f;
+    ubo.wideCenter[2] = 0.0f;
+    ubo.wideCenter[3] = 0.0f;
+
+    bool sidecar_only = (m_wideCurIdx >= 0 && m_wideMirrorAuthoritative && m_wideSidecarComplete && !m_widePrimSuppressed && m_wideW > 0);
+
+    // Blending de PS1
+    dk::BlendState bState;
+    if (m_semiEnabled) {
+        if (m_semiMode == 0) {
+            bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
+            bState.setFactors(DkBlendFactor_SrcAlpha, DkBlendFactor_InvSrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
+        } else if (m_semiMode == 1) {
+            bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
+            bState.setFactors(DkBlendFactor_One, DkBlendFactor_SrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
+        } else if (m_semiMode == 2) {
+            bState.setOps(DkBlendOp_RevSub, DkBlendOp_Add);
+            bState.setFactors(DkBlendFactor_One, DkBlendFactor_One, DkBlendFactor_Zero, DkBlendFactor_One);
+        } else if (m_semiMode == 3) {
+            bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
+            bState.setFactors(DkBlendFactor_One, DkBlendFactor_SrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
+        }
+    } else {
+        bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
+        bState.setFactors(DkBlendFactor_One, DkBlendFactor_Zero, DkBlendFactor_Zero, DkBlendFactor_One);
+    }
+    m_cmdBuf.bindBlendStates(0, { bState });
+
+    // Rasterizador, Profundidad y Máscara de Color
+    dk::RasterizerState rState;
+    rState.setCullMode(DkFace_None);
+    m_cmdBuf.bindRasterizerState(rState);
+
+    dk::DepthStencilState dsState;
+    dsState.setDepthTestEnable(false);
+    dsState.setDepthWriteEnable(false);
+    dsState.setStencilTestEnable(false);
+    m_cmdBuf.bindDepthStencilState(dsState);
+
+    dk::ColorState cState;
+    if (m_semiEnabled) {
+        cState.setBlendEnable(0, true);
+    }
+    m_cmdBuf.bindColorState(cState);
+
+    dk::ColorWriteState cwState;
+    cwState.setMask(0, DkColorMask_RGBA);
+    m_cmdBuf.bindColorWriteState(cwState);
+
+    // Shaders, Descriptores y Formato de Vértices
+    m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
+
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 11);
+    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
+    m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
+        dkMakeTextureHandle(0, 0),
+        dkMakeTextureHandle(1, 0),
+        dkMakeTextureHandle(2, 1),
+        dkMakeTextureHandle(3, 1),
+        dkMakeTextureHandle(4, 1),
+        dkMakeTextureHandle(5, 1),
+        dkMakeTextureHandle(6, 1),
+        dkMakeTextureHandle(7, 1),
+        dkMakeTextureHandle(8, 1),
+    });
+
+    static const std::array<DkVtxAttribState, 7> vtxAttribState = {{
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, pos),        DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, uv),         DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, color),      DkVtxAttribSize_4x8,  DkVtxAttribType_Unorm, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, tpage_clut), DkVtxAttribSize_2x16, DkVtxAttribType_Uint,  0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, flags),      DkVtxAttribSize_1x32, DkVtxAttribType_Uint,  0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, q),          DkVtxAttribSize_1x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, hd_uv),      DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+    }};
+    DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
+    m_cmdBuf.bindVtxAttribState(vtxAttribState);
+    m_cmdBuf.bindVtxBufferState({ vtxBufferState });
+    m_cmdBuf.bindVtxBuffers(0, { { m_vtxRingGpu, (uint32_t)(MaxVerticesPerFrame * sizeof(PS1Vertex)) } });
+
+    bool isAbsolute = ((m_vtxRingCpu[m_vtxBatchStart].flags & 0x80000000u) != 0);
+
+    if (sidecar_only) {
+        // --- FASE 1: SINGLE-PASS AUTHORITATIVE 16:9 ---
+        // En combate panorámico autoritativo, la presentación se realiza 100% desde m_wideTextures.
+        // Omitir por completo la rasterización canónica a m_vramTexture reduce las draw calls
+        // de ~800 a ~400, los vértices transformados a la mitad y el fillrate en un 68%.
+        dk::ImageView wideTarget{ m_wideTextures[m_wideCurIdx] };
+        m_cmdBuf.bindRenderTargets(&wideTarget);
+
+        uint32_t wideW_hr = (uint32_t)(m_wideW * m_internalScale);
+        uint32_t wideH_hr = (uint32_t)(512 * m_internalScale);
+        DkViewport wideViewport{ 0.0f, 0.0f, (float)wideW_hr, (float)wideH_hr, 0.0f, 1.0f };
+        m_cmdBuf.setViewports(0, { wideViewport });
+
+        if (isAbsolute) {
+            DkScissor scissor{ 0, 0, wideW_hr, wideH_hr };
+            m_cmdBuf.setScissors(0, { scissor });
+        } else {
+            int sy = m_widePrimUnclipped ? 0 : m_clipY1;
+            int sh = m_widePrimUnclipped ? 512 : (m_clipY2 - m_clipY1 + 1);
+            if (sy < 0) { sh += sy; sy = 0; }
+            if (sy + sh > 512) sh = 512 - sy;
+            if (m_widePrimClipBottom >= 0 && (sy + sh > m_widePrimClipBottom + 1)) {
+                sh = m_widePrimClipBottom - sy + 1;
+            }
+            if (sh < 0) sh = 0;
+
+            uint32_t scY = (uint32_t)(sy * m_internalScale);
+            uint32_t scH = (uint32_t)(sh * m_internalScale);
+            DkScissor scissor{ 0, scY, wideW_hr, scH };
+            m_cmdBuf.setScissors(0, { scissor });
+        }
+
+        ViewportUniforms wideUbo = ubo;
+        int dx = m_wideOff - m_wideCurBase + m_widePrimDx;
+        wideUbo.wideParams[0] = (float)dx;
+        wideUbo.wideParams[1] = (float)m_widePrimDy;
+        wideUbo.wideParams[2] = (float)m_wideW * 0.5f;
+
+        if (m_widePrimExpanded) {
+            int native_w = m_wideW - 2 * m_wideOff;
+            if (native_w > 0) {
+                float scale = (float)m_wideW / (float)native_w;
+                if (m_widePrimExpanded == 2) {
+                    scale = 2.5f;
+                    scale = -scale;
+                }
+                wideUbo.wideParams[3] = scale;
+                wideUbo.wideCenter[0] = (float)m_wideCurBase + (float)native_w * 0.5f;
+                wideUbo.wideCenter[1] = (float)native_w * 0.5f;
+            }
+        }
+
+        m_cmdBuf.pushConstants(m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), &wideUbo);
+        m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+        m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        m_cmdBuf.barrier(DkBarrier_Primitives, 0);
+        m_cmdBuf.draw(DkPrimitive_Triangles, count, 1, m_vtxBatchStart, 0);
+
+        m_vtxBatchStart = m_vtxAllocated;
+        return;
+    }
 
     m_cmdBuf.pushConstants(m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), &ubo);
 
@@ -891,7 +1380,6 @@ void Deko3DRenderer::FlushBatch() {
     m_cmdBuf.setViewports(0, { viewport });
 
     // 3. Configurar Scissor (primitivos absolutos como FillRect ignoran el clip de dibujo en PS1)
-    bool isAbsolute = ((m_vtxRingCpu[m_vtxBatchStart].flags & 0x80000000u) != 0);
     if (isAbsolute) {
         DkScissor scissor{ 0, 0, m_hrVramWidth, m_hrVramHeight };
         m_cmdBuf.setScissors(0, { scissor });
@@ -916,89 +1404,75 @@ void Deko3DRenderer::FlushBatch() {
         m_cmdBuf.setScissors(0, { scissor });
     }
 
-    // 4. Configurar Blending de PS1
-    dk::BlendState bState;
-    if (m_semiEnabled) {
-        if (m_semiMode == 0) {
-            bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
-            bState.setFactors(DkBlendFactor_SrcAlpha, DkBlendFactor_InvSrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
-        } else if (m_semiMode == 1) {
-            bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
-            bState.setFactors(DkBlendFactor_One, DkBlendFactor_SrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
-        } else if (m_semiMode == 2) {
-            bState.setOps(DkBlendOp_RevSub, DkBlendOp_Add);
-            bState.setFactors(DkBlendFactor_One, DkBlendFactor_One, DkBlendFactor_Zero, DkBlendFactor_One);
-        } else if (m_semiMode == 3) {
-            bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
-            bState.setFactors(DkBlendFactor_One, DkBlendFactor_SrcAlpha, DkBlendFactor_Zero, DkBlendFactor_One);
-        }
-    } else {
-        bState.setOps(DkBlendOp_Add, DkBlendOp_Add);
-        bState.setFactors(DkBlendFactor_One, DkBlendFactor_Zero, DkBlendFactor_Zero, DkBlendFactor_One);
-    }
-    m_cmdBuf.bindBlendStates(0, { bState });
-
-    // 5. Configurar Rasterizador, Profundidad y Máscara de Color
-    dk::RasterizerState rState;
-    rState.setCullMode(DkFace_None);
-    m_cmdBuf.bindRasterizerState(rState);
-
-    dk::DepthStencilState dsState;
-    dsState.setDepthTestEnable(false);
-    dsState.setDepthWriteEnable(false);
-    dsState.setStencilTestEnable(false);
-    m_cmdBuf.bindDepthStencilState(dsState);
-
-    dk::ColorState cState;
-    if (m_semiEnabled) {
-        cState.setBlendEnable(0, true);
-    }
-    m_cmdBuf.bindColorState(cState);
-
-    dk::ColorWriteState cwState;
-    cwState.setMask(0, DkColorMask_RGB);
-    m_cmdBuf.bindColorWriteState(cwState);
-
-    // 6. Vincular Shaders, Descriptores y Uniform Buffers
-    m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
-
     m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
     m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
 
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 9);
-    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
-    m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
-        dkMakeTextureHandle(0, 0),
-        dkMakeTextureHandle(1, 0),
-        dkMakeTextureHandle(2, 1),
-        dkMakeTextureHandle(3, 1),
-        dkMakeTextureHandle(4, 1),
-        dkMakeTextureHandle(5, 1),
-        dkMakeTextureHandle(6, 1),
-        dkMakeTextureHandle(7, 1),
-        dkMakeTextureHandle(8, 1),
-    });
-
-    // 7. Configurar Formato de Vértices y Buffer
-    static const std::array<DkVtxAttribState, 7> vtxAttribState = {{
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, pos),        DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, uv),         DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, color),      DkVtxAttribSize_4x8,  DkVtxAttribType_Unorm, 0 },
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, tpage_clut), DkVtxAttribSize_2x16, DkVtxAttribType_Uint,  0 },
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, flags),      DkVtxAttribSize_1x32, DkVtxAttribType_Uint,  0 },
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, q),          DkVtxAttribSize_1x32, DkVtxAttribType_Float, 0 },
-        DkVtxAttribState{ 0, 0, offsetof(PS1Vertex, hd_uv),      DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
-    }};
-    DkVtxBufferState vtxBufferState{ sizeof(PS1Vertex), 0 };
-    m_cmdBuf.bindVtxAttribState(vtxAttribState);
-    m_cmdBuf.bindVtxBufferState({ vtxBufferState });
-
-    m_cmdBuf.bindVtxBuffers(0, { { m_vtxRingGpu, (uint32_t)(MaxVerticesPerFrame * sizeof(PS1Vertex)) } });
-
-    // 8. Barrera de memoria y ejecución del Draw Call
+    // 8. Barrera de memoria y ejecución del Draw Call Canónico
     __asm__ __volatile__("dsb sy" ::: "memory");
-    m_cmdBuf.barrier(DkBarrier_Primitives, DkInvalidateFlags_Shader | DkInvalidateFlags_Descriptors | DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+    m_cmdBuf.barrier(DkBarrier_Primitives, 0);
     m_cmdBuf.draw(DkPrimitive_Triangles, count, 1, m_vtxBatchStart, 0);
+
+    // 9. NATIVE-WIDE MIRROR PASS (Deko3D Sidecar Pass)
+    if (m_wideCurIdx >= 0 && !m_widePrimSuppressed && m_wideW > 0) {
+        // Render target a la textura wide correspondiente
+        dk::ImageView wideTarget{ m_wideTextures[m_wideCurIdx] };
+        m_cmdBuf.bindRenderTargets(&wideTarget);
+
+        uint32_t wideW_hr = (uint32_t)(m_wideW * m_internalScale);
+        uint32_t wideH_hr = (uint32_t)(512 * m_internalScale);
+        DkViewport wideViewport{ 0.0f, 0.0f, (float)wideW_hr, (float)wideH_hr, 0.0f, 1.0f };
+        m_cmdBuf.setViewports(0, { wideViewport });
+
+        // Scissor panorámico: X cubre todo el render target para revelar geometría lateral;
+        // Y respeta el área de dibujo y el clip inferior si está fijado.
+        if (isAbsolute) {
+            DkScissor scissor{ 0, 0, wideW_hr, wideH_hr };
+            m_cmdBuf.setScissors(0, { scissor });
+        } else {
+            int sy = m_widePrimUnclipped ? 0 : m_clipY1;
+            int sh = m_widePrimUnclipped ? 512 : (m_clipY2 - m_clipY1 + 1);
+            if (sy < 0) { sh += sy; sy = 0; }
+            if (sy + sh > 512) sh = 512 - sy;
+            if (m_widePrimClipBottom >= 0 && (sy + sh > m_widePrimClipBottom + 1)) {
+                sh = m_widePrimClipBottom - sy + 1;
+            }
+            if (sh < 0) sh = 0;
+
+            uint32_t scY = (uint32_t)(sy * m_internalScale);
+            uint32_t scH = (uint32_t)(sh * m_internalScale);
+            DkScissor scissor{ 0, scY, wideW_hr, scH };
+            m_cmdBuf.setScissors(0, { scissor });
+        }
+
+        // Uniforms proyectivos para Native-Wide
+        ViewportUniforms wideUbo = ubo;
+        int dx = m_wideOff - m_wideCurBase + m_widePrimDx;
+        wideUbo.wideParams[0] = (float)dx;
+        wideUbo.wideParams[1] = (float)m_widePrimDy;
+        wideUbo.wideParams[2] = (float)m_wideW * 0.5f;
+
+        if (m_widePrimExpanded) {
+            int native_w = m_wideW - 2 * m_wideOff;
+            if (native_w > 0) {
+                float scale = (float)m_wideW / (float)native_w;
+                if (m_widePrimExpanded == 2) {
+                    scale = 2.5f;
+                    scale = -scale;
+                }
+                wideUbo.wideParams[3] = scale;
+                wideUbo.wideCenter[0] = (float)m_wideCurBase + (float)native_w * 0.5f;
+                wideUbo.wideCenter[1] = (float)native_w * 0.5f;
+            }
+        }
+
+        m_cmdBuf.pushConstants(m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), &wideUbo);
+        m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+        m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_wideViewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+
+        // Draw call reutilizando exactamente los mismos vértices ya subidos al buffer de anillo
+        m_cmdBuf.barrier(DkBarrier_Primitives, 0);
+        m_cmdBuf.draw(DkPrimitive_Triangles, count, 1, m_vtxBatchStart, 0);
+    }
 
     m_vtxBatchStart = m_vtxAllocated;
 }
@@ -1553,6 +2027,14 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
     osdUbo.extra[1] = 1.0f;
     osdUbo.extra[2] = 0.0f;
     osdUbo.extra[3] = 0.0f;
+    osdUbo.wideParams[0] = 0.0f;
+    osdUbo.wideParams[1] = 0.0f;
+    osdUbo.wideParams[2] = 512.0f;
+    osdUbo.wideParams[3] = 1.0f;
+    osdUbo.wideCenter[0] = 0.0f;
+    osdUbo.wideCenter[1] = 0.0f;
+    osdUbo.wideCenter[2] = 0.0f;
+    osdUbo.wideCenter[3] = 0.0f;
     m_cmdBuf.pushConstants(m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(ViewportUniforms), &osdUbo);
 
     m_cmdBuf.bindRenderTargets(&colorTarget);
@@ -1587,7 +2069,7 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
     m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
     m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
     m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 9);
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 11);
     m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
     m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
         dkMakeTextureHandle(0, 0),
@@ -1708,9 +2190,37 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     const uint32_t curOutW = isDocked ? TargetWidth : HandheldWidth;
     const uint32_t curOutH = isDocked ? TargetHeight : HandheldHeight;
 
-    // Aspecto de presentación configurable: 4:3 con Pillarbox o 16:9 pantalla completa
+    // Aspecto de presentación configurable: 4:3 con Pillarbox o 16:9 Native-Wide panorámico
+    bool useWideMirror = m_widescreen && !di.depth24 && (m_wideW > 0) && (ws_native_wide_active() != 0);
+
+    const bool selector_sidecar_auth =
+        useWideMirror && (gpu_ws_selector_sidecar_authoritative() ||
+                          gpu_ws_retained_gameplay_authoritative());
+    const bool wide_2d_edge_fill =
+        useWideMirror && !selector_sidecar_auth && gpu_ws_nw_2d_edge_fill_active();
+    const bool wide_mirror_authoritative =
+        selector_sidecar_auth ||
+        (psx_ws_wide_mirror_authority_allowed(
+             1,
+             useWideMirror ? 1 : 0,
+             wide_2d_edge_fill ? 1 : 0) != 0);
+
+    m_wideSidecarComplete = selector_sidecar_auth ? 1 : 0;
+    m_wideMirrorAuthoritative = wide_mirror_authoritative ? 1 : 0;
+
+    static bool s_last_wide_state = false;
+    static uint32_t s_wide_log_counter = 0;
+    if (useWideMirror != s_last_wide_state || (++s_wide_log_counter % 300 == 0)) {
+        s_last_wide_state = useWideMirror;
+        printf("[NativeWide_Diag] Frame #%llu: useWide=%d ws_active=%d curIdx=%d base=%d auth=%d complete=%d disp=(%u,%u %ux%u)\n",
+               (unsigned long long)s_present_count, useWideMirror ? 1 : 0, ws_native_wide_active(),
+               m_wideCurIdx, m_wideCurBase, m_wideMirrorAuthoritative, m_wideSidecarComplete,
+               dispX, dispY, w, h);
+        fflush(stdout);
+    }
+
     uint32_t dstW, dstX, dstY, dstH;
-    if (m_widescreen) {
+    if (useWideMirror) {
         dstW = curOutW;                  // 1920 (Docked) / 1280 (Handheld)
         dstX = 0;
         dstY = 0;
@@ -1727,7 +2237,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         s_last_docked_mode = (int)isDocked;
         nwindowSetCrop(nwindowGetDefault(), 0, 0, curOutW, curOutH);
         printf("[Deko3D] %s Present activo (%s): src=(%u,%u %ux%u) hr_src=(%u,%u %ux%u) -> dst=(%u,%u %ux%u sobre %ux%u) [SSAA=%ux]\n",
-               m_widescreen ? "16:9 Widescreen" : "4:3 HD",
+               useWideMirror ? "16:9 True Widescreen (Sidecar)" : (m_widescreen ? "4:3 Pillarbox (Menu/FMV)" : "4:3 HD"),
                isDocked ? "DOCKED 1080p" : "HANDHELD 720p",
                dispX, dispY, w, h, dispX * m_internalScale, dispY * m_internalScale, w * m_internalScale, h * m_internalScale,
                dstX, dstY, dstW, dstH, curOutW, curOutH, m_internalScale);
@@ -1749,7 +2259,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         m_cmdBuf.bindRenderTargets({});
     } else {
         m_cmdBuf.bindRenderTargets({});
-        if (!m_widescreen || di.depth24) {
+        if (!useWideMirror || di.depth24) {
             // Limpiar el 100% del framebuffer de salida a negro puro (pillarboxing 4:3)
             m_cmdBuf.bindRenderTargets(&colorTarget);
             m_cmdBuf.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
@@ -1863,21 +2373,65 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             }
             s_wasInCombat = inCombat;
 
-            // Inset de borde derecho: Al reescalar horizontalmente (e.g. 736 -> 960 o 1280) con filtrado bilineal
-            // (DkBlitFlag_FilterLinear), el último pixel de destino muestrea a x > (w*scale - 0.5), sangrando
-            // con el texel adyacente fuera del framebuffer (memoria de texturas/UI en VRAM a x >= 368),
-            // lo cual provocaba una línea semi-transparente clara en el borde derecho.
-            // Restar 1 al ancho fuente mantiene el rango de muestreo estrictamente dentro del framebuffer renderizado.
-            // La altura de muestreo permanece en la resolución nativa constante del modo de video (480i o 240p)
-            // tanto en menús como en combate, preservando la relación de aspecto natural 4:3 sin estiramientos verticales.
-            uint32_t blitSrcX = dispX * m_internalScale;
-            uint32_t blitSrcY = (uint32_t)dispY * m_internalScale;
-            uint32_t blitSrcW = (w * m_internalScale > 1) ? (w * m_internalScale - 1) : 1;
-            uint32_t blitSrcH = (uint32_t)h * m_internalScale;
-            m_cmdBuf.blitImage(vramTexView, { blitSrcX, blitSrcY, 0, blitSrcW, blitSrcH, 1 },
-                               colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
-                               DkBlitFlag_FilterLinear);
-            m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+            if (useWideMirror) {
+                int wideIdx = (dispX == 0) ? 0 : 1;
+                bool spliceNeeded = psx_ws_wide_center_splice_required(
+                    0, m_wideMirrorAuthoritative, m_wideSidecarComplete
+                );
+                static bool s_diag_last_splice = false;
+                if (spliceNeeded != s_diag_last_splice) {
+                    printf("[Splice_Diag] Present #%llu: spliceNeeded=%d auth=%d complete=%d dispX=%u\n",
+                           (unsigned long long)s_present_count, spliceNeeded ? 1 : 0,
+                           m_wideMirrorAuthoritative, m_wideSidecarComplete, dispX);
+                    fflush(stdout);
+                    s_diag_last_splice = spliceNeeded;
+                }
+                if (spliceNeeded && m_wideOff > 0) {
+                    int native_w = m_wideW - 2 * m_wideOff;
+                    if (native_w > 0) {
+                        uint32_t nativeW_hr = (uint32_t)(native_w * m_internalScale);
+                        uint32_t canoSrcX = (uint32_t)(dispX * m_internalScale);
+                        uint32_t wideDstX = (uint32_t)(m_wideOff * m_internalScale);
+                        uint32_t fullH_hr = (uint32_t)(512 * m_internalScale);
+
+                        // Limpiar márgenes laterales para evitar que sangren píxeles residuales de pantallas previas
+                        WideClearMargins(dispX, 0, 512, 0, 3);
+
+                        dk::ImageView wideTexView{ m_wideTextures[wideIdx] };
+                        m_cmdBuf.copyImage(
+                            vramTexView, { canoSrcX, 0, 0, nativeW_hr, fullH_hr, 1 },
+                            wideTexView, { wideDstX, 0, 0, nativeW_hr, fullH_hr, 1 }
+                        );
+                        m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+                    }
+                }
+
+                dk::ImageView wideTexView{ m_wideTextures[wideIdx] };
+                uint32_t blitSrcX = 0;
+                uint32_t blitSrcY = (uint32_t)dispY * m_internalScale;
+                uint32_t blitSrcW = (uint32_t)(m_wideW * m_internalScale);
+                uint32_t blitSrcH = (uint32_t)h * m_internalScale;
+                m_cmdBuf.blitImage(wideTexView, { blitSrcX, blitSrcY, 0, blitSrcW, blitSrcH, 1 },
+                                   colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
+                                   DkBlitFlag_FilterLinear);
+                m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+            } else {
+                // Inset de borde derecho: Al reescalar horizontalmente (e.g. 736 -> 960 o 1280) con filtrado bilineal
+                // (DkBlitFlag_FilterLinear), el último pixel de destino muestrea a x > (w*scale - 0.5), sangrando
+                // con el texel adyacente fuera del framebuffer (memoria de texturas/UI en VRAM a x >= 368),
+                // lo cual provocaba una línea semi-transparente clara en el borde derecho.
+                // Restar 1 al ancho fuente mantiene el rango de muestreo estrictamente dentro del framebuffer renderizado.
+                // La altura de muestreo permanece en la resolución nativa constante del modo de video (480i o 240p)
+                // tanto en menús como en combate, preservando la relación de aspecto natural 4:3 sin estiramientos verticales.
+                uint32_t blitSrcX = dispX * m_internalScale;
+                uint32_t blitSrcY = (uint32_t)dispY * m_internalScale;
+                uint32_t blitSrcW = (w * m_internalScale > 1) ? (w * m_internalScale - 1) : 1;
+                uint32_t blitSrcH = (uint32_t)h * m_internalScale;
+                m_cmdBuf.blitImage(vramTexView, { blitSrcX, blitSrcY, 0, blitSrcW, blitSrcH, 1 },
+                                   colorTarget, { dstX, dstY, 0, dstW, dstH, 1 },
+                                   DkBlitFlag_FilterLinear);
+                m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+            }
         }
 
         // Superposición OSD 2D (solo fuera de FMV 24-bit)
@@ -2165,6 +2719,62 @@ static void dk_high_vram_written(int x, int y, int w, int h) {
     Deko3DRenderer::Instance().HighVramWritten(x, y, w, h);
 }
 
+static void dk_wide_configure(int wide_w, int offset) {
+    Deko3DRenderer::Instance().WideConfigure(wide_w, offset);
+}
+
+static void dk_wide_set_target(int base_x) {
+    Deko3DRenderer::Instance().WideSetTarget(base_x);
+}
+
+static void dk_wide_disable_target(void) {
+    Deko3DRenderer::Instance().WideDisableTarget();
+}
+
+static void dk_wide_set_primitive_delta(int dx, int dy) {
+    Deko3DRenderer::Instance().WideSetPrimitiveDelta(dx, dy);
+}
+
+static void dk_wide_set_primitive_clip_bottom(int y) {
+    Deko3DRenderer::Instance().WideSetPrimitiveClipBottom(y);
+}
+
+static void dk_wide_fade_white(int x, int y, int w, int h) {
+    Deko3DRenderer::Instance().WideFadeWhite(x, y, w, h);
+}
+
+static void dk_wide_set_primitive_suppressed(int suppressed) {
+    Deko3DRenderer::Instance().WideSetPrimitiveSuppressed(suppressed);
+}
+
+static void dk_wide_set_primitive_unclipped(int unclipped) {
+    Deko3DRenderer::Instance().WideSetPrimitiveUnclipped(unclipped);
+}
+
+static void dk_wide_set_primitive_expanded(int expanded) {
+    Deko3DRenderer::Instance().WideSetPrimitiveExpanded(expanded);
+}
+
+static void dk_wide_clear(int base_x, int y, int h, uint16_t color) {
+    Deko3DRenderer::Instance().WideClear(base_x, y, h, color);
+}
+
+static void dk_wide_clear_margins(int base_x, int y, int h, uint16_t color, int sides) {
+    Deko3DRenderer::Instance().WideClearMargins(base_x, y, h, color, sides);
+}
+
+static void dk_wide_set_mirror_authoritative(int authoritative) {
+    Deko3DRenderer::Instance().WideSetMirrorAuthoritative(authoritative);
+}
+
+static void dk_wide_set_sidecar_complete(int complete) {
+    Deko3DRenderer::Instance().WideSetSidecarComplete(complete);
+}
+
+static int dk_render_wide_display(uint32_t* out, int pitch, int base_x, int disp_y, int disp_h) {
+    return Deko3DRenderer::Instance().RenderWideDisplay(out, pitch, base_x, disp_y, disp_h);
+}
+
 // Vtable del backend Deko3D
 static const GpuRenderBackend DEKO3D_BACKEND = {
     .name                           = "deko3d",
@@ -2199,20 +2809,20 @@ static const GpuRenderBackend DEKO3D_BACKEND = {
     .set_draw_area                  = dk_set_draw_area,
     .get_draw_area                  = sw_get_draw_area,
     .set_draw_offset                = dk_set_draw_offset,
-    .wide_configure                 = nullptr,
-    .wide_set_target                = nullptr,
-    .wide_disable_target            = nullptr,
-    .wide_set_primitive_delta       = nullptr,
-    .wide_set_primitive_clip_bottom = nullptr,
-    .wide_fade_white                = nullptr,
-    .wide_set_primitive_suppressed  = nullptr,
-    .wide_set_primitive_unclipped   = nullptr,
-    .wide_set_primitive_expanded    = nullptr,
-    .wide_clear                     = nullptr,
-    .wide_clear_margins             = nullptr,
-    .wide_set_mirror_authoritative  = nullptr,
-    .wide_set_sidecar_complete      = nullptr,
-    .render_wide_display            = nullptr,
+    .wide_configure                 = dk_wide_configure,
+    .wide_set_target                = dk_wide_set_target,
+    .wide_disable_target            = dk_wide_disable_target,
+    .wide_set_primitive_delta       = dk_wide_set_primitive_delta,
+    .wide_set_primitive_clip_bottom = dk_wide_set_primitive_clip_bottom,
+    .wide_fade_white                = dk_wide_fade_white,
+    .wide_set_primitive_suppressed  = dk_wide_set_primitive_suppressed,
+    .wide_set_primitive_unclipped   = dk_wide_set_primitive_unclipped,
+    .wide_set_primitive_expanded    = dk_wide_set_primitive_expanded,
+    .wide_clear                     = dk_wide_clear,
+    .wide_clear_margins             = dk_wide_clear_margins,
+    .wide_set_mirror_authoritative  = dk_wide_set_mirror_authoritative,
+    .wide_set_sidecar_complete      = dk_wide_set_sidecar_complete,
+    .render_wide_display            = dk_render_wide_display,
     .wide_dump_full                 = nullptr,
     .set_high_vram                  = dk_set_high_vram,
     .high_vram_written              = dk_high_vram_written,

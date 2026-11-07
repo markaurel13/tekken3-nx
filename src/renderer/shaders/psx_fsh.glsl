@@ -26,6 +26,8 @@ layout (std140, binding = 0) uniform ViewportBlock {
     vec2 u_Offset;
     ivec4 u_TexWindow; // mask_x, mask_y, off_x, off_y
     vec4 u_Extra;
+    vec4 u_WideParams;
+    vec4 u_WideCenter;
 };
 
 int vram_at_bank(int x, int y, int high_bank) {
@@ -67,6 +69,12 @@ void main()
             discard;
         }
         outColor = c;
+        return;
+    }
+
+    // Pase directo de color/alpha por vértice (WideFadeWhite, FillRect)
+    if ((inFlags & 0x80000000u) != 0u) {
+        outColor = inColor;
         return;
     }
 
