@@ -81,6 +81,9 @@ static uint8_t player_panel_coverage(const Tekken3SelectorPacket *p, int side,
 /* Main menu and Team Battle use independent alternating DMA arenas. A
  * complete authored composition, never an address alone, establishes them. */
 extern uint16_t psx_read_half(uint32_t addr);
+extern uint32_t psx_read_word(uint32_t addr);
+__attribute__((weak)) uint16_t psx_read_half(uint32_t addr) { (void)addr; return 0; }
+__attribute__((weak)) uint32_t psx_read_word(uint32_t addr) { (void)addr; return 0; }
 
 static int other_menu_frame(const Tekken3SelectorPacket *packets, size_t count,
                             Tekken3SelectorFrame *out) {
@@ -368,7 +371,8 @@ static Tekken3SelectorPlacement other_menu_place(
     if (p->opcode == 0x3A && p->y == 67 && p->height == 190 && p->width == 32) {
         return out;
     }
-    if (columns == 6) {
+    int is_tekken_ball = (psx_read_word(0x800afa88u) & 0xFFu) == 7u;
+    if (columns == 6 && is_tekken_ball) {
         /* Tekken Ball: P1 name/portrait are on the left, P2 credit/portrait
          * on the right. The ball settings (difficulty, ball type, damage %,
          * and selector arrows) are centered in the middle and must NOT be split. */
