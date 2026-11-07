@@ -1349,6 +1349,9 @@ static void icon_palettes_move(int save) {
 }
 /* A player's identity follows the guest character they point at: the cell
  * under the cursor, then the confirmed choice, then the actor. */
+extern void tekken3_ttt1_preload_player(unsigned player);
+static unsigned s_preloaded_moves_gen[2] = { 0, 0 };
+
 static void follow(unsigned player,unsigned id) {
     int k=tekken3_guest_character(id);
     if(k<0 || (unsigned)k==guests[player].catalog_index)return;
@@ -1359,6 +1362,11 @@ static void follow(unsigned player,unsigned id) {
 void tekken3_guest_follow(unsigned player,unsigned id,unsigned costume) {
     if(player>1)return;
     follow(player,id);follow_costume(player,costume);
+    const Tekken3Guest *g=&guests[player];
+    if(s_preloaded_moves_gen[player] != g->moves_generation) {
+        s_preloaded_moves_gen[player] = g->moves_generation;
+        tekken3_ttt1_preload_player(player);
+    }
 }
 static int selector_open(void) {
     return psx_mod_read_word(0x800ae204)==9 && psx_mod_read_word(0x8010ff4c)==0x27bdffd0 &&
@@ -2147,6 +2155,10 @@ void tekken3_ttt1_roster_tick(void) {
             const Tekken3Guest *g=&guests[p];
             if(loading_card_drawn[p])loading_card_palette(p);
             gr_vram_transfer_in(ICON_X+p*16,ICON_Y,16,58,g->loading_pixels);
+            if(s_preloaded_moves_gen[p] != g->moves_generation) {
+                s_preloaded_moves_gen[p] = g->moves_generation;
+                tekken3_ttt1_preload_player(p);
+            }
         }
     }
     /* Selection identity: the actor carries its guest's own ID. */
@@ -2168,6 +2180,11 @@ void tekken3_ttt1_roster_tick(void) {
                 follow_costume(p,psx_mod_read_half(0x800a923c+p*0x188c)&3);
             }
             wanted=1;gr_vram_transfer_in(464,p*256,guests[p].name_halfwords,16,guests[p].name_pixels);
+            const Tekken3Guest *g=&guests[p];
+            if(s_preloaded_moves_gen[p] != g->moves_generation) {
+                s_preloaded_moves_gen[p] = g->moves_generation;
+                tekken3_ttt1_preload_player(p);
+            }
         }
         for(unsigned p=0;p<2;p++)if(tekken3_devil_jin_player(p))wanted=1;
         /* Si estábamos en combate activo con un guest y el juego pasa a phase 0 o screen 11 (fin de round / YOU WIN),
@@ -2178,6 +2195,7 @@ void tekken3_ttt1_roster_tick(void) {
         if(wanted!=selected){tekken3_ttt1_select(wanted);selected=wanted;}
     } else {
         if(selected!=0){tekken3_ttt1_select(0);selected=0;}
+        s_preloaded_moves_gen[0] = s_preloaded_moves_gen[1] = 0;
     }
 }
 

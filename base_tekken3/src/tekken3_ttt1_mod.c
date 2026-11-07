@@ -2004,20 +2004,12 @@ static void guest_tick(void) {
     if (!control) return;
     /* The loading screen names each player's fighter and costume: the
      * request only stands for Jin in his punch costume. */
-    static int s_state11_preloaded = 0;
     int cur_state = psx_mod_read_word(0x800ae204);
     if(cur_state == 11) {
-        if(!s_state11_preloaded) {
-            s_state11_preloaded = 1;
-            tekken3_ttt1_preload_fight();
-            switch_audio_pump_if_needed();
-        }
         for(unsigned p=0;p<2;p++)
             if(devil_jin[p] && (psx_mod_read_half(0x800add5c+p*2)!=JIN_ID ||
                                 (psx_mod_read_half(0x800add98+p*2)&3)!=0))
                 tekken3_devil_jin_set(p,0);
-    } else {
-        s_state11_preloaded = 0;
     }
     follow_models();
     embu_tick();
