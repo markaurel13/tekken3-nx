@@ -5223,7 +5223,7 @@ typedef struct {
 } WsCensusEntry;
 static WsCensusEntry *ws_census = NULL;
 static uint64_t       ws_census_seq = 0;
-static int            ws_census_on  = 1;     /* always-on; toggle via ws_census */
+static int            ws_census_on  = 0;     /* default off for perf; toggle via gpu_ws_census_set */
 extern uint16_t       psx_read_half(uint32_t addr);
 
 /* Screen-X extent (raw vertex coords = SX, pre-draw_offset) across a prim's

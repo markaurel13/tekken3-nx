@@ -152,6 +152,10 @@ static int load_bank(unsigned p) {
     return k->loaded=1;
 }
 
+void tekken3_ttt1_voices_preload(unsigned p) {
+    if (p < 2) (void)load_bank(p);
+}
+
 void tekken3_ttt1_voices_tick(void) {
     tekken3_ttt1_sfx_tick();
     for(unsigned p=0;p<2;p++) {

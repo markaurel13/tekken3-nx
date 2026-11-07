@@ -110,6 +110,9 @@ static int load_bank_for(unsigned p,int any_motion) {
     return k->loaded=1;
 }
 static int load_bank(unsigned p){return load_bank_for(p,0);}
+void tekken3_ttt1_sfx_preload(unsigned p) {
+    if (p < 2) (void)load_bank_for(p, 1);
+}
 static int lookup(unsigned p,unsigned index,SfxSample *s) {
     const SfxBank *k=&banks[p];
     unsigned lo=0,hi=k->count;

@@ -869,7 +869,7 @@ static uint32_t execute_ch2_gpu(void) {
             addr = (next >= PSX_MOD_GPU_DMA_APERTURE_BASE && next - PSX_MOD_GPU_DMA_APERTURE_BASE + 4u <= dma_used)
                 ? (next & 0x00FFFFFCu)
                 : (next & 0x001FFFFCu);
-            if (cur_total_nodes > 512u && (cur_total_nodes & 1) == 0 && (slow_addr & 0xFFFFFFu) != 0xFFFFFFu) {
+            if (cur_total_nodes > 512u && (cur_total_nodes & 31) == 0 && (slow_addr & 0xFFFFFFu) != 0xFFFFFFu) {
                 uint32_t can_slow = slow_addr & 0x00FFFFFFu;
                 uint32_t slow_hdr;
                 if (can_slow + 4u <= 0x00200000u) {
@@ -887,11 +887,11 @@ static uint32_t execute_ch2_gpu(void) {
                         ? (s_next & 0x00FFFFFCu)
                         : (s_next & 0x001FFFFCu);
                 }
-            }
-            if (addr != 0 && addr == slow_addr) {
-                hit_limit = 1;
-                last_addr = 0x00FFFFFFu;
-                break;
+                if (addr != 0 && addr == slow_addr) {
+                    hit_limit = 1;
+                    last_addr = 0x00FFFFFFu;
+                    break;
+                }
             }
             last_addr = addr;
         }

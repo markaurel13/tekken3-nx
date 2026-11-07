@@ -3229,6 +3229,10 @@ void tekken3_ttt1_preload_player(unsigned p) {
             switch_audio_pump_if_needed();
         }
     }
+    extern void tekken3_ttt1_sfx_preload(unsigned p);
+    extern void tekken3_ttt1_voices_preload(unsigned p);
+    tekken3_ttt1_sfx_preload(p);
+    tekken3_ttt1_voices_preload(p);
     switch_audio_pump_if_needed();
     double pre_ms = tek_ticks_to_ms(tek_get_ticks() - t_pre0);
     printf("[PreloadDiag] P%u completado en %.2f ms\n", p + 1, pre_ms);
