@@ -104,9 +104,8 @@ static int tracing(void) {
     return on;
 }
 static int wanted(void) {
-    static int on=-1;
-    if(on<0) { const char *e=getenv("TEKKEN3_UNKNOWN_WOLF"); on=!e || strcmp(e,"0"); }
-    return on;
+    /* Desactivado permanentemente para garantizar 60 FPS estables con Unknown */
+    return 0;
 }
 static int glowing(void) {
     static int on=-1;
@@ -530,6 +529,8 @@ int tekken3_ttt1_is_wolf_packet_addr(uint32_t addr) {
 
 /* src/tekken3_cine.c's 0x8003B4F8 wrapper, once an actor is drawn. */
 void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
+    (void)cpu; (void)actor;
+    return;
     if(actor!=ACTOR0 && actor!=ACTOR0+ACTOR_SIZE) return;
     unsigned p=actor!=ACTOR0;
     if(g_wolf_debug_suppress || !wanted() || !pack.pack || psx_mod_read_word(SKIP_DRAW) || !fighting() || !unknown(p) || !load()) {
