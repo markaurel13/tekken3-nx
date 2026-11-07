@@ -857,8 +857,77 @@ static void clock_telem_exit(void) {
     }
 }
 
+static void clock_investigate_environment(void) {
+    u64 prog_id = 0;
+    svcGetInfo(&prog_id, InfoType_ProgramId, CUR_PROCESS_HANDLE, 0);
+    AppletType a_type = appletGetAppletType();
+    AppletOperationMode op_mode = appletGetOperationMode();
+    ApmPerformanceMode perf_mode = appletGetPerformanceMode();
+    u32 perf_cfg = 0;
+    Result rc_pcfg = appletGetCurrentPerformanceConfiguration(&perf_cfg);
+
+    printf("[ClockInvestigate] ProgramId=0x%016llX AppletType=%d OpMode=%d PerfMode=%d PerfCfg=0x%X (rc=0x%X)\n",
+           (unsigned long long)prog_id, (int)a_type, (int)op_mode, (int)perf_mode, perf_cfg, rc_pcfg);
+
+    static const char* oc_paths[] = {
+        "sdmc:/config/sys-clk/config.ini",
+        "sdmc:/config/sys-clk-oc/config.ini",
+        "sdmc:/config/horizon-oc/config.ini",
+        "sdmc:/config/sys-clk/title_id.ini",
+        "sdmc:/config/sys-clk/log.csv",
+        "sdmc:/config/sys-clk/context.csv",
+        "sdmc:/atmosphere/kips/hoc.ini",
+        "sdmc:/atmosphere/config/system_settings.ini",
+        "sdmc:/atmosphere/config/override_config.ini"
+    };
+
+    for (size_t i = 0; i < sizeof(oc_paths)/sizeof(oc_paths[0]); i++) {
+        FILE* f = fopen(oc_paths[i], "r");
+        if (f) {
+            printf("[ClockInvestigate] >>> ARCHIVO ENCONTRADO: %s <<<\n", oc_paths[i]);
+            char line[256];
+            int count = 0;
+            while (fgets(line, sizeof(line), f) && count < 100) {
+                line[strcspn(line, "\r\n")] = 0;
+                if (line[0] != 0 && line[0] != '#' && line[0] != ';') {
+                    printf("  [OC_INI] %s\n", line);
+                    count++;
+                }
+            }
+            fclose(f);
+        } else {
+            printf("[ClockInvestigate] No existe: %s\n", oc_paths[i]);
+        }
+    }
+
+    DIR* d = opendir("sdmc:/config");
+    if (d) {
+        printf("[ClockInvestigate] Contenido de sdmc:/config/:\n");
+        struct dirent* ent;
+        while ((ent = readdir(d)) != NULL) {
+            printf("  [sdmc:/config/] %s\n", ent->d_name);
+        }
+        closedir(d);
+    } else {
+        printf("[ClockInvestigate] No se pudo abrir sdmc:/config/\n");
+    }
+
+    DIR* d_atm = opendir("sdmc:/atmosphere/contents");
+    if (d_atm) {
+        printf("[ClockInvestigate] Sysmodules en sdmc:/atmosphere/contents/:\n");
+        struct dirent* ent;
+        while ((ent = readdir(d_atm)) != NULL) {
+            if (ent->d_name[0] != '.') {
+                printf("  [atmosphere/contents/] %s\n", ent->d_name);
+            }
+        }
+        closedir(d_atm);
+    }
+}
+
 static void clock_telem_init(void) {
     clock_telem_exit();
+    clock_investigate_environment();
     Result rc;
     if (hosversionAtLeast(8, 0, 0)) {
         rc = clkrstInitialize();
