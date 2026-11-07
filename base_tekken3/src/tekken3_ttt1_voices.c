@@ -214,7 +214,9 @@ void __wrap_func_80040C90(CPUState *cpu) {
         unsigned slot=k->group_slot[group][index%k->group_count[group]];
         id=rd32(k->bank+32+slot*16);
         GuestVoice *v=&voices[p][group==GROUP_KO?KO_VOICE:CRY_VOICE];
-        v->id=id;v->slot=slot;v->group=group;v->pos=0;v->calls++;
+        __atomic_store_n(&v->group, 0, __ATOMIC_RELEASE);
+        v->id=id;v->slot=slot;v->pos=0;v->calls++;
+        __atomic_store_n(&v->group, group, __ATOMIC_RELEASE);
 #ifndef NDEBUG
         fprintf(stderr,"%s voice: P%u command=%04X sample=%u\n",tekken3_guest_name_for(p),p+1,command,id);
 #endif
@@ -265,7 +267,7 @@ void __wrap_spu_render(int16_t *out,int frames) {
     if(banks[0].loaded || banks[1].loaded) {
         for(unsigned p=0;p<2;p++)for(unsigned which=CRY_VOICE;which<=KO_VOICE;which++) {
             GuestVoice *v=&voices[p][which];
-            if(!v->group || !banks[p].loaded)continue;
+            if(!__atomic_load_n(&v->group, __ATOMIC_ACQUIRE) || !banks[p].loaded)continue;
             if(!guest_active(p) || psx_mod_read_half(0x800ae204)!=8){v->group=0;continue;}
             const GuestSample *sample=&banks[p].samples[v->slot];
             uint32_t echoes=v->group==GROUP_KO?2:0, end=sample->frames+echoes*ECHO_DELAY;

@@ -412,6 +412,10 @@ extern "C" void switch_audio_telemetry_report(void) {
     g_at.raw_clip = g_at.raw_samples = g_at.pre_clip = g_at.pre_over24576 = g_at.post_clip = 0;
 }
 
+static u64 s_last_audio_update_tick = 0;
+static u64 s_last_vblank_audio_tick = 0;
+static std::atomic<bool> s_in_audio_update{false};
+
 void SwitchAudio::AudioThreadEntry(void* arg) {
     SwitchAudio* self = static_cast<SwitchAudio*>(arg);
     alignas(64) int16_t last_block[BufferSamples] = {0};
@@ -499,6 +503,30 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         uint32_t r = self->m_ringReadIdx.load(std::memory_order_relaxed);
         uint32_t w = self->m_ringWriteIdx.load(std::memory_order_acquire);
         uint32_t occupancy = (w >= r) ? (w - r) : 0;
+
+        // Mantener el colchón en el anillo lock-free (2 a 3 bloques = ~33 a 50 ms).
+        // Se ejecuta enteramente en Core 2 para liberar el hilo principal (Core 0) al 100%.
+        while (occupancy < 3) {
+            u64 t_spu0 = armGetSystemTick();
+            s_last_audio_update_tick = t_spu0;
+            alignas(64) int16_t tempPcm[BufferSamples];
+            spu_render(tempPcm, FramesPerStep);
+            telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip, &g_at.pre_over24576);
+            g_at.pre_peak = g_at.post_peak;
+            g_at.pre_clip = g_at.post_clip;
+            g_at.produced_frames += FramesPerStep;
+            g_at.produced_blocks++;
+            u64 t_spu1 = armGetSystemTick();
+            uint64_t spu_ns = armTicksToNs(t_spu1 - t_spu0);
+            g_prof_audio_spu_ns += spu_ns;
+
+            uint32_t slot = w % RingSlots;
+            memcpy(self->m_ring[slot].samples, tempPcm, BufferSizeBytes);
+            self->m_ring[slot].frames = FramesPerStep;
+            w++;
+            self->m_ringWriteIdx.store(w, std::memory_order_release);
+            occupancy++;
+        }
 
         if (occupancy < min_occ_win) min_occ_win = occupancy;
         if (occupancy > max_occ_win) max_occ_win = occupancy;
@@ -687,12 +715,15 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
     }
 }
 
-static u64 s_last_audio_update_tick = 0;
-static u64 s_last_vblank_audio_tick = 0;
-static std::atomic<bool> s_in_audio_update{false};
-
 void SwitchAudio::Update() {
     if (!m_initialized || m_paused.load(std::memory_order_relaxed)) return;
+
+    // Si el hilo de audio dedicado en Core 2 está activo, él se encarga de forma
+    // autónoma de ejecutar spu_render() y alimentar audren.
+    // Core 0 queda 100% liberado de la mezcla y procesamiento de audio (ahorro directo: ~0.55 - 1.40 ms).
+    if (m_threadCreated) {
+        return;
+    }
 
     bool expected = false;
     if (!s_in_audio_update.compare_exchange_strong(expected, true)) {
@@ -705,78 +736,38 @@ void SwitchAudio::Update() {
     } guard;
 
     u64 now_tick = armGetSystemTick();
-    uint64_t vblank_elapsed_ns = (s_last_vblank_audio_tick != 0) ? armTicksToNs(now_tick - s_last_vblank_audio_tick) : 0;
     s_last_vblank_audio_tick = now_tick;
 
-    int blocks_to_render = 1;
-    if (m_threadCreated) {
-        uint32_t cur_w = m_ringWriteIdx.load(std::memory_order_relaxed);
-        uint32_t cur_r = m_ringReadIdx.load(std::memory_order_relaxed);
-        uint32_t cur_occ = (cur_w >= cur_r) ? (cur_w - cur_r) : 0;
-        if (cur_occ <= 1) {
-            // Si el anillo cae a 1 o 0, generamos 2 bloques de inmediato para reponer el colchon a 2-3
-            blocks_to_render = 2;
-        } else if (cur_occ >= 4) {
-            // Si el anillo sube a >= 4 bloques (~66 ms), no renderizamos en este VBlank para drenar a 2-3
-            s_last_audio_update_tick = now_tick;
-            blocks_to_render = 0;
-        } else {
-            blocks_to_render = 1;
+    // Fallback puramente síncrono en caso de que no haya sido posible crear el hilo de audio en Core 2
+    u64 t_spu0 = armGetSystemTick();
+    s_last_audio_update_tick = t_spu0;
+    alignas(64) int16_t tempPcm[BufferSamples];
+    spu_render(tempPcm, FramesPerStep);
+    telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip, &g_at.pre_over24576);
+    g_at.pre_peak = g_at.post_peak;
+    g_at.pre_clip = g_at.post_clip;
+    g_at.produced_frames += FramesPerStep;
+    g_at.produced_blocks++;
+    u64 t_spu1 = armGetSystemTick();
+    uint64_t spu_ns = armTicksToNs(t_spu1 - t_spu0);
+    g_prof_audio_spu_ns += spu_ns;
+
+    audrvUpdate(&m_drv);
+    AudioDriverWaveBuf* curWb = &m_waveBufs[m_currentBuffer];
+    if (curWb->state == AudioDriverWaveBufState_Free || curWb->state == AudioDriverWaveBufState_Done) {
+        memcpy(m_audioBuffers[m_currentBuffer], tempPcm, BufferSizeBytes);
+        armDCacheFlush(m_memPoolPtr, m_memPoolSize);
+        curWb->data_raw = m_memPoolPtr;
+        curWb->size = NumBuffers * BufferSizeBytes;
+        curWb->start_sample_offset = m_currentBuffer * FramesPerStep;
+        curWb->end_sample_offset = (m_currentBuffer + 1) * FramesPerStep;
+        audrvVoiceAddWaveBuf(&m_drv, 0, curWb);
+        m_currentBuffer = (m_currentBuffer + 1) % NumBuffers;
+        if (!audrvVoiceIsPlaying(&m_drv, 0)) {
+            audrvVoiceStart(&m_drv, 0);
         }
+        audrvUpdate(&m_drv);
     }
-
-    for (int b = 0; b < blocks_to_render; b++) {
-        u64 t_spu0 = armGetSystemTick();
-        s_last_audio_update_tick = t_spu0;
-        alignas(64) int16_t tempPcm[BufferSamples];
-        spu_render(tempPcm, FramesPerStep);
-        telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip, &g_at.pre_over24576);
-        g_at.pre_peak = g_at.post_peak;
-        g_at.pre_clip = g_at.post_clip;
-        g_at.produced_frames += FramesPerStep;
-        g_at.produced_blocks++;
-        u64 t_spu1 = armGetSystemTick();
-        uint64_t spu_ns = armTicksToNs(t_spu1 - t_spu0);
-        g_prof_audio_spu_ns += spu_ns;
-
-        if (m_threadCreated) {
-            // Encolar en el anillo lock-free sin bloqueos
-            uint32_t w = m_ringWriteIdx.load(std::memory_order_relaxed);
-            uint32_t r = m_ringReadIdx.load(std::memory_order_acquire);
-
-            if (w - r >= (uint32_t)RingSlots) {
-                m_ringReadIdx.store(r + 1, std::memory_order_release);
-                g_at.ring_overflow++;
-            }
-
-            uint32_t slot = w % RingSlots;
-            memcpy(m_ring[slot].samples, tempPcm, BufferSizeBytes);
-            m_ring[slot].frames = FramesPerStep;
-            m_ringWriteIdx.store(w + 1, std::memory_order_release);
-        } else {
-            // Fallback síncrono en caso de que no haya hilo de audio
-            audrvUpdate(&m_drv);
-            AudioDriverWaveBuf* curWb = &m_waveBufs[m_currentBuffer];
-            if (curWb->state == AudioDriverWaveBufState_Free || curWb->state == AudioDriverWaveBufState_Done) {
-                memcpy(m_audioBuffers[m_currentBuffer], tempPcm, BufferSizeBytes);
-                armDCacheFlush(m_memPoolPtr, m_memPoolSize);
-                curWb->data_raw = m_memPoolPtr;
-                curWb->size = NumBuffers * BufferSizeBytes;
-                curWb->start_sample_offset = m_currentBuffer * FramesPerStep;
-                curWb->end_sample_offset = (m_currentBuffer + 1) * FramesPerStep;
-                audrvVoiceAddWaveBuf(&m_drv, 0, curWb);
-                m_currentBuffer = (m_currentBuffer + 1) % NumBuffers;
-                if (!audrvVoiceIsPlaying(&m_drv, 0)) {
-                    audrvVoiceStart(&m_drv, 0);
-                }
-                audrvUpdate(&m_drv);
-            }
-        }
-    }
-
-#if TEK_AUDIO_DIAG
-    tek_audio_diag();
-#endif
 }
 
 void SwitchAudio::QueueFrames(const int16_t* pcmStereo, size_t frames) {
@@ -845,6 +836,7 @@ void switch_audio_set_paused(bool paused) {
 
 void switch_audio_pump_if_needed(void) {
     if (!SwitchAudio::Instance().IsInitialized()) return;
+    if (SwitchAudio::Instance().HasAudioThread()) return; // si hay hilo en Core 2, renderiza autónomamente
     if (s_in_audio_update.load(std::memory_order_relaxed)) return;
     u64 now = armGetSystemTick();
     if (s_last_audio_update_tick == 0) {

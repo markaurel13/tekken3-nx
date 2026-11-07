@@ -522,8 +522,16 @@ static inline int16_t cd_input_volume(uint16_t raw) {
 }
 
 static int16_t s_cd_prev_l = 0, s_cd_prev_r = 0;
+static volatile int s_cd_lock = 0;
+static inline void cd_ring_lock(void) {
+    while (__atomic_test_and_set(&s_cd_lock, __ATOMIC_ACQUIRE)) {}
+}
+static inline void cd_ring_unlock(void) {
+    __atomic_clear(&s_cd_lock, __ATOMIC_RELEASE);
+}
 
 void spu_cd_audio_reset(void) {
+    cd_ring_lock();
     memset(cd_ring, 0, sizeof(cd_ring));
     cd_read_pos = 0;
     cd_write_pos = 0;
@@ -533,11 +541,13 @@ void spu_cd_audio_reset(void) {
     cd_underflow_frames = 0;
     s_cd_prev_l = 0;
     s_cd_prev_r = 0;
+    cd_ring_unlock();
 }
 
 void spu_cd_audio_push(const int16_t* stereo, int frames) {
     if (!stereo || frames <= 0) return;
 
+    cd_ring_lock();
     uint32_t in_frames = (uint32_t)frames;
     if (in_frames > SPU_CD_RING_FRAMES) {
         uint32_t skip = in_frames - SPU_CD_RING_FRAMES;
@@ -560,6 +570,7 @@ void spu_cd_audio_push(const int16_t* stereo, int frames) {
     }
     cd_frame_count += in_frames;
     cd_push_frames += in_frames;
+    cd_ring_unlock();
 
     /* T2 tap: what the CD/XA decoder feeds the SPU CD input bus. The event
      * stamps the GLOBAL GUEST CYCLE clock (low 32 bits) so push-to-push
@@ -571,12 +582,14 @@ void spu_cd_audio_push(const int16_t* stereo, int frames) {
 }
 
 static int cd_audio_pop(int16_t* left, int16_t* right) {
+    cd_ring_lock();
     if (cd_frame_count == 0) {
         /* Underflow smoothing: decay toward zero instead of hard cut to eliminate clicks/bursts */
         s_cd_prev_l = (int16_t)(((int32_t)s_cd_prev_l * 7) / 8);
         s_cd_prev_r = (int16_t)(((int32_t)s_cd_prev_r * 7) / 8);
         *left = s_cd_prev_l;
         *right = s_cd_prev_r;
+        cd_ring_unlock();
         return 0;
     }
     s_cd_prev_l = cd_ring[cd_read_pos * 2u + 0u];
@@ -585,6 +598,7 @@ static int cd_audio_pop(int16_t* left, int16_t* right) {
     *right = s_cd_prev_r;
     cd_read_pos = (cd_read_pos + 1u) % SPU_CD_RING_FRAMES;
     cd_frame_count--;
+    cd_ring_unlock();
     return 1;
 }
 
@@ -1042,7 +1056,6 @@ static void key_on(uint32_t mask) {
         if (!(mask & (1u << i))) continue;
         SpuVoice *v = &voices[i];
         memset(v, 0, sizeof(*v));
-        v->active = 1;
         v->cur_addr = ((uint32_t)voice_reg(i, 3) << 3) & (SPU_RAM_SIZE - 1u);
         v->repeat_addr = ((uint32_t)voice_reg(i, 7) << 3) & (SPU_RAM_SIZE - 1u);
         v->sample_idx = SPU_BLOCK_SAMPLES;
@@ -1054,6 +1067,7 @@ static void key_on(uint32_t mask) {
         key_on_count++;
         endx_latch &= ~(1u << i);  /* KEYON clears ENDX bit on real hw */
         spu_event_record(SPU_EV_KEYON, i, v->cur_addr);
+        __atomic_store_n(&v->active, 1, __ATOMIC_RELEASE);
     }
 }
 

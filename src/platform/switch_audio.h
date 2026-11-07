@@ -41,6 +41,7 @@ public:
 
     bool Init(int sampleRate = DefaultSampleRate);
     bool IsInitialized() const { return m_initialized; }
+    bool HasAudioThread() const { return m_threadCreated; }
     void Update();
     void SetPaused(bool paused);
     void QueueFrames(const int16_t* pcmStereo, size_t frames);
