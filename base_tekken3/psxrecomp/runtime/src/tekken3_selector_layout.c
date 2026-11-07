@@ -342,7 +342,8 @@ static Tekken3SelectorPlacement other_menu_place(
     }
     if ((p->opcode == 0x60 && p->x == 0 && p->y == 0 &&
          p->width == 368 && p->height == 480) ||
-        (p->opcode == 0x38 && (p->y == 24 || p->y >= 277))) {
+        (p->opcode == 0x38 && p->x <= 0 && p->x + p->width >= 360 &&
+         (p->y == 24 || p->y >= 277))) {
         out.role = TEKKEN3_SELECTOR_BACKDROP;
         out.expand_backdrop = 1;
         return out;
@@ -578,7 +579,8 @@ Tekken3SelectorPlacement tekken3_selector_place(
      * the ten portraits and their cursor. Expand that decorative coordinate
      * space across 16:9, then place the portraits below at their unchanged
      * 32-pixel width. This keeps the complete bottom UI under every slot. */
-    if (rel > -0x830 && rel < -0x550 &&
+    if ((packet->opcode == 0x65u || packet->opcode == 0x64u) &&
+        rel > -0x830 && rel < -0x550 &&
         packet->y >= frame->backdrop_height - 18) {
         r.role = TEKKEN3_SELECTOR_BACKDROP;
         r.group_id = 16;
