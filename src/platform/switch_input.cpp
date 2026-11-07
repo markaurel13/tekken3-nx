@@ -13,7 +13,6 @@ extern "C" {
     void tekken3_outfits_connect(int player, int connected);
     uint16_t tekken3_outfits_input(int player, uint16_t buttons);
     void host_osd_fps_toggle(void);
-    extern int g_wolf_debug_suppress;
 }
 
 SwitchInput& SwitchInput::Instance() {
@@ -295,11 +294,6 @@ void SwitchInput::Update() {
         host_osd_fps_toggle();
     } else if (stick_l_held && stick_r_held && (p1Down & HidNpadButton_Minus)) {
         host_osd_fps_toggle();
-    } else if (minus_held && !stick_l_held && (p1Down & HidNpadButton_StickR)) {
-        g_wolf_debug_suppress = !g_wolf_debug_suppress;
-        printf("[WolfDebug] Minus + R3 presionado: Lobo %s temporalmente para comparativa A/B\n",
-               g_wolf_debug_suppress ? "DESACTIVADO (A/B Test)" : "REACTIVADO");
-        fflush(stdout);
     }
 
     u64 end_tick = armGetSystemTick();

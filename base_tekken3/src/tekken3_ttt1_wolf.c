@@ -379,7 +379,8 @@ static void step(unsigned p) {
         ax+=(int32_t)psx_mod_read_word(b); ay+=(int32_t)psx_mod_read_word(b+4); az+=(int32_t)psx_mod_read_word(b+8);
     }
     ax>>=1; ay>>=1; az>>=1;
-    for(unsigned i=0;i<4;i++) {
+    /* The wisps: max 2 active wisps in optimized mode */
+    for(unsigned i=0;i<2;i++) {
         Wisp *w=&wolves[p].wisps[i];
         if(!w->alive) continue;
         if(--w->life<0) { w->alive=0; continue; }
@@ -391,7 +392,7 @@ static void step(unsigned p) {
         w->counter++;
     }
     if((++wolves[p].a_spawn&0x1f)==0) {
-        for(unsigned i=0;i<4;i++) if(!wolves[p].wisps[i].alive) {
+        for(unsigned i=0;i<2;i++) if(!wolves[p].wisps[i].alive) {
             Wisp *w=&wolves[p].wisps[i];
             /* 0x8015AAAC: around A, 0xF1 lower, a random sideways speed. */
             w->x=ax-0xff+(int32_t)(rnd()&0x1ff); w->y=ay+0xf1; w->z=az-0xff+(int32_t)(rnd()&0x1ff);
@@ -488,13 +489,9 @@ static void effects(const CPUState *cpu,unsigned p) {
     /* C on the root, bone 1 (0x8015A8E8), 1724 x 1724, bias -0x1E. */
     bone_view(&v,p,pack.bones[0],c);
     if(c[2]>64) sprite(&v,ot,&at,end,c,-862,-862,862,862,SEQ_C,wolves[p].c_counter>>1,0x80,-0x1e);
-    /* S on each knee (0x8015AE94): the wisps' images, one a frame, 758 x 688, bias -7. */
-    for(unsigned k=0;k<2;k++) {
-        bone_view(&v,p,pack.bones[1+k],c);
-        if(c[2]>64) sprite(&v,ot,&at,end,c,-379,-344,379,344,SEQ_W,wolves[p].s_counter[k]&7,0x80,-7);
-    }
-    /* The wisps (0x8015AC00): an image every 4 frames, 412 x 412, fading, bias -0xA. */
-    for(unsigned i=0;i<4;i++) {
+    /* Halo S en rodillas omitido en modo optimizado para eliminar el doble overdraw redundante sobre B */
+    /* The wisps (0x8015AC00): an image every 4 frames, 412 x 412, fading, bias -0xA (max 2 wisps) */
+    for(unsigned i=0;i<2;i++) {
         const Wisp *w=&wolves[p].wisps[i];
         if(w->alive && project(&v,w->x,w->y,w->z,c))
             sprite(&v,ot,&at,end,c,-206,-206,206,206,SEQ_W,(w->counter>>2)&7,(unsigned)w->life,-0xa);
@@ -555,11 +552,18 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     if(wolves[p].built_from!=psx_mod_read_word(MODELS+p*4) || !wolves[p].live) build(p);
     int32_t r[3];
     root_of(actor,r);
-    if(!wolves[p].live) { place(p); wolves[p].last_buffer=buffer; }
+    static unsigned wolf_step_parity[2] = {0, 0};
+    int is_first_frame = !wolves[p].live;
+    if(is_first_frame) { place(p); wolves[p].last_buffer=buffer; wolf_step_parity[p] = 0; }
     unsigned steps=buffer!=wolves[p].last_buffer;
     wolves[p].last_buffer=buffer; wolves[p].last_drawn=now;
     if(psx_mod_read_word(PAUSED)) steps=0;
     wolves[p].live=1;
+
+    /* Optimización: Intercalar el solver cinemático de huesos a 30 Hz (cada 2 frames).
+     * El renderizado 3D con BODY sigue corriendo a 60 Hz estables. */
+    wolf_step_parity[p]++;
+    int run_solve = is_first_frame || ((wolf_step_parity[p] & 1) == 0);
 
     uint64_t t0=tekken3_host_ns();
     uint64_t cyc_before=psx_cycle_count;
@@ -585,47 +589,51 @@ void tekken3_ttt1_wolf_after_actor(CPUState *cpu,uint32_t actor) {
     uint32_t mod_used = 0;
     uint8_t *mod_mem = (uint8_t*)psx_mod_memory_region(0, &mod_used);
 
-    if (g_psx_ram && mod_mem && a >= 0x9F000000u && actor >= 0x80000000u && actor < 0x80200000u) {
-        uint8_t *dst = mod_mem + (a - 0x9F000000u);
-        uint8_t *src = g_psx_ram + (actor & 0x1FFFFFu);
-        for(unsigned b=0;b<18;b++) memcpy(dst+LOCALS+b*32, src+LOCALS+b*32, 18);
-        memcpy(dst+ROOT, src+ROOT, 18);
-        memcpy(dst+ROOT+0x14, &wolves[p].x, 4);
-        memcpy(dst+ROOT+0x18, &wolves[p].y, 4);
-        memcpy(dst+ROOT+0x1c, &wolves[p].z, 4);
-        for(unsigned k=0;k<3;k++) {
-            int32_t val;
-            memcpy(&val, src+k*4, 4);
-            val += (int32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]);
-            memcpy(dst+k*4, &val, 4);
+    if (run_solve) {
+        if (g_psx_ram && mod_mem && a >= 0x9F000000u && actor >= 0x80000000u && actor < 0x80200000u) {
+            uint8_t *dst = mod_mem + (a - 0x9F000000u);
+            uint8_t *src = g_psx_ram + (actor & 0x1FFFFFu);
+            for(unsigned b=0;b<18;b++) memcpy(dst+LOCALS+b*32, src+LOCALS+b*32, 18);
+            memcpy(dst+ROOT, src+ROOT, 18);
+            memcpy(dst+ROOT+0x14, &wolves[p].x, 4);
+            memcpy(dst+ROOT+0x18, &wolves[p].y, 4);
+            memcpy(dst+ROOT+0x1c, &wolves[p].z, 4);
+            for(unsigned k=0;k<3;k++) {
+                int32_t val;
+                memcpy(&val, src+k*4, 4);
+                val += (int32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]);
+                memcpy(dst+k*4, &val, 4);
+            }
+            memcpy(dst+FACING, &wolves[p].angle, 2);
+            memcpy(dst+YAW, src+YAW, 2);
+        } else {
+            for(unsigned b=0;b<18;b++) for(unsigned k=0;k<9;k++)
+                psx_mod_write_half(a+LOCALS+b*32+k*2,psx_mod_read_half(actor+LOCALS+b*32+k*2));
+            for(unsigned k=0;k<9;k++) psx_mod_write_half(a+ROOT+k*2,psx_mod_read_half(actor+ROOT+k*2));
+            psx_mod_write_word(a+ROOT+0x14,(uint32_t)wolves[p].x);
+            psx_mod_write_word(a+ROOT+0x18,(uint32_t)wolves[p].y);
+            psx_mod_write_word(a+ROOT+0x1c,(uint32_t)wolves[p].z);
+            for(unsigned k=0;k<3;k++)
+                psx_mod_write_word(a+k*4,psx_mod_read_word(actor+k*4)+(uint32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]));
+            psx_mod_write_half(a+FACING,wolves[p].angle);
+            psx_mod_write_half(a+YAW,psx_mod_read_half(actor+YAW));
         }
-        memcpy(dst+FACING, &wolves[p].angle, 2);
-        memcpy(dst+YAW, src+YAW, 2);
-    } else {
-        for(unsigned b=0;b<18;b++) for(unsigned k=0;k<9;k++)
-            psx_mod_write_half(a+LOCALS+b*32+k*2,psx_mod_read_half(actor+LOCALS+b*32+k*2));
-        for(unsigned k=0;k<9;k++) psx_mod_write_half(a+ROOT+k*2,psx_mod_read_half(actor+ROOT+k*2));
-        psx_mod_write_word(a+ROOT+0x14,(uint32_t)wolves[p].x);
-        psx_mod_write_word(a+ROOT+0x18,(uint32_t)wolves[p].y);
-        psx_mod_write_word(a+ROOT+0x1c,(uint32_t)wolves[p].z);
-        for(unsigned k=0;k<3;k++)
-            psx_mod_write_word(a+k*4,psx_mod_read_word(actor+k*4)+(uint32_t)((k==0?wolves[p].x:k==1?wolves[p].y:wolves[p].z)-r[k]));
-        psx_mod_write_half(a+FACING,wolves[p].angle);
-        psx_mod_write_half(a+YAW,psx_mod_read_half(actor+YAW));
     }
     uint64_t t_copy=tekken3_host_ns();
 
-    psx_mod_write_word(PAUSE,1);
-    switch_audio_pump_if_needed();
-    call(cpu,SOLVE,a);
-    if(tracing()) {
-        static unsigned n;
-        int worst=0; unsigned at=0;
-        for(unsigned b=0;b<18;b++) for(unsigned k=0;k<9;k++) {
-            int d=abs((int16_t)psx_mod_read_half(a+LOCALS+b*32+k*2)-(int16_t)psx_mod_read_half(actor+LOCALS+b*32+k*2));
-            if(d>worst) { worst=d; at=b; }
+    if (run_solve) {
+        psx_mod_write_word(PAUSE,1);
+        switch_audio_pump_if_needed();
+        call(cpu,SOLVE,a);
+        if(tracing()) {
+            static unsigned n;
+            int worst=0; unsigned at=0;
+            for(unsigned b=0;b<18;b++) for(unsigned k=0;k<9;k++) {
+                int d=abs((int16_t)psx_mod_read_half(a+LOCALS+b*32+k*2)-(int16_t)psx_mod_read_half(actor+LOCALS+b*32+k*2));
+                if(d>worst) { worst=d; at=b; }
+            }
+            if(!(n++%120)) fprintf(stderr,"Unknown's wolf: P%u pose after the solver, worst bone %u off by %d\n",p+1,at,worst);
         }
-        if(!(n++%120)) fprintf(stderr,"Unknown's wolf: P%u pose after the solver, worst bone %u off by %d\n",p+1,at,worst);
     }
     uint64_t t_solve=tekken3_host_ns();
     call(cpu,BODY,a);
