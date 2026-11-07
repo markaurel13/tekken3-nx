@@ -13,6 +13,7 @@ bool switch_audio_init(int sample_rate);
 void switch_audio_update(void);
 void switch_audio_pump_if_needed(void);
 void switch_audio_queue(const int16_t* pcm_stereo, size_t frames);
+void switch_audio_set_paused(bool paused);
 void switch_audio_shutdown(void);
 // Telemetria (Fase 0): el hilo principal vuelca los contadores una vez por ventana.
 void switch_audio_telemetry_report(void);
@@ -41,6 +42,7 @@ public:
     bool Init(int sampleRate = DefaultSampleRate);
     bool IsInitialized() const { return m_initialized; }
     void Update();
+    void SetPaused(bool paused);
     void QueueFrames(const int16_t* pcmStereo, size_t frames);
     void Shutdown();
 
@@ -75,6 +77,7 @@ private:
     AudioSlot m_ring[RingSlots]{};
     alignas(64) std::atomic<uint32_t> m_ringWriteIdx{0};
     alignas(64) std::atomic<uint32_t> m_ringReadIdx{0};
+    alignas(64) std::atomic<bool> m_paused{false};
 };
 
 #endif

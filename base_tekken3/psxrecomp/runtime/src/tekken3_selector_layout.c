@@ -80,8 +80,15 @@ static uint8_t player_panel_coverage(const Tekken3SelectorPacket *p, int side,
 
 /* Main menu and Team Battle use independent alternating DMA arenas. A
  * complete authored composition, never an address alone, establishes them. */
+extern uint16_t psx_read_half(uint32_t addr);
+
 static int other_menu_frame(const Tekken3SelectorPacket *packets, size_t count,
                             Tekken3SelectorFrame *out) {
+    int screen = (int16_t)psx_read_half(0x800AE204u);
+    int phase = (uint16_t)psx_read_half(0x800AE224u);
+    if (screen == 8 || screen == 6 || (screen == 11 && phase == 0)) {
+        return 0; // Fights and victory sequences are NEVER menus
+    }
     static const uint32_t menu_lo[] = {0x15C000u, 0x15FC00u};
     static const uint32_t team_lo[] = {0xB8000u, 0xBBC00u};
     for (int kind = 1; kind <= 2; kind++) {

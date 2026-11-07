@@ -20,6 +20,7 @@
 #include "renderer/deko3d_renderer.h"
 #include "platform/switch_audio.h"
 #include "platform/switch_input.h"
+#include "platform/switch_config_menu.h"
 #include "iso_reader.h"
 #include "disc_path.h"
 #include "tek_block_prof.h"
@@ -783,6 +784,54 @@ static void prof_stop(void) {
     }
 }
 
+extern "C" void switch_notify_menu_frame(void) {
+    s_frame_count++;
+}
+
+static void clock_telem_exit(void);
+
+extern "C" void switch_request_app_restart(const char* nro_path) {
+    printf("[Main] Auto-reinicio de Tekken 3 iniciado hacia: '%s'...\n", nro_path ? nro_path : "default");
+    fflush(stdout);
+
+    // 1. Programar auto-reinicio antes de apagar servicios
+    if (envHasNextLoad()) {
+        printf("[Main] [+] envSetNextLoad activado -> programando '%s'...\n", nro_path);
+        envSetNextLoad(nro_path, nro_path);
+    } else {
+        printf("[Main] [!] envHasNextLoad no disponible -> usando appletRequestExitToSelf\n");
+        appletRequestExitToSelf();
+    }
+
+    // 2. Detener hilos de fondo
+    prof_stop();
+    cd_prefetch_shutdown();
+
+    // 3. Volcar datos de tarjetas de memoria
+    memcard_flush_all();
+
+    // 4. Apagar subsistemas de hardware y cerrar sesiones IPC de forma segura
+    switch_audio_shutdown();
+    clock_telem_exit();
+    Deko3DRenderer::Instance().Shutdown();
+
+    // 5. Cerrar y sincronizar archivo de log
+    if (s_sd_log) {
+        printf("[Main] Apagado limpio para auto-reinicio completado.\n");
+        fflush(s_sd_log);
+        fsync(fileno(s_sd_log));
+        fclose(s_sd_log);
+        s_sd_log = NULL;
+    }
+
+    // 6. Finalizar servicios del SO
+    romfsExit();
+    socketExit();
+
+    // 7. Salida limpia al loader para re-lanzar el NRO inmediatamente
+    exit(0);
+}
+
 /* ===== Medicion de Hardware VSync derivada del reloj del sistema ARM ===== */
 static std::atomic<uint64_t> s_hw_vsync_counter{0};
 
@@ -792,7 +841,24 @@ static bool s_clk_ready = false;
 static bool s_clk_use_clkrst = false;
 static ClkrstSession s_clk_cpu, s_clk_gpu, s_clk_emc;
 
+static void clock_telem_exit(void) {
+    if (s_clk_ready) {
+        if (s_clk_use_clkrst) {
+            clkrstCloseSession(&s_clk_cpu);
+            clkrstCloseSession(&s_clk_gpu);
+            clkrstCloseSession(&s_clk_emc);
+            clkrstExit();
+        } else {
+            pcvExit();
+        }
+        s_clk_ready = false;
+        s_clk_use_clkrst = false;
+        printf("[Clocks] Sesiones clkrst/pcv cerradas correctamente.\n");
+    }
+}
+
 static void clock_telem_init(void) {
+    clock_telem_exit();
     Result rc;
     if (hosversionAtLeast(8, 0, 0)) {
         rc = clkrstInitialize();
@@ -801,8 +867,9 @@ static void clock_telem_init(void) {
             Result r2 = clkrstOpenSession(&s_clk_gpu, PcvModuleId_GPU, 3);
             Result r3 = clkrstOpenSession(&s_clk_emc, PcvModuleId_EMC, 3);
             s_clk_use_clkrst = true;
-            s_clk_ready = R_SUCCEEDED(r1);
-            printf("[Clocks] clkrst listo (open cpu=0x%X gpu=0x%X emc=0x%X)\n", r1, r2, r3);
+            s_clk_ready = R_SUCCEEDED(r1) && R_SUCCEEDED(r2) && R_SUCCEEDED(r3);
+            printf("[Clocks] clkrst listo (open cpu=0x%X gpu=0x%X emc=0x%X, ready=%d)\n",
+                   r1, r2, r3, s_clk_ready ? 1 : 0);
         } else {
             printf("[Clocks] clkrstInitialize fallo: 0x%X\n", rc);
         }
@@ -1510,6 +1577,16 @@ static void switch_vblank_callback(void) {
     u64 input_ns = armTicksToNs(input_end - input_start);
     s_win_input_ns += input_ns;
 
+    // Verificar si se abrió el menú de configuración gráfica y juego (config.txt)
+    if (switch_config_menu_is_requested()) {
+        switch_config_menu_run_modal();
+        u64 resume_tick = armGetSystemTick();
+        s_last_vblank_tick = resume_tick;
+        s_last_present_tick = resume_tick;
+        s_last_cb_exit_tick = resume_tick;
+        return;
+    }
+
     // 2. Manejo de bucle principal del sistema (cierre oficial desde menú HOME de Switch)
     if (!appletMainLoop()) {
         printf("[VBlank] !appletMainLoop() detectado en frame %llu. Iniciando apagado limpio...\n",
@@ -1519,6 +1596,7 @@ static void switch_vblank_callback(void) {
         cd_prefetch_shutdown();
         memcard_flush_all();
         switch_audio_shutdown();
+        clock_telem_exit();
         Deko3DRenderer::Instance().Shutdown();
         if (s_sd_log) {
             printf("[VBlank] Apagado limpio completado.\n");
@@ -1932,6 +2010,11 @@ static void load_or_create_config(int argc, char* argv[]) {
         g_config.supersampling = 2;
         g_config.widescreen_16_9 = false;
         g_config.unlock_all_characters = false;
+        switch_config_menu_init(target_config_path,
+                                (argc > 0 && argv && argv[0]) ? argv[0] : nullptr,
+                                g_config.supersampling,
+                                g_config.widescreen_16_9,
+                                g_config.unlock_all_characters);
         return;
     }
 
@@ -2001,6 +2084,12 @@ static void load_or_create_config(int argc, char* argv[]) {
            (g_config.supersampling == 2 ? "2x HD (2048x1024)" : "1x Nativo (1024x512)"));
     printf("   [+] widescreen_16_9         = %s\n", g_config.widescreen_16_9 ? "ON (16:9 Panoramica)" : "OFF (4:3 Original Pillarbox)");
     printf("   [+] unlocked_all_characters = %s\n", g_config.unlock_all_characters ? "1 (ON - Todos desbloqueados)" : "0 (OFF - Progresion original Memory Card)");
+
+    switch_config_menu_init(found_path ? found_path : target_config_path,
+                            (argc > 0 && argv && argv[0]) ? argv[0] : nullptr,
+                            g_config.supersampling,
+                            g_config.widescreen_16_9,
+                            g_config.unlock_all_characters);
 }
 
 // ============================================================================
@@ -2474,6 +2563,7 @@ int main(int argc, char* argv[]) {
         s_sd_log = NULL;
     }
     switch_audio_shutdown();
+    clock_telem_exit();
     Deko3DRenderer::Instance().Shutdown();
     romfsExit();
     socketExit();

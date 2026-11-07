@@ -1,5 +1,8 @@
 #include "switch_input.h"
+#include "switch_config_menu.h"
 #include <cstdio>
+#include <cstdlib>
+#include <cmath>
 #include <cstring>
 
 // Declaraciones de psxrecomp SIO
@@ -59,6 +62,12 @@ void SwitchInput::ShowControllerApplet() {
     hidLaShowControllerSupportForSystem(&resInfo, &args, false);
 
     printf("[SwitchInput] Menú cerrado. Jugadores conectados: %d\n", resInfo.player_count);
+}
+
+void SwitchInput::SuppressGameInput(int frames) {
+    m_suppress_frames = frames;
+    sio_set_pad_state_slot(0, 0xFFFF);
+    sio_set_pad_state_slot(1, 0xFFFF);
 }
 
 uint16_t SwitchInput::TranslatePadState(const PadState& pad, int playerIdx,
@@ -191,6 +200,13 @@ uint16_t SwitchInput::TranslatePadState(const PadState& pad, int playerIdx,
 void SwitchInput::Update() {
     if (!m_initialized) return;
 
+    if (m_suppress_frames > 0) {
+        m_suppress_frames--;
+        sio_set_pad_state_slot(0, 0xFFFF);
+        sio_set_pad_state_slot(1, 0xFFFF);
+        return;
+    }
+
     u64 start_tick = armGetSystemTick();
     static bool s_p2ConnectedLast = false;
     static uint64_t s_update_count = 0;
@@ -246,6 +262,28 @@ void SwitchInput::Update() {
         ShowControllerApplet();
     }
 
+    // Combinación para abrir menú de configuración dinámica (config.txt):
+    // Mando completo: ZL + ZR + Plus  o  L + R + Plus
+    // Joy-Con individual horizontal: SL + SR + Plus
+    // Acceso alternativo por conveniencia: Mantener Minus (-) durante ~1.15 segundos (70 frames)
+    bool cfg_combo_full = ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Plus)) ||
+                          ((p1Held & HidNpadButton_L) && (p1Held & HidNpadButton_R) && (p1Down & HidNpadButton_Plus));
+    bool cfg_combo_single = (p1Held & (HidNpadButton_LeftSL | HidNpadButton_RightSL)) &&
+                            (p1Held & (HidNpadButton_LeftSR | HidNpadButton_RightSR)) &&
+                            (p1Down & HidNpadButton_Plus);
+
+    static uint32_t s_minus_hold_frames = 0;
+    if (p1Held & HidNpadButton_Minus) {
+        s_minus_hold_frames++;
+    } else {
+        s_minus_hold_frames = 0;
+    }
+    bool cfg_minus_hold = (s_minus_hold_frames == 70);
+
+    if (cfg_combo_full || cfg_combo_single || cfg_minus_hold) {
+        switch_config_menu_request_open();
+    }
+
     // Combinación para alternar el contador de FPS en pantalla:
     // Minus (-) + presionar ambos sticks analógicos (L3 + R3)
     bool minus_held = (p1Held & HidNpadButton_Minus) != 0;
@@ -280,6 +318,43 @@ void SwitchInput::Update() {
     }
 }
 
+void SwitchInput::PollMenuInput(uint64_t& outDown, uint64_t& outHeld, int32_t& stickX, int32_t& stickY) {
+    outDown = 0;
+    outHeld = 0;
+    stickX = 0;
+    stickY = 0;
+    for (int i = 0; i < MaxPlayers; i++) {
+        padUpdate(&m_pads[i]);
+        if (!padIsConnected(&m_pads[i]) && i > 0) continue;
+        u64 kd = padGetButtonsDown(&m_pads[i]);
+        u64 kh = padGetButtons(&m_pads[i]);
+        u32 style = padGetStyleSet(&m_pads[i]);
+        bool isSingleJoy = (style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight)) != 0;
+
+        HidAnalogStickState s0 = padGetStickPos(&m_pads[i], 0);
+        HidAnalogStickState s1 = padGetStickPos(&m_pads[i], 1);
+        int32_t raw_x = (s1.x != 0 || s1.y != 0) ? s1.x : s0.x;
+        int32_t raw_y = (s1.y != 0 || s1.y != 0) ? s1.y : s0.y;
+
+        int32_t rot_x = raw_x;
+        int32_t rot_y = raw_y;
+        if (isSingleJoy) {
+            if (style & HidNpadStyleTag_NpadJoyRight) {
+                rot_x = raw_y;
+                rot_y = -raw_x;
+            } else {
+                rot_x = -raw_y;
+                rot_y = raw_x;
+            }
+        }
+
+        outDown |= kd;
+        outHeld |= kh;
+        if (std::abs(rot_x) > std::abs(stickX)) stickX = rot_x;
+        if (std::abs(rot_y) > std::abs(stickY)) stickY = rot_y;
+    }
+}
+
 // Wrapper C
 extern "C" {
 
@@ -291,8 +366,18 @@ void switch_input_update(void) {
     SwitchInput::Instance().Update();
 }
 
+void switch_input_poll_menu(uint64_t* outDown, uint64_t* outHeld, int32_t* stickX, int32_t* stickY) {
+    if (outDown && outHeld && stickX && stickY) {
+        SwitchInput::Instance().PollMenuInput(*outDown, *outHeld, *stickX, *stickY);
+    }
+}
+
 void switch_input_show_controller_applet(void) {
     SwitchInput::Instance().ShowControllerApplet();
+}
+
+void switch_input_suppress_game_input(int frames) {
+    SwitchInput::Instance().SuppressGameInput(frames);
 }
 
 bool switch_input_is_exit_requested(void) {

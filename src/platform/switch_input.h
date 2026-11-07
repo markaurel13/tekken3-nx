@@ -11,7 +11,9 @@ extern "C" {
 // Funciones de interfacing en C
 bool switch_input_init(void);
 void switch_input_update(void);
+void switch_input_poll_menu(uint64_t* outDown, uint64_t* outHeld, int32_t* stickX, int32_t* stickY);
 void switch_input_show_controller_applet(void);
+void switch_input_suppress_game_input(int frames);
 bool switch_input_is_exit_requested(void);
 bool switch_input_check_immediate_exit(void);
 
@@ -49,7 +51,9 @@ public:
 
     bool Init();
     void Update();
+    void PollMenuInput(uint64_t& outDown, uint64_t& outHeld, int32_t& stickX, int32_t& stickY);
     void ShowControllerApplet();
+    void SuppressGameInput(int frames);
     bool IsExitRequested() const { return m_exitRequested; }
 
 private:
@@ -63,6 +67,7 @@ private:
     PadState m_pads[MaxPlayers]{};
     bool m_initialized = false;
     bool m_exitRequested = false;
+    int m_suppress_frames = 0;
 };
 
 #endif

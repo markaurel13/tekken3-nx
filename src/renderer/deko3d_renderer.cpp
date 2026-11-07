@@ -1,4 +1,5 @@
 #include "deko3d_renderer.h"
+#include "switch_config_menu.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -621,11 +622,17 @@ void Deko3DRenderer::BeginFrame() {
 
 void Deko3DRenderer::Shutdown() {
     if (!m_initialized) return;
-    m_initialized = false;
     WaitPendingFences();
-    if (m_queue) m_queue.waitIdle();
+    if (m_queue) {
+        if (m_curSlot >= 0 && m_swapchain) {
+            m_queue.presentImage(m_swapchain, m_curSlot);
+            m_curSlot = -1;
+        }
+        m_queue.waitIdle();
+    }
+    m_initialized = false;
     m_cmdBuf = dk::CmdBuf{};
-    m_swapchain.destroy();
+    if (m_swapchain) m_swapchain.destroy();
     for (unsigned i = 0; i < NumFrameResources; i++) {
         m_cmdBufPool[i].destroy();
     }
@@ -2160,8 +2167,7 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     int screenState = psx_mod_game_started() ? (int)(int16_t)psx_mod_read_half(0x800AE204u) : -1;
     int phase = psx_mod_game_started() ? (int)(uint16_t)psx_mod_read_half(0x800AE224u) : -1;
     bool inCombat = (w == 368 && h == 480) &&
-                    (screenState == 8 || screenState == 6) &&
-                    (phase >= 4);
+                    ((screenState == 8 || screenState == 6) || (screenState == 11 && phase == 0));
 
     static bool s_last_in_combat_state = false;
     if (inCombat != s_last_in_combat_state) {
@@ -2474,6 +2480,15 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
                 int fx = ((int)curOutW > fdw + osdMargin) ? ((int)curOutW - fdw - osdMargin) : osdMargin;
                 int fy = osdMargin;
                 DrawOsdImage(fpsPx, fpsW, fpsH, fx, fy, fdw, fdh, curOutW, curOutH, colorTarget);
+            }
+
+            // Menú de configuración gráfica dinámica en juego (config.txt)
+            const uint32_t* menuPx = nullptr;
+            int menuW = 0, menuH = 0;
+            if (switch_config_menu_get_image(&menuPx, &menuW, &menuH) && menuPx) {
+                int mx = ((int)curOutW > menuW) ? (((int)curOutW - menuW) / 2) : 0;
+                int my = ((int)curOutH > menuH) ? (((int)curOutH - menuH) / 2) : 0;
+                DrawOsdImage(menuPx, menuW, menuH, mx, my, menuW, menuH, curOutW, curOutH, colorTarget);
             }
         }
         host_osd_present_done();

@@ -469,6 +469,20 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         }
         prev_tick = t0;
 
+        if (self->m_paused.load(std::memory_order_relaxed)) {
+            if (audrvVoiceIsPlaying(&self->m_drv, 0) && !audrvVoiceIsPaused(&self->m_drv, 0)) {
+                audrvVoiceSetPaused(&self->m_drv, 0, true);
+                audrvUpdate(&self->m_drv);
+            }
+            svcSleepThread(10000000ULL); // 10 ms
+            continue;
+        } else {
+            if (audrvVoiceIsPaused(&self->m_drv, 0)) {
+                audrvVoiceSetPaused(&self->m_drv, 0, false);
+                audrvUpdate(&self->m_drv);
+            }
+        }
+
         audrvUpdate(&self->m_drv);
         g_at.played_samples.store(audrvVoiceGetPlayedSampleCount(&self->m_drv, 0), std::memory_order_relaxed);
         g_at.voice_drops.store(audrvVoiceGetVoiceDropsCount(&self->m_drv, 0), std::memory_order_relaxed);
@@ -678,7 +692,7 @@ static u64 s_last_vblank_audio_tick = 0;
 static std::atomic<bool> s_in_audio_update{false};
 
 void SwitchAudio::Update() {
-    if (!m_initialized) return;
+    if (!m_initialized || m_paused.load(std::memory_order_relaxed)) return;
 
     bool expected = false;
     if (!s_in_audio_update.compare_exchange_strong(expected, true)) {
@@ -809,6 +823,11 @@ void SwitchAudio::Shutdown() {
     printf("[SwitchAudio] Subsistema de audio finalizado.\n");
 }
 
+void SwitchAudio::SetPaused(bool paused) {
+    if (!m_initialized) return;
+    m_paused.store(paused, std::memory_order_release);
+}
+
 // Interfaz C para psxrecomp
 extern "C" {
 
@@ -818,6 +837,10 @@ bool switch_audio_init(int sample_rate) {
 
 void switch_audio_update(void) {
     SwitchAudio::Instance().Update();
+}
+
+void switch_audio_set_paused(bool paused) {
+    SwitchAudio::Instance().SetPaused(paused);
 }
 
 void switch_audio_pump_if_needed(void) {

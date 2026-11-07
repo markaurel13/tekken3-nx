@@ -2151,7 +2151,9 @@ void tekken3_ttt1_roster_tick(void) {
     }
     /* Selection identity: the actor carries its guest's own ID. */
     static int selected=-1;
-    if(state==8) {
+    int phase = (uint16_t)psx_mod_read_half(0x800ae224);
+    int in_fight = (state == 8 || state == 6 || (state == 11 && phase == 0));
+    if(in_fight) {
         int wanted=0;
         for(unsigned p=0;p<2;p++) {
             unsigned id=psx_mod_read_half(0x800a9240+p*0x188c);
@@ -2161,13 +2163,18 @@ void tekken3_ttt1_roster_tick(void) {
              * battle the actor still carries the previous member for the
              * first frames of the next round: follow it only once the
              * round runs. */
-            if(psx_mod_read_half(0x800ae224)>=6) {
+            if(phase>=6) {
                 follow(p,id);
                 follow_costume(p,psx_mod_read_half(0x800a923c+p*0x188c)&3);
             }
             wanted=1;gr_vram_transfer_in(464,p*256,guests[p].name_halfwords,16,guests[p].name_pixels);
         }
         for(unsigned p=0;p<2;p++)if(tekken3_devil_jin_player(p))wanted=1;
+        /* Si estábamos en combate activo con un guest y el juego pasa a phase 0 o screen 11 (fin de round / YOU WIN),
+         * retener wanted=1 mientras el combate siga en pantalla para evitar desmantelar el modelo del guest antes del fade a negro */
+        if(!wanted && selected == 1 && (phase == 0 || state == 11)) {
+            wanted = 1;
+        }
         if(wanted!=selected){tekken3_ttt1_select(wanted);selected=wanted;}
     } else {
         if(selected!=0){tekken3_ttt1_select(0);selected=0;}
