@@ -3174,6 +3174,7 @@ void tekken3_ttt1_preload_player(unsigned p) {
         (void)switch_cached_file_get(path, NULL);
         snprintf(path, sizeof path, "%s/%s-combos.bin", root, m_prefix);
         (void)switch_cached_file_get(path, NULL);
+        switch_audio_pump_if_needed();
     }
     if (d_prefix && d_prefix[0]) {
         snprintf(path, sizeof path, "%s/%s-voices.juv", root, d_prefix);
@@ -3182,6 +3183,7 @@ void tekken3_ttt1_preload_player(unsigned p) {
         (void)switch_cached_file_get(path, NULL);
         snprintf(path, sizeof path, "%s/%s-hiteffect64.hfx", root, d_prefix);
         (void)switch_cached_file_get(path, NULL);
+        switch_audio_pump_if_needed();
         for (unsigned c = 1; c <= 2; c++) {
             snprintf(path, sizeof path, "%s/%s-arcade-P%u.3dm", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
@@ -3195,6 +3197,7 @@ void tekken3_ttt1_preload_player(unsigned p) {
             (void)switch_cached_file_get(path, NULL);
             snprintf(path, sizeof path, "%s/%s-arcade-P%u.hilt", root, d_prefix, c);
             (void)switch_cached_file_get(path, NULL);
+            switch_audio_pump_if_needed();
         }
         if (!strncmp(d_prefix, "Unknown", 7)) {
             snprintf(path, sizeof path, "%s/Unknown-TTT1-wolf.glow", root);
@@ -3203,7 +3206,9 @@ void tekken3_ttt1_preload_player(unsigned p) {
             (void)switch_cached_file_get(path, NULL);
             snprintf(path, sizeof path, "%s/Unknown-TTT1-wolf.3dm", root);
             (void)switch_cached_file_get(path, NULL);
+            switch_audio_pump_if_needed();
         }
+        switch_audio_pump_if_needed();
     }
     if (donor_cnt > 0) {
         for (unsigned k = 0; k < donor_cnt; k++) {

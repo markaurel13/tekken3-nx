@@ -273,7 +273,7 @@ bool SwitchAudio::Init(int sampleRate) {
         printf("[SwitchAudio] Advertencia: threadCreate fallo con codigo 0x%08X\n", rcThr);
     }
 
-    printf("[SwitchAudio] Sistema de audio nativo listo (búferes: %d, muestras/frame: %d).\n", NumBuffers, FramesPerStep);
+    printf("[SwitchAudio] Sistema de audio nativo listo (Baja Latencia Optima ~50ms, anillo 2-3 frames, sonido limpio).\n");
     return true;
 }
 
@@ -330,7 +330,7 @@ inline void telem_scan(const int16_t* pcm, size_t n, int32_t& peak, uint64_t& cl
         if (a < 0) a = -a;
         if (a > pk) pk = a;
         if (a >= 32700) cl++;
-        if (a > 24576) ov++;
+        if (a > AUDIO_LIMITER_THRESHOLD) ov++;
     }
     peak = pk;
     clip = cl;
@@ -397,12 +397,12 @@ extern "C" void switch_audio_telemetry_report(void) {
            (double)dtmax / 1000.0, (unsigned long long)(over8 - l_over8),
            opm == AppletOperationMode_Console ? "DOCK" : "HANDHELD",
            perf == ApmPerformanceMode_Boost ? "Boost" : "Normal");
-    printf("[AudioLevels] raw_spu(post-clamp16): peak=%d clip>=32700=%llu/%llu | pre_limiter(mezcla final): peak=%d clip>=32700=%llu >24576=%llu | "
-           "post_limiter: peak=%d clip>=32700=%llu | soft_limit calls=%llu activas(>=24576)=%llu (%.2f%%)\n",
+    printf("[AudioLevels] raw_spu(post-clamp16): peak=%d clip>=32700=%llu/%llu | pre_limiter(mezcla final): peak=%d clip>=32700=%llu >%d=%llu | "
+           "post_limiter: peak=%d clip>=32700=%llu | soft_limit calls=%llu activas(>=%d)=%llu (%.2f%%)\n",
            g_at.raw_peak, (unsigned long long)g_at.raw_clip, (unsigned long long)g_at.raw_samples,
-           g_at.pre_peak, (unsigned long long)g_at.pre_clip, (unsigned long long)g_at.pre_over24576,
+           g_at.pre_peak, (unsigned long long)g_at.pre_clip, AUDIO_LIMITER_THRESHOLD, (unsigned long long)g_at.pre_over24576,
            g_at.post_peak, (unsigned long long)g_at.post_clip,
-           (unsigned long long)(lcalls - l_lim_calls), (unsigned long long)(lact - l_lim_active),
+           (unsigned long long)(lcalls - l_lim_calls), AUDIO_LIMITER_THRESHOLD, (unsigned long long)(lact - l_lim_active),
            (lcalls - l_lim_calls) ? 100.0 * (double)(lact - l_lim_active) / (double)(lcalls - l_lim_calls) : 0.0);
 
     l_prod = prod; l_prodb = prodb; l_cons = cons; l_ticks = ticks; l_dtsum = dtsum; l_over8 = over8;
@@ -520,9 +520,9 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         }
 #endif
 
-        // 1. Priming: acumular 3 bloques (~50 ms) al inicio, o 1 bloque (~16 ms) tras un underrun
+        // 1. Priming: acumular 2-3 bloques (~33-50 ms) para estabilidad total sin caídas a 0
         if (!primed) {
-            uint32_t target_prime = has_last_block ? 1 : 3;
+            uint32_t target_prime = has_last_block ? 2 : 3;
             if (occupancy >= target_prime) {
                 primed = true;
             } else {
@@ -531,17 +531,17 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
         }
 
         // 2. Control de latencia del búfer anular:
-        // Mantener el anillo entre 2 y 4 bloques (~33-66 ms) para latencia imperceptible.
-        // Si tras una carga se acumulan demasiados bloques (> 8), recortamos el exceso.
-        if (occupancy > 8) {
-            uint32_t drop_count = occupancy - 4;
+        // Mantener el anillo en 2-3 bloques (~33-50 ms): latencia óptima sin riesgo de underruns ni bocina barata.
+        // Si tras una pausa o carga se acumulan bloques excesivos (> 5), recortamos el exceso a 3.
+        if (occupancy > 5) {
+            uint32_t drop_count = occupancy - 3;
             g_at.trim_drops.fetch_add(drop_count, std::memory_order_relaxed);
             r += drop_count;
             self->m_ringReadIdx.store(r, std::memory_order_release);
         }
 
         bool queuedAny = false;
-        while (activeBuffers < 3) {
+        while (activeBuffers < 2) {
             AudioDriverWaveBuf* curWb = &self->m_waveBufs[self->m_currentBuffer];
             if (curWb->state != AudioDriverWaveBufState_Free &&
                 curWb->state != AudioDriverWaveBufState_Done) {
@@ -561,7 +561,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
                     int16_t ar = (sr < 0) ? (int16_t)-sr : sr;
                     if (al > peak_l_win) peak_l_win = al;
                     if (ar > peak_r_win) peak_r_win = ar;
-                    if (al > 24576 || ar > 24576) compressed_samples_win++;
+                    if (al > AUDIO_LIMITER_THRESHOLD || ar > AUDIO_LIMITER_THRESHOLD) compressed_samples_win++;
                     if (al >= 32700 || ar >= 32700) clipped_samples_win++;
 
                     // Capture outgoing samples into rolling ambient history
@@ -699,15 +699,11 @@ void SwitchAudio::Update() {
         uint32_t cur_w = m_ringWriteIdx.load(std::memory_order_relaxed);
         uint32_t cur_r = m_ringReadIdx.load(std::memory_order_relaxed);
         uint32_t cur_occ = (cur_w >= cur_r) ? (cur_w - cur_r) : 0;
-        if (cur_occ == 0) {
+        if (cur_occ <= 1) {
+            // Si el anillo cae a 1 o 0, generamos 2 bloques de inmediato para reponer el colchon a 2-3
             blocks_to_render = 2;
-        } else if (cur_occ == 1 && vblank_elapsed_ns > 0 && vblank_elapsed_ns < 13500000ULL) {
-            // Solo recargamos un 2do bloque preventivo en frames ligeros (< 13.5 ms),
-            // manteniendo el colchon en 2-3 bloques sin empujar frames pesados por encima de 16.67 ms.
-            blocks_to_render = 2;
-        } else if (cur_occ >= 5) {
-            // Si el anillo ya tiene >= 5 bloques (~83 ms), no renderizamos en este VBlank
-            // para drenar suavemente de vuelta a 3-4 bloques sin recortes ni retraso.
+        } else if (cur_occ >= 4) {
+            // Si el anillo sube a >= 4 bloques (~66 ms), no renderizamos en este VBlank para drenar a 2-3
             s_last_audio_update_tick = now_tick;
             blocks_to_render = 0;
         } else {
@@ -832,8 +828,8 @@ void switch_audio_pump_if_needed(void) {
         s_last_audio_update_tick = now;
         return;
     }
-    // 400.000 ticks = ~20.8 ms (solo actúa si un frame se bloquea más de un VBlank completo, p.ej. carga de disco)
-    constexpr u64 TICKS_PUMP_THRESHOLD = 400000;
+    // 250.000 ticks = ~13.0 ms (actúa si un frame o lectura de SD se bloquea más de ~13 ms)
+    constexpr u64 TICKS_PUMP_THRESHOLD = 250000;
     if (now - s_last_audio_update_tick >= TICKS_PUMP_THRESHOLD) {
         SwitchAudio::Instance().Update();
     }

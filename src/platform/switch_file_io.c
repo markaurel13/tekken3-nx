@@ -48,11 +48,34 @@ const unsigned char *switch_cached_file_get(const char *path, size_t *out_size) 
 #endif
 
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
+    if (fd < 0) {
+#ifdef __SWITCH__
+        switch_audio_pump_if_needed();
+#endif
+        // Cache negative lookup so subsequent checks don't hit the MicroSD VFS
+        SwitchFileCacheEntry *entry = (SwitchFileCacheEntry *)malloc(sizeof(SwitchFileCacheEntry));
+        if (entry) {
+            strncpy(entry->path, path, sizeof(entry->path) - 1);
+            entry->path[sizeof(entry->path) - 1] = '\0';
+            entry->data = NULL;
+            entry->size = 0;
+            pthread_mutex_lock(&s_cache_mutex);
+            entry->next = s_file_cache_buckets[bucket];
+            s_file_cache_buckets[bucket] = entry;
+            pthread_mutex_unlock(&s_cache_mutex);
+        }
+        return NULL;
+    }
 
     struct stat st;
     if (fstat(fd, &st) != 0 || st.st_size <= 0 || st.st_size > 64 * 1024 * 1024) {
         close(fd);
+#ifdef __SWITCH__
+    switch_audio_pump_if_needed();
+#endif
+#ifdef __SWITCH__
+        switch_audio_pump_if_needed();
+#endif
         return NULL;
     }
 
@@ -60,6 +83,9 @@ const unsigned char *switch_cached_file_get(const char *path, size_t *out_size) 
     unsigned char *buf = (unsigned char *)malloc(sz);
     if (!buf) {
         close(fd);
+#ifdef __SWITCH__
+    switch_audio_pump_if_needed();
+#endif
         return NULL;
     }
 
@@ -76,6 +102,9 @@ const unsigned char *switch_cached_file_get(const char *path, size_t *out_size) 
 #endif
     }
     close(fd);
+#ifdef __SWITCH__
+    switch_audio_pump_if_needed();
+#endif
 
     if (bytes_read != sz) {
         free(buf);
