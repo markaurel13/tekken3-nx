@@ -4876,10 +4876,14 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
 
     extern int fntrace_is_game_started(void);
     int screenState = fntrace_is_game_started() ? (int)(int16_t)psx_read_half(0x800AE204u) : -1;
+    int is_force_mode = (psx_read_word(0x800B4914u) == 0x27bdff50u) ||
+                        ((psx_read_word(0x800afa88u) & 0xFFu) == 8u) ||
+                        (psx_read_word(0x800B2658u) == 0x27BDFFB8u);
     /* Safe combat fast-path: In active combat (states 8/6) when no selector or loading
-     * screen is active or retained, skip traversing thousands of DMA nodes for UI prepasses.
-     * This saves ~0.8ms of CPU per frame during heavy fights. */
-    if (!ws_auto_ui_squash && !t3_selector_session_frame.active && !t3_loading_frame.active &&
+     * screen is active or retained, and NOT in Tekken Force (which needs the prepass to
+     * reconstruct widescreen background tiles and avoid black side margins), skip traversing
+     * thousands of DMA nodes for UI prepasses. This saves ~0.8ms of CPU per frame during heavy fights. */
+    if (!is_force_mode && !ws_auto_ui_squash && !t3_selector_session_frame.active && !t3_loading_frame.active &&
         (screenState == 8 || screenState == 6)) {
         return;
     }
