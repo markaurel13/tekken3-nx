@@ -4873,18 +4873,17 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     t3_selector_prepass_count = 0;
     t3_selector_fade_emitted = 0;
     memset(&t3_selector_frame, 0, sizeof(t3_selector_frame));
-    if (!ws_engaged()) {
-        extern int fntrace_is_game_started(void);
-        int screenState = fntrace_is_game_started() ? (int)(int16_t)psx_read_half(0x800AE204u) : -1;
-        // States 9 and 10 are Character Selector and VS Loading Screen.
-        // In any other state (combat state 8/6, menus), skip the expensive prepass linked-list walk.
-        if (!tekken3_outfits_available() || (screenState != 9 && screenState != 10)) {
-            t3_selector_forget_frame();
-            memset(&t3_loading_frame, 0, sizeof(t3_loading_frame));
-            t3_force_reveal_count = 0;
-            t3_force_background_active = 0;
-            return;
-        }
+    extern int fntrace_is_game_started(void);
+    int screenState = fntrace_is_game_started() ? (int)(int16_t)psx_read_half(0x800AE204u) : -1;
+    // States 9 and 10 are Character Selector and VS Loading Screen.
+    // In any other state (combat state 8/6, menus), skip the expensive prepass linked-list walk.
+    if (!ws_auto_ui_squash && (screenState == 8 || screenState == 6 || !ws_engaged())) {
+        t3_selector_forget_frame();
+        memset(&t3_loading_frame, 0, sizeof(t3_loading_frame));
+        t3_force_reveal_count = 0;
+        t3_force_background_active = 0;
+        gr_wide_set_sidecar_complete(0);
+        return;
     }
 
     uint32_t addr = psx_mod_gpu_dma_resolve_address(start_addr);
