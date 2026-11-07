@@ -1021,11 +1021,6 @@ int Deko3DRenderer::RenderWideDisplay(uint32_t* out, int pitch, int base_x, int 
 static void wrap_diag(const char *what);   /* [Deko3D_Wrap], defined below */
 
 void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2) {
-    if (!std::isfinite(v0.pos[0]) || !std::isfinite(v0.pos[1]) ||
-        !std::isfinite(v1.pos[0]) || !std::isfinite(v1.pos[1]) ||
-        !std::isfinite(v2.pos[0]) || !std::isfinite(v2.pos[1])) {
-        return;
-    }
     if (v0.pos[0] < -2048.0f || v0.pos[0] > 2048.0f || v0.pos[1] < -2048.0f || v0.pos[1] > 2048.0f ||
         v1.pos[0] < -2048.0f || v1.pos[0] > 2048.0f || v1.pos[1] < -2048.0f || v1.pos[1] > 2048.0f ||
         v2.pos[0] < -2048.0f || v2.pos[0] > 2048.0f || v2.pos[1] < -2048.0f || v2.pos[1] > 2048.0f) {
@@ -1049,7 +1044,6 @@ void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, cons
     m_vtxRingCpu[m_vtxAllocated + 1] = v1;
     m_vtxRingCpu[m_vtxAllocated + 2] = v2;
     m_vtxAllocated += 3;
-    __asm__ __volatile__("dsb sy" ::: "memory");
 }
 
 /* [Deko3D_Wrap]: the staging ring's reset, which submits the whole command
