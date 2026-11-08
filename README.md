@@ -32,7 +32,7 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
 - **2-Player Local Battles:**
   - Automatic controller assignment supporting handheld mode, Pro Controllers, detached single horizontal Joy-Cons (P1 & P2), split Joy-Cons, and generic USB/wireless gamepads.
 - **In-Game Settings Overlay:**
-  - Hold **Minus `[-]` for 1 second** during gameplay to change graphics, aspect ratio, and unlock settings in real time without restarting.
+  - Hold **Minus `[-]` for 1 second** during gameplay to change graphics, aspect ratio, and unlock settings in real time (Game might need to restart in order to apply graphic changes)
 - **All Game Modes Supported:**
   - Arcade, VS Battle, Team Battle, Survival, Time Attack, Practice, Tekken Force, and Tekken Ball.
 
