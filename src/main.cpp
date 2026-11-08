@@ -92,7 +92,7 @@ extern uint32_t g_dirty_ram_last_unsupported_insn;
 // Configuración gráfica dinámica (config.txt)
 struct GameConfig {
     int supersampling = 2; // 1 = 1x (Nativo PS1), 2 = 2x HD (Recomendado), 3 = 3x Ultra HD
-    bool widescreen_16_9 = false; // false = 4:3 con bandas negras, true = 16:9 pantalla completa
+    bool widescreen_16_9 = true; // false = 4:3 con bandas negras, true = 16:9 pantalla completa
     bool unlock_all_characters = false; // false = progresion original (Memory Card), true = desbloquear todos
 };
 static GameConfig g_config;
@@ -2055,13 +2055,13 @@ static void load_or_create_config(int argc, char* argv[]) {
                 "supersampling = 2\n\n"
                 "# ------------------------------------------------------------------------------\n"
                 "# Screen Aspect Ratio:\n"
-                "#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]\n"
+                "#   OFF = 4:3 Original with black sidebars (Pillarbox)\n"
                 "#         -> Preserves authentic retro proportions for characters and stages.\n"
-                "#   ON  = 16:9 True Widescreen (Native-Wide Sidecar)\n"
+                "#   ON  = 16:9 True Widescreen (Native-Wide Sidecar) [RECOMMENDED]\n"
                 "#         -> Real panoramic 16:9 3D view with expanded FOV, correct geometry,\n"
                 "#            and non-stretched characters/stages (PC Tekken3Recompiled feature).\n"
                 "# ------------------------------------------------------------------------------\n"
-                "widescreen_16_9 = OFF\n\n"
+                "widescreen_16_9 = ON\n\n"
                 "# ------------------------------------------------------------------------------\n"
                 "# Unlock All Characters & Modes:\n"
                 "#   0 = OFF: Authentic progression. Loads only characters unlocked in your save/memory card. [DEFAULT]\n"
@@ -2072,12 +2072,12 @@ static void load_or_create_config(int argc, char* argv[]) {
                 "unlocked_all_characters = 0\n"
             );
             fclose(create_f);
-            printf("[Config] Archivo 'config.txt' creado exitosamente con valores por defecto (supersampling=2, widescreen=OFF, unlocked_all_characters=0).\n");
+            printf("[Config] Archivo 'config.txt' creado exitosamente con valores por defecto (supersampling=2, widescreen=ON, unlocked_all_characters=0).\n");
         } else {
             printf("[Config] Advertencia: No se pudo crear 'config.txt'. Usando valores predeterminados en memoria.\n");
         }
         g_config.supersampling = 2;
-        g_config.widescreen_16_9 = false;
+        g_config.widescreen_16_9 = true;
         g_config.unlock_all_characters = false;
         switch_config_menu_init(target_config_path,
                                 (argc > 0 && argv && argv[0]) ? argv[0] : nullptr,

@@ -17,9 +17,9 @@ supersampling = 2
 
 # ------------------------------------------------------------------------------
 # Screen Aspect Ratio:
-#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]
+#   OFF = 4:3 Original with black sidebars (Pillarbox)
 #         -> Preserves authentic retro proportions for characters and stages.
-#   ON  = 16:9 Fullscreen Widescreen
+#   ON  = 16:9 Fullscreen Widescreen [RECOMMENDED]
 #         -> Fills the entire Switch screen and 16:9 TV display without bars.
 # ------------------------------------------------------------------------------
-widescreen_16_9 = OFF
+widescreen_16_9 = ON
