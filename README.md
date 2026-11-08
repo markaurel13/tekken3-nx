@@ -170,7 +170,7 @@ unlocked_all_characters = 0
 > [!NOTE]
 > **Update — Live In-Game Configuration Menu:**
 > You do **not** need to connect your Switch to a PC or take out your microSD card to edit `config.txt`!
-> **Hold the Minus `[-]` button for over 1 second** at any point during gameplay to bring up the live settings overlay. From there you can toggle between 16:9 True Widescreen / 4:3 Retro, adjust Internal Supersampling (1x, 2x HD, 3x Ultra HD), and toggle character unlocks with immediate effect.
+> **Hold the Minus `[-]` button for over 1 second** at any point during gameplay to bring up the live settings overlay. From there you can toggle between 16:9 True Widescreen / 4:3 Retro, adjust Internal Supersampling (1x, 2x HD, 3x Ultra HD), and toggle character unlocks with immediate effect (Game will automatically restart after any change).
 
 ---
 
