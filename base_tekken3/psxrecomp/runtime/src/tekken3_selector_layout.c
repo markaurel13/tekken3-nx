@@ -1,5 +1,6 @@
 #include "tekken3_selector_layout.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define T3_SEL_A_LO 0x00125000u
@@ -395,6 +396,35 @@ static Tekken3SelectorPlacement other_menu_place(
                 out.role = TEKKEN3_SELECTOR_RIGHT_PLAYER;
                 out.group_id = 2;
                 out.sidecar_dx = margin;
+            }
+        }
+        return out;
+    }
+    uint32_t t3_mode = psx_read_word(0x800afa88u) & 0xFFu;
+    int screen_id = (int16_t)psx_read_half(0x800ae204u);
+    int is_vs_battle = (t3_mode == 1u) || (screen_id == 10 && columns == 7);
+    if (is_vs_battle) {
+        /* VS BATTLE SELECT keeps its entire 4:3 layout centered in 16:9 as a
+         * single unified console (names, framed portraits, score trapezoid,
+         * 00 - 00 draw counter, and bottom guide).
+         *
+         * The handicap life bars are parked off-screen in PS1 4:3 (x <= 0 or
+         * x >= 368, y >= 400) while players are choosing characters. In 16:9,
+         * the reveal margins expose them at the bottom-left and bottom-right edges.
+         * Suppress any parked off-screen handicap bar from the sidecar. */
+        unsigned p1_state = psx_read_word(0x800B8D70u);
+        unsigned p2_state = psx_read_word(0x800B8D70u + 172u);
+        if (p->y >= 400) {
+            if ((p1_state == 3 && p->x + p->width <= 48) ||
+                (p2_state == 3 && p->x >= 320) ||
+                (p->x + p->width <= 0) || (p->x >= 368)) {
+                out.suppress_sidecar = margin > 0;
+                static uint32_t sup_counter = 0;
+                if (sup_counter < 10) {
+                    printf("[VS_Handicap_Suppressed] #%u op=0x%02x (%d,%d %dx%d)\n",
+                           sup_counter++, p->opcode, p->x, p->y, p->width, p->height);
+                }
+                return out;
             }
         }
         return out;
