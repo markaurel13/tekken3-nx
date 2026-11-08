@@ -52,7 +52,7 @@ sdmc:/
 └── switch/
     └── tekken3/
         ├── tekken3_nx.nro              # Nintendo Switch native executable (from Releases)
-        ├── config.txt                  # It's going to auto-generate once you've launched the game for the first time
+        ├── config.txt                  # your config.txt file
         ├── disc/
         │   ├── Tekken 3 (USA).cue       
         │   ├── Tekken 3 (USA) (Track 1).bin
