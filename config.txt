@@ -11,7 +11,7 @@
 #   2 = 2x HD (2048x1024) [RECOMMENDED]
 #       -> Sharp edges, optimal configuration
 #   3 = 3x Ultra HD (3072x1536)
-#       -> Maximum polygon edge definition for 4K / large TV screens (Switch has a 1080p limit, so it is overkill and may cause FPS drops to 55 FPS)
+#       -> Maximum polygon edge definition for 4K / large TV screens
 # ------------------------------------------------------------------------------
 supersampling = 2
 
@@ -19,7 +19,17 @@ supersampling = 2
 # Screen Aspect Ratio:
 #   OFF = 4:3 Original with black sidebars (Pillarbox)
 #         -> Preserves authentic retro proportions for characters and stages.
-#   ON  = 16:9 Fullscreen Widescreen [RECOMMENDED]
-#         -> Fills the entire Switch screen and 16:9 TV display without bars.
+#   ON  = 16:9 True Widescreen (Native-Wide Sidecar) [RECOMMENDED]
+#         -> Real panoramic 16:9 3D view with expanded FOV, correct geometry,
+#            and non-stretched characters/stages (PC Tekken3Recompiled feature).
 # ------------------------------------------------------------------------------
 widescreen_16_9 = ON
+
+# ------------------------------------------------------------------------------
+# Unlock All Characters & Modes:
+#   0 = OFF: Authentic progression. Loads only characters unlocked in your save/memory card. [DEFAULT]
+#   1 = ON: Automatically unlocks all characters, secret costumes, and modes.
+#       WARNING: If you save your game while ON (1), your memory card will record
+#       100% progression with all fighters and modes permanently unlocked.
+# ------------------------------------------------------------------------------
+unlocked_all_characters = 0

@@ -1,21 +1,35 @@
 # ==============================================================================
-# Tekken 3 (USA) - Nintendo Switch Port Configuration
+# Tekken 3 (USA) - Graphics Configuration for Nintendo Switch
 # ==============================================================================
-
-# Resolucion interna / Supersampling:
-# 1 = 1x (Resolucion nativa PS1 1024x512)
-# 2 = 2x HD (Recomendado - 60 FPS fijos a 1020MHz Stock)
-# 3 = 3x Ultra HD
+# Place this file in the same directory as 'tekken3_nx.nro' on your microSD card
+# (e.g. sdmc:/switch/tekken3/config.txt).
+# If this file is missing, the game will automatically create it with default values.
+#
+# ------------------------------------------------------------------------------
+# Internal Supersampling Anti-Aliasing (SSAA):
+#   1 = 1x PS1 Native (1024x512)
+#   2 = 2x HD (2048x1024) [RECOMMENDED]
+#       -> Sharp edges, optimal configuration
+#   3 = 3x Ultra HD (3072x1536)
+#       -> Maximum polygon edge definition for 4K / large TV screens
+# ------------------------------------------------------------------------------
 supersampling = 2
 
-# Relacion de aspecto:
-# false = 4:3 Clasico con bandas laterales (Original PS1)
-# true  = 16:9 Panoramico
-widescreen = false
+# ------------------------------------------------------------------------------
+# Screen Aspect Ratio:
+#   OFF = 4:3 Original with black sidebars (Pillarbox)
+#         -> Preserves authentic retro proportions for characters and stages.
+#   ON  = 16:9 True Widescreen (Native-Wide Sidecar) [RECOMMENDED]
+#         -> Real panoramic 16:9 3D view with expanded FOV, correct geometry,
+#            and non-stretched characters/stages (PC Tekken3Recompiled feature).
+# ------------------------------------------------------------------------------
+widescreen_16_9 = ON
 
-# Desbloquear todos los personajes y modos:
-# 0 = OFF (Progresion original: carga solo lo desbloqueado en tu Memory Card) [Por defecto]
-# 1 = ON  (Desbloquea automaticamente todos los personajes, trajes secretos y modos)
-#     ADVERTENCIA: Si guardas la partida mientras esta en ON (1), la Memory Card registrara
-#     el 100% de progresion con todos los personajes desbloqueados en ese archivo de guardado.
+# ------------------------------------------------------------------------------
+# Unlock All Characters & Modes:
+#   0 = OFF: Authentic progression. Loads only characters unlocked in your save/memory card. [DEFAULT]
+#   1 = ON: Automatically unlocks all characters, secret costumes, and modes.
+#       WARNING: If you save your game while ON (1), your memory card will record
+#       100% progression with all fighters and modes permanently unlocked.
+# ------------------------------------------------------------------------------
 unlocked_all_characters = 0
