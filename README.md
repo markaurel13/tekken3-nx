@@ -25,12 +25,14 @@ Unlike traditional emulation, this port statically recompiles original PlayStati
   - **3x Ultra HD:** Maximum polygon edge definition for 4K / large TV screens via `sdmc:/switch/tekken3/config.txt` *(Note: Since the Switch output is capped at 1080p, 3x SSAA is overkill and may cause occasional frame drops to ~55 FPS)*.
   - **1x PS1 Native:** Authentic retro 1024x512 resolution for purists.
 - **Aspect Ratio Options:**
-  - **4:3 Original (Default):** Authentic retro proportions with clean black pillarbox sidebars.
-  - **16:9 Fullscreen Widescreen:** Fills the full 720p handheld or 1080p docked display without sidebars (toggleable in `sdmc:/switch/tekken3/config.txt`).
+  - **16:9 True Widescreen (Default):** Real panoramic 16:9 3D view using native-wide projection with expanded FOV, zero character stretching, and edge-to-edge top banners.
+  - **4:3 Original Retro:** Authentic retro proportions with clean black pillarbox sidebars (toggleable in-game or via `config.txt`).
 - **Pixel-Perfect Rendering:**
-  - Custom deko3d shader pipeline with bilinear edge inset filtering to eliminate PlayStation VRAM border bleed.
+  - Custom deko3d shader pipeline with bilinear edge inset filtering and native GPU line rasterization.
 - **2-Player Local Battles:**
-  - Automatic controller assignment supporting handheld mode, Pro Controllers, split Joy-Cons, and generic USB/wireless gamepads.
+  - Automatic controller assignment supporting handheld mode, Pro Controllers, detached single horizontal Joy-Cons (P1 & P2), split Joy-Cons, and generic USB/wireless gamepads.
+- **In-Game Settings Overlay:**
+  - Hold **Minus `[-]` for 1 second** during gameplay to change graphics, aspect ratio, and unlock settings in real time without restarting.
 - **All Game Modes Supported:**
   - Arcade, VS Battle, Team Battle, Survival, Time Attack, Practice, Tekken Force, and Tekken Ball.
 
@@ -125,30 +127,35 @@ You can customize graphical and gameplay settings by editing [`config.txt`](conf
 
 ```ini
 # ==============================================================================
-# Tekken 3 (USA) - Nintendo Switch Port Configuration
+# Tekken 3 (USA) - Graphics Configuration for Nintendo Switch
 # ==============================================================================
 # Place this file in the same directory as 'tekken3_nx.nro' on your microSD card
 # (e.g. sdmc:/switch/tekken3/config.txt).
 # If this file is missing, the game will automatically create it with default values.
 #
+# QUICK TIP:
+# You can also change these settings LIVE IN-GAME without touching this file!
+# Just HOLD the Minus [-] button for 1 second during gameplay to open the settings menu.
+#
 # ------------------------------------------------------------------------------
 # Internal Supersampling Anti-Aliasing (SSAA):
 #   1 = 1x PS1 Native (1024x512)
 #   2 = 2x HD (2048x1024) [RECOMMENDED]
-#       -> Sharp edges, locked 60 FPS on stock clocks
+#       -> Sharp edges, optimal configuration
 #   3 = 3x Ultra HD (3072x1536)
-#       -> Maximum polygon edge definition for 4K / large TV screens (Switch output is capped at 1080p)
+#       -> Maximum polygon edge definition for 4K / large TV screens
 # ------------------------------------------------------------------------------
 supersampling = 2
 
 # ------------------------------------------------------------------------------
 # Screen Aspect Ratio:
-#   OFF = 4:3 Original with black sidebars (Pillarbox) [RECOMMENDED]
+#   OFF = 4:3 Original with black sidebars (Pillarbox)
 #         -> Preserves authentic retro proportions for characters and stages.
-#   ON  = 16:9 Fullscreen Widescreen
-#         -> Fills the entire Switch screen and 16:9 TV display without bars.
+#   ON  = 16:9 True Widescreen (Native-Wide Sidecar) [RECOMMENDED]
+#         -> Real panoramic 16:9 3D view with expanded FOV, correct geometry,
+#            and non-stretched characters/stages (PC Tekken3Recompiled feature).
 # ------------------------------------------------------------------------------
-widescreen_16_9 = OFF
+widescreen_16_9 = ON
 
 # ------------------------------------------------------------------------------
 # Unlock All Characters & Modes:
@@ -159,6 +166,11 @@ widescreen_16_9 = OFF
 # ------------------------------------------------------------------------------
 unlocked_all_characters = 0
 ```
+
+> [!NOTE]
+> **Update — Live In-Game Configuration Menu:**
+> You do **not** need to connect your Switch to a PC or take out your microSD card to edit `config.txt`!
+> **Hold the Minus `[-]` button for over 1 second** at any point during gameplay to bring up the live settings overlay. From there you can toggle between 16:9 True Widescreen / 4:3 Retro, adjust Internal Supersampling (1x, 2x HD, 3x Ultra HD), and toggle character unlocks with immediate effect.
 
 ---
 
@@ -175,9 +187,9 @@ unlocked_all_characters = 0
 | **L1 / L2** | **L / ZL** | Customizable shortcut |
 | **R1 / R2** | **R / ZR** | Customizable shortcut |
 | **Start** | **+ (Plus)** | Pause Menu (Arcade / VS / Practice) |
-| **Select** | **- (Minus)** | Select / Options |
+| **Select** | **- (Minus)** | Select / Options *(Hold > 1s for In-Game Settings Menu)* |
 
-> **2-Player Mode:** Connecting a second controller automatically registers Player 2 for local multiplayer battles.
+> **2-Player Mode:** Connecting a second controller or sliding off Joy-Cons into single horizontal mode automatically registers Player 2 for instant local multiplayer battles.
 
 ---
 
