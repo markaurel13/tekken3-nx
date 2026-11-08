@@ -371,42 +371,14 @@ static Tekken3SelectorPlacement other_menu_place(
     if (p->opcode == 0x3A && p->y == 67 && p->height == 190 && p->width == 32) {
         return out;
     }
-    int is_tekken_ball = (psx_read_word(0x800afa88u) & 0xFFu) == 7u;
-    if (columns == 6 && is_tekken_ball) {
-        /* Tekken Ball: P1 name/portrait are on the left, P2 credit/portrait
-         * on the right. The ball settings (difficulty, ball type, damage %,
-         * and selector arrows) are centered in the middle and must NOT be split. */
-        if (p->y >= 270 && p->y < 310) {
-            if (p->x + p->width <= 160) {
-                out.role = TEKKEN3_SELECTOR_LEFT_PLAYER;
-                out.group_id = 1;
-                out.sidecar_dx = -margin;
-            } else if (p->x >= 208) {
-                out.role = TEKKEN3_SELECTOR_RIGHT_PLAYER;
-                out.group_id = 2;
-                out.sidecar_dx = margin;
-            }
-        } else if (p->y >= 310) {
-            if (p->x + p->width <= 85) {
-                out.role = TEKKEN3_SELECTOR_LEFT_PLAYER;
-                out.group_id = 1;
-                out.sidecar_dx = -margin;
-            } else if (p->x >= 280) {
-                out.role = TEKKEN3_SELECTOR_RIGHT_PLAYER;
-                out.group_id = 2;
-                out.sidecar_dx = margin;
-            }
-        }
-        return out;
-    }
     uint32_t t3_mode = psx_read_word(0x800afa88u) & 0xFFu;
     int screen_id = (int16_t)psx_read_half(0x800ae204u);
-    int is_vs_or_team = (t3_mode == 1u) || (t3_mode == 2u) || (screen_id == 10);
+    int is_vs_or_team = (t3_mode == 1u) || (t3_mode == 2u) || (t3_mode == 7u) || (screen_id == 10);
     if (is_vs_or_team) {
-        /* VS BATTLE SELECT and TEAM BATTLE SELECT keep their entire 4:3 layout
-         * centered in 16:9 as a single unified console across both roster pages
-         * (Tekken 3 7-col and TTT1 6-col), preventing the team boxes and names
-         * from jumping to the screen edges when switching pages.
+        /* VS BATTLE, TEAM BATTLE and TEKKEN BALL keep their entire 4:3 layout
+         * centered in 16:9 as a single unified console across all roster pages
+         * (Tekken 3 7-col and TTT1 6-col), preventing the boxes, ball, frames,
+         * and names from tearing apart or jumping to the screen edges.
          *
          * The handicap life bars are parked off-screen in PS1 4:3 (x <= 0 or
          * x >= 368, y >= 400) while players are choosing characters. In 16:9,
