@@ -1671,6 +1671,110 @@ void Deko3DRenderer::DrawRect(int x, int y, int w, int h, uint16_t color) {
     PushTriangle(v1, v3, v2);
 }
 
+void Deko3DRenderer::DrawLine(int x0, int y0, int x1, int y1, uint16_t color) {
+    if (x0 == x1 && y0 == y1) {
+        DrawRect(x0, y0, 1, 1, color);
+        return;
+    }
+
+    if (y0 == y1) {
+        // Línea horizontal inclusiva
+        int min_x = x0 < x1 ? x0 : x1;
+        int max_x = x0 > x1 ? x0 : x1;
+        DrawRect(min_x, y0, max_x - min_x + 1, 1, color);
+        return;
+    }
+
+    if (x0 == x1) {
+        // Línea vertical inclusiva
+        int min_y = y0 < y1 ? y0 : y1;
+        int max_y = y0 > y1 ? y0 : y1;
+        DrawRect(x0, min_y, 1, max_y - min_y + 1, color);
+        return;
+    }
+
+    // Línea diagonal: generar quad de 1 píxel de grosor
+    uint8_t rgba[4];
+    PS1ColorToRGBA8(color, rgba);
+    uint32_t flags = (m_semiEnabled ? 8u : 0u) | ((uint32_t)m_semiMode << 4u);
+
+    float fx0 = (float)x0, fy0 = (float)y0;
+    float fx1 = (float)x1, fy1 = (float)y1;
+    float dx = fx1 - fx0;
+    float dy = fy1 - fy0;
+    float len = sqrtf(dx * dx + dy * dy);
+    float nx = (-dy / len) * 0.5f;
+    float ny = (dx / len) * 0.5f;
+
+    PS1Vertex v0 = { {fx0 + nx, fy0 + ny}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {fx1 + nx, fy1 + ny}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {fx0 - nx, fy0 - ny}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v3 = { {fx1 - nx, fy1 - ny}, {0.0f, 0.0f}, {rgba[0], rgba[1], rgba[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+
+    PushTriangle(v0, v1, v2);
+    PushTriangle(v1, v3, v2);
+}
+
+void Deko3DRenderer::DrawShadedLine(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
+    if (x0 == x1 && y0 == y1) {
+        DrawRect(x0, y0, 1, 1, c0);
+        return;
+    }
+
+    uint8_t rgba0[4], rgba1[4];
+    PS1ColorToRGBA8(c0, rgba0);
+    PS1ColorToRGBA8(c1, rgba1);
+    uint32_t flags = (m_semiEnabled ? 8u : 0u) | ((uint32_t)m_semiMode << 4u);
+
+    if (y0 == y1) {
+        int min_x = x0 < x1 ? x0 : x1;
+        int max_x = x0 > x1 ? x0 : x1;
+        const uint8_t* c_min = (x0 < x1) ? rgba0 : rgba1;
+        const uint8_t* c_max = (x0 < x1) ? rgba1 : rgba0;
+        float fx0 = (float)min_x, fy0 = (float)y0;
+        float fx1 = (float)(max_x + 1), fy1 = (float)(y0 + 1);
+        PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {c_min[0], c_min[1], c_min[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {c_max[0], c_max[1], c_max[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {c_min[0], c_min[1], c_min[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {c_max[0], c_max[1], c_max[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PushTriangle(v0, v1, v2);
+        PushTriangle(v1, v3, v2);
+        return;
+    }
+
+    if (x0 == x1) {
+        int min_y = y0 < y1 ? y0 : y1;
+        int max_y = y0 > y1 ? y0 : y1;
+        const uint8_t* c_min = (y0 < y1) ? rgba0 : rgba1;
+        const uint8_t* c_max = (y0 < y1) ? rgba1 : rgba0;
+        float fx0 = (float)x0, fy0 = (float)min_y;
+        float fx1 = (float)(x0 + 1), fy1 = (float)(max_y + 1);
+        PS1Vertex v0 = { {fx0, fy0}, {0.0f, 0.0f}, {c_min[0], c_min[1], c_min[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PS1Vertex v1 = { {fx1, fy0}, {0.0f, 0.0f}, {c_min[0], c_min[1], c_min[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PS1Vertex v2 = { {fx0, fy1}, {0.0f, 0.0f}, {c_max[0], c_max[1], c_max[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PS1Vertex v3 = { {fx1, fy1}, {0.0f, 0.0f}, {c_max[0], c_max[1], c_max[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+        PushTriangle(v0, v1, v2);
+        PushTriangle(v1, v3, v2);
+        return;
+    }
+
+    float fx0 = (float)x0, fy0 = (float)y0;
+    float fx1 = (float)x1, fy1 = (float)y1;
+    float dx = fx1 - fx0;
+    float dy = fy1 - fy0;
+    float len = sqrtf(dx * dx + dy * dy);
+    float nx = (-dy / len) * 0.5f;
+    float ny = (dx / len) * 0.5f;
+
+    PS1Vertex v0 = { {fx0 + nx, fy0 + ny}, {0.0f, 0.0f}, {rgba0[0], rgba0[1], rgba0[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v1 = { {fx1 + nx, fy1 + ny}, {0.0f, 0.0f}, {rgba1[0], rgba1[1], rgba1[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v2 = { {fx0 - nx, fy0 - ny}, {0.0f, 0.0f}, {rgba0[0], rgba0[1], rgba0[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+    PS1Vertex v3 = { {fx1 - nx, fy1 - ny}, {0.0f, 0.0f}, {rgba1[0], rgba1[1], rgba1[2], 255}, {0, 0}, flags, 0, {0.0f, 0.0f} };
+
+    PushTriangle(v0, v1, v2);
+    PushTriangle(v1, v3, v2);
+}
+
 void Deko3DRenderer::DrawTexturedRect(int x, int y, int w, int h, int u, int v,
                                      uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
     DrawTexturedRectScaled(x, y, w, h, u, v, u + w, v + h, clut_x, clut_y, texpage);
@@ -2691,6 +2795,16 @@ static void dk_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
     Deko3DRenderer::Instance().DrawRect(x, y, w, h, color);
 }
 
+static void dk_draw_line(int x0, int y0, int x1, int y1, uint16_t color) {
+    sw_draw_line(x0, y0, x1, y1, color);
+    Deko3DRenderer::Instance().DrawLine(x0, y0, x1, y1, color);
+}
+
+static void dk_draw_shaded_line(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
+    sw_draw_shaded_line(x0, y0, c0, x1, y1, c1);
+    Deko3DRenderer::Instance().DrawShadedLine(x0, y0, c0, x1, y1, c1);
+}
+
 static void dk_draw_textured_rect(int x, int y, int w, int h, int u, int v,
                                  uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
     Deko3DRenderer::Instance().DrawTexturedRect(x, y, w, h, u, v, clut_x, clut_y, texpage);
@@ -2807,8 +2921,8 @@ static const GpuRenderBackend DEKO3D_BACKEND = {
     .draw_flat_rect                 = dk_draw_flat_rect,
     .draw_textured_rect             = dk_draw_textured_rect,
     .draw_textured_rect_scaled      = dk_draw_textured_rect_scaled,
-    .draw_line                      = sw_draw_line,
-    .draw_shaded_line               = sw_draw_shaded_line,
+    .draw_line                      = dk_draw_line,
+    .draw_shaded_line               = dk_draw_shaded_line,
     .render_display                 = dk_render_display,
     .render_display_hires           = sw_render_display_hires,
     .vram_write                     = sw_vram_write,

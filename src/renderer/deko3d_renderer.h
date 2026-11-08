@@ -126,6 +126,8 @@ public:
                                     uint16_t clut_x, uint16_t clut_y, uint16_t texpage, int raw);
 
     void DrawRect(int x, int y, int w, int h, uint16_t color);
+    void DrawLine(int x0, int y0, int x1, int y1, uint16_t color);
+    void DrawShadedLine(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1);
     void DrawTexturedRect(int x, int y, int w, int h, int u, int v,
                           uint16_t clut_x, uint16_t clut_y, uint16_t texpage);
     void DrawTexturedRectScaled(int x, int y, int w, int h,
