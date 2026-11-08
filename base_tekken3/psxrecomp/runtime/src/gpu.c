@@ -3639,6 +3639,22 @@ static void gp0_exec_mono_tri(void) {
     gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
 }
 
+static inline void ws_expand_header_banner_quad(int32_t *vx, const int32_t *vy) {
+    int32_t nw_off = ws_nw_offset();
+    if (nw_off > 0) {
+        if (vy[0] >= 16 && vy[2] <= 64 && (vy[2] - vy[0]) >= 20 && (vy[2] - vy[0]) <= 40 &&
+            vy[0] == vy[1] && vy[2] == vy[3]) {
+            if (vx[0] <= 0 && vx[1] >= 100 && vx[1] <= 180) {
+                vx[0] -= nw_off;
+                vx[2] -= nw_off;
+            } else if (vx[0] >= 200 && vx[0] <= 260 && vx[1] >= 360) {
+                vx[1] += nw_off;
+                vx[3] += nw_off;
+            }
+        }
+    }
+}
+
 /* Execute mono quad (GP0 0x28-0x2B) — two triangles: (0,1,2) and (2,1,3) */
 static void gp0_exec_mono_quad(void) {
     int semi_trans = (gp0_cmd_buf[0] >> 25) & 1;
@@ -3649,6 +3665,8 @@ static void gp0_exec_mono_quad(void) {
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
+
+    ws_expand_header_banner_quad(vx, vy);
 
     /* Full-screen filters are commonly encoded as an axis-aligned quad. Drawing
      * a semi-transparent quad as two independent triangles blends their shared
@@ -3757,6 +3775,9 @@ static void gp0_exec_shaded_quad(void) {
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
+
+    ws_expand_header_banner_quad(vx, vy);
+
     ws_nw_hud_shift_vertices(vx, 4);
     for (int i = 0; i < 4; i++) {
         vx[i] += draw_offset_x;
