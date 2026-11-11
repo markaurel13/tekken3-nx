@@ -67,7 +67,7 @@ sdmc:/
 
 ---
 
-## 🥊 2. Installing Tekken 3 Expanded
+## 🥊 2. Installing Tekken 3 Expanded (v1.4.1)
 
 **Tekken 3 Expanded** upgrades your game into the ultimate fighting experience:
 - **18 Additional Fighters from TTT1:** Kazuya, Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
