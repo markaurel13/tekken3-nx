@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,7 +34,6 @@ uint16_t psx_mod_read_half(uint32_t address);
 void psx_mod_write_half(uint32_t address, uint16_t value);
 uint32_t psx_mod_read_word(uint32_t address);
 void psx_mod_write_word(uint32_t address, uint32_t value);
-void psx_mod_write_bytes(uint32_t address, const void* src, size_t size);
 /*
  * Replace one guest instruction and route that address through the runtime's
  * executable-RAM path. Use this instead of psx_mod_write_word for code so a
@@ -95,9 +93,40 @@ int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h,
                                  const uint16_t* pixels);
 int psx_mod_gpu_high_vram_source(uint32_t address, uint32_t size);
 int psx_mod_gpu_high_vram_ready(void);
-/* [HighVram_CLASH_Diag]: the upper half's writer of the uploads that follow
- * (src/tekken3_stage_vram_write_watch flags writes on the stage's rects). */
-void psx_mod_gpu_high_vram_tag(const char* tag);
+
+/*
+ * Finer copies of a sprite's texture, in the upper half. A variable-size
+ * textured sprite (GP0 0x64-0x67) whose texture page (x, y, colour depth),
+ * UV-and-CLUT word and size match a slot is drawn over the same screen
+ * rectangle from the slot's hw x hh rectangle of 15-bit texels at (hx, hy),
+ * hy in 512..1023, uploaded beforehand. Only while the renderer draws above
+ * native resolution (gr_scale() > 1) and samples the half: at x1, or with
+ * Vulkan, the game's sprite is drawn as it is.
+ *
+ * set: slot 0..63; page = texture page x | y << 4 | colour depth << 7 (the
+ * texpage bits 0-4 and 7-8); uv = the sprite's word 2 (u | v << 8 | CLUT
+ * << 16). Returns 0 if refused. clear: the slot matches nothing again.
+ */
+int  psx_mod_gpu_sprite_hd_set(unsigned slot, unsigned page, uint32_t uv,
+                               unsigned w, unsigned h, unsigned hx, unsigned hy,
+                               unsigned hw, unsigned hh);
+void psx_mod_gpu_sprite_hd_clear(unsigned slot);
+
+/*
+ * The same for textured polygons, by region: a textured polygon (GP0
+ * 0x24-0x3F) whose texture page (x, y, colour depth) matches `page`, whose
+ * CLUT is on row clut_y at a column in [clut_x0, clut_x1), and whose UVs all
+ * lie in [u0, u0 + w] x [v0, v0 + h], is drawn from the hw x hh 15-bit texels
+ * at (hx, hy), hy in 512..1023, its UVs scaled to them; its colours, shading
+ * and blending stay the game's. The same conditions as the sprite slots
+ * (above native resolution, a renderer that samples the half). Slots 0..7;
+ * set returns 0 if refused.
+ */
+int  psx_mod_gpu_texture_hd_set(unsigned slot, unsigned page, unsigned clut_y,
+                                unsigned clut_x0, unsigned clut_x1,
+                                unsigned u0, unsigned v0, unsigned w, unsigned h,
+                                unsigned hx, unsigned hy, unsigned hw, unsigned hh);
+void psx_mod_gpu_texture_hd_clear(unsigned slot);
 
 /*
  * A mod's own audio player in save states (BS_SEC_MOD_AUDIO). bytes: the

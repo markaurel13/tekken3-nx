@@ -11,8 +11,6 @@
 #include "psx_runtime.h"
 #include "mod_plugins.h"
 #include "tekken3_ttt1_assets.h"
-#include "switch_file_io.h"
-#include "audio_limiter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,10 +28,6 @@ extern void __real_func_80040DF4(CPUState *cpu);
 extern void __real_func_800757A8(CPUState *cpu);
 extern void __real_func_8008D658(CPUState *cpu);
 extern void __real_func_8003CB84(CPUState *cpu);
-extern void __real_func_8003E170(CPUState *cpu);
-extern void __real_func_8003D6B0(CPUState *cpu);
-extern void __real_func_8003D7BC(CPUState *cpu);
-extern void func_8003DA68(CPUState *cpu);
 extern int tekken3_guest_character(unsigned id);
 
 /* LASER_SOUND: the lasers' sound, which TTT1 asks for outside its table
@@ -83,13 +77,14 @@ static int load_bank_for(unsigned p,int any_motion) {
     if(!root)return 0;
     char path[4096];
     if(snprintf(path,sizeof path,"%s/%s-sfx.jus",root,tekken3_guest_moves_prefix_for(p))>=(int)sizeof path)return 0;
+    extern const unsigned char *switch_cached_file_get(const char *path, size_t *out_size);
     size_t file_size = 0;
     const unsigned char *cached = switch_cached_file_get(path, &file_size);
-    if(!cached || file_size < 32){fprintf(stderr,"%s sounds: no sound pack\n",tekken3_guest_name_for(p));return 0;}
+    if(!cached || file_size < sizeof(unsigned char)*32){fprintf(stderr,"%s sounds: no sound pack\n",tekken3_guest_name_for(p));return 0;}
     const unsigned char *head = cached;
     unsigned size=rd32(head+8),count=rd32(head+12);
     int ok=rd32(head)==PACK_MAGIC && rd32(head+4)==1 && rd32(head+16)==44100 &&
-           size>=32 && size<=64u*1024*1024 && count<=SFX_INDEXES && size>=32+count*16 && size == file_size;
+           size>=32 && size<=64u*1024*1024 && count<=SFX_INDEXES && size>=32+count*16 && file_size == size;
     unsigned char *data=ok?malloc(size):NULL;
     if(data) {
         memcpy(data, cached, size);
@@ -163,10 +158,66 @@ static int metal_guest(unsigned p) {
     const char *prefix=tekken3_guest_data_prefix_for(p);
     return prefix && (!strcmp(prefix,"Jack2-TTT1") || !strcmp(prefix,"Pjack-TTT1"));
 }
+/* B174: Down held at round start, Mokujin's wood and Tetsujin's metal.
+ * T3's round start (8002A914) clears mokujin_down_flags (800954A8, one word
+ * per player) and, for a fighter whose ID is 15, sets it when Down (0x4000)
+ * is held: pad_held 800ADD68 for player 1 (in Tekken Force, mode 8, the pad
+ * of force_player_side 800B6BF4), p2_pad_held 800ADD6A for player 2. The
+ * hit handler ko_voice_choose (80040EA0) then answers a hit on that fighter
+ * with hit_sfx_mokujin (80041C40, table 8001A6F0) and a guard with
+ * 0x707A / 0x707B; a hit on Gun Jack (ID 16) with hit_sfx_metal (80041B70:
+ * 0x705D, 0x7098 / 0x7099 when hard). TTT1 arcade keeps both tests
+ * (80114114, 801141F0) but never writes its flag (80242E7C): the trick is
+ * dead there, and Tetsujin (sound profile 17) is in neither list. TTT PS2
+ * has it: Down held while the round loads, metal for Tetsujin, wood for
+ * Mokujin's other costumes. A guest has its own ID, so T3 never armed it for
+ * Tetsujin. Here: the same reading at the same moment for the Tetsujin guest
+ * (Kinjin included), and T3's metal (Gun Jack's samples) where T3 gives
+ * Mokujin his wood: hits by hit_sfx_metal, guards by 0x705D. */
+enum { PAD_HELD=0x800add68, P2_PAD_HELD=0x800add6a, MODE_BLOCK=0x800afa88, FORCE_PLAYER_SIDE=0x800b6bf4,
+       PAD_DOWN=0x4000, METAL_GUARD=0x705d,
+       GUARD_STRONG_RETURN=0x8004127c, GUARD_WEAK_RETURN=0x8004129c, HIT_LIST_RETURN=0x80041364,
+       GUARD_STRONG_RECORD=0x80041270, GUARD_WEAK_RECORD=0x80041290, HIT_LIST_RECORD=0x80041358 };
+static int tetsujin_down[2];
+static int tetsujin_guest(unsigned p) {
+    if(p>1 || tekken3_ttt1_player_motion_mode(p)!=2)return 0;
+    const char *prefix=tekken3_guest_data_prefix_for(p);
+    return prefix && !strcmp(prefix,"Tetsujin-TTT1");
+}
+static int tetsujin_metal(unsigned p){return p<2 && tetsujin_down[p] && tetsujin_guest(p);}
+/* TEKKEN3_TETSUJIN_DOWN=<players> (benches, tools/test_b174_tetsujin_metal.py):
+ * Down counts as held for those players ("2", "12"); the lite debug server
+ * has no pad 2. */
+void tekken3_ttt1_sfx_round_start(void) {
+    const char *forced=getenv("TEKKEN3_TETSUJIN_DOWN");
+    for(unsigned p=0;p<2;p++) {
+        tetsujin_down[p]=0;
+        if(!tetsujin_guest(p))continue;
+        uint32_t pad=P2_PAD_HELD;
+        if(!p)pad=psx_mod_read_word(MODE_BLOCK)!=8 || !psx_mod_read_word(FORCE_PLAYER_SIDE)?PAD_HELD:P2_PAD_HELD;
+        tetsujin_down[p]=(psx_mod_read_half(pad)&PAD_DOWN)!=0 || (forced && strchr(forced,(int)('1'+p)));
+        fprintf(stderr,"TTT1 characters: P%u Tetsujin round start, Down %s\n",p+1,
+                tetsujin_down[p]?"held: metal sounds":"not held");
+    }
+}
+/* The events kept for the replay: a guard on him is recorded as the metal
+ * one; the hit list's own event is dropped when hit_sfx_metal records its
+ * own (both from ko_voice_choose, before the sound plays). */
+extern void __real_func_8003352C(CPUState *cpu);
+void __wrap_func_8003352C(CPUState *cpu) {
+    uint32_t ra=cpu->gpr[31];
+    unsigned p=cpu->gpr[5]&0xffff,group=(cpu->gpr[6]&0xffff)>>12;
+    if((cpu->pc==0 || cpu->pc==0x8003352c) && in_fight() && p<2) {
+        if((ra==GUARD_STRONG_RECORD || ra==GUARD_WEAK_RECORD) && tetsujin_metal(p))cpu->gpr[6]=METAL_GUARD;
+        else if(ra==HIT_LIST_RECORD && (group==1 || group==7) && tetsujin_metal(p^1)){cpu->pc=ra;return;}
+    }
+    __real_func_8003352C(cpu);
+}
 void __wrap_func_80041CB4(CPUState *cpu) {
     uint32_t attacker=cpu->gpr[4];
     unsigned p=(attacker-ACTOR_BASE)/ACTOR_SIZE;
-    if((cpu->pc==0 || cpu->pc==0x80041cb4) && in_fight() && p<2 && attacker==ACTOR_BASE+p*ACTOR_SIZE && metal_guest(p^1)) {
+    if((cpu->pc==0 || cpu->pc==0x80041cb4) && in_fight() && p<2 && attacker==ACTOR_BASE+p*ACTOR_SIZE &&
+       (metal_guest(p^1) || tetsujin_metal(p^1))) {
         cpu->gpr[5]=ACTOR_BASE+(p^1)*ACTOR_SIZE;
         cpu->pc=0;
         func_80041B70(cpu);
@@ -192,6 +243,8 @@ void __wrap_func_80040DF4(CPUState *cpu) {
             if(!group) {
                 for(unsigned c=0;c<CHANNELS;c++)
                     if(channels[c].pcm && channels[c].index==index)memset(&channels[c],0,sizeof channels[c]);
+                static unsigned stopped;
+                if(stopped<400){stopped++;fprintf(stderr,"TTT1 characters: P%u stop %04X (index %u)\n",p+1,command,index);}
                 cpu->pc=cpu->gpr[31];return;
             }
             /* A marked TTT1 script sound. A script can make the other
@@ -199,6 +252,8 @@ void __wrap_func_80040DF4(CPUState *cpu) {
              * guest's own pack. */
             if(find(p,index,&s) || find(p^1,index,&s)) {
                 play(&s,index);
+                static unsigned logged;
+                if(logged<400){logged++;fprintf(stderr,"TTT1 characters: P%u sound %04X (index %u)\n",p+1,command,index);}
             }
             cpu->pc=cpu->gpr[31];return;
         }
@@ -208,11 +263,51 @@ void __wrap_func_80040DF4(CPUState *cpu) {
          * same number replaces T3's. The guard sound belongs to the
          * attacker's move. */
         uint32_t ra=cpu->gpr[31];
+        /* B174: Tetsujin with Down held. T3's metal plays as for Gun Jack:
+         * the answer of hit_sfx_metal, the guard as 0x705D, and an event of
+         * the hit list (any but the impacts, which 80041CB4 sends there)
+         * becomes hit_sfx_metal(attacker, victim), as T3 does for Gun Jack. */
+        if(p<2 && ((ra==METAL_HIT_RETURN && tetsujin_metal(p)) ||
+                   ((ra==GUARD_STRONG_RETURN || ra==GUARD_WEAK_RETURN) && tetsujin_metal(p)))) {
+            if(ra!=METAL_HIT_RETURN)cpu->gpr[5]=METAL_GUARD;
+            static unsigned said;
+            if(said<400){said++;fprintf(stderr,"TTT1 characters: P%u Tetsujin metal %04X (was %04X)\n",p+1,
+                                        (unsigned)cpu->gpr[5]&0xffff,command);}
+            __real_func_80040DF4(cpu);return;
+        }
+        if(p<2 && ra==HIT_LIST_RETURN && (group==1 || group==7) && tetsujin_metal(p^1)) {
+            cpu->gpr[4]=ACTOR_BASE+p*ACTOR_SIZE;
+            cpu->gpr[5]=ACTOR_BASE+(p^1)*ACTOR_SIZE;
+            cpu->pc=0;
+            func_80041B70(cpu);
+            return;
+        }
         /* The metallic answer to a hit on Jack-2 / P.Jack (80041B70 above): the
          * victim's own pack holds TTT1's clang. */
         if(ra==METAL_HIT_RETURN && p<2 && metal_guest(p) && find(p,index,&s)) {
             play(&s,index);
+            static unsigned said;
+            if(said<400){said++;fprintf(stderr,"TTT1 characters: P%u metal hit %04X (TTT1)\n",p+1,command);}
             cpu->pc=cpu->gpr[31];return;
+        }
+        /* F35: T3's swing (attack_start_sfx 0x80041B30) is always 0x604A,
+         * one frame before the first active one. A DR move names its own
+         * (tools/psp/dr_pack.py: DR's whoosh, a punch's or a kick's, as DR
+         * plays it), a marked category-6 entry of its record's sounds list,
+         * which T3 itself skips. TTT1 moves have none: unchanged. */
+        if(command==0x604a && guest_move(p)) {
+            uint32_t record=psx_mod_read_word(0x800a9228+p*0x188c+0x54);
+            uint32_t list=psx_mod_read_word(record+28);
+            for(unsigned i=0;list && i<4;i++) {
+                unsigned c=psx_mod_read_half(list+i*2);
+                if(c==0xffff)break;
+                if((c>>12)==6 && (c&SFX_MARK) && find(p,c&(SFX_MARK-1),&s)) {
+                    play(&s,c&(SFX_MARK-1));
+                    static unsigned said;
+                    if(said<400){said++;fprintf(stderr,"TTT1 characters: P%u swing %04X (DR)\n",p+1,c);}
+                    cpu->pc=cpu->gpr[31];return;
+                }
+            }
         }
         /* Unknown played by the CPU switches under pressure, guarding too. */
         if(ra==0x8004127c || ra==0x8004129c)tekken3_guest_note_guard(p);
@@ -220,6 +315,8 @@ void __wrap_func_80040DF4(CPUState *cpu) {
                   ((ra==0x8004127c || ra==0x8004129c) && guest_move(p^1))?(int)(p^1):-1;
         if(owner>=0 && find((unsigned)owner,index,&s)) {
             play(&s,index);
+            static unsigned logged;
+            if(logged<400){logged++;fprintf(stderr,"TTT1 characters: P%u engine sound %04X (TTT1)\n",p+1,command);}
             cpu->pc=cpu->gpr[31];return;
         }
     }
@@ -233,7 +330,8 @@ void __wrap_func_80040DF4(CPUState *cpu) {
  * said "Jin Kazama"; its pack carries the name TTT1's announcer gives it
  * when it is picked. It returns 0 once the name is playing, 1 when there is
  * none (actor+0x14 == 0x22, Eddy's third costume); a guest without a name
- * (Tetsujin) stays silent too. */
+ * in its pack stays silent too (Tetsujin before import 23: TTT1 splices its
+ * name from three samples, tools/ttt1/sfx.py NAME_RAW). */
 /* Set by each name call, cleared once "wins" may follow (8008D658 below);
  * name_guest: the name plays in our mixer, voice 1 keeps what it had. */
 static unsigned name_wait;
@@ -348,67 +446,20 @@ static int round_end_moves_on(void) {
     if(kind==6 || kind==7)return next==(psx_mod_read_word(0x800afa88)==7?240u:60u);
     return kind!=5 && pose_over(0) && pose_over(1);
 }
-static int s_round_skip_active = 0;
-
-void __wrap_func_8003E170(CPUState *cpu) {
-    if (cpu->pc == 0 || cpu->pc == 0x8003e170u) {
-        uint32_t round_end = psx_mod_read_word(ROUND_END);
-        if (round_end == 9 || round_end >= 10 || s_round_skip_active) {
-            cpu->pc = cpu->gpr[31];
-            return;
-        }
-    }
-    __real_func_8003E170(cpu);
-}
-
-void __wrap_func_8003D6B0(CPUState *cpu) {
-    if (cpu->pc == 0 || cpu->pc == 0x8003d6b0u) {
-        uint32_t round_end = psx_mod_read_word(ROUND_END);
-        if (round_end == 9 || round_end >= 10 || s_round_skip_active) {
-            cpu->pc = cpu->gpr[31];
-            return;
-        }
-    }
-    __real_func_8003D6B0(cpu);
-}
-
-void __wrap_func_8003D7BC(CPUState *cpu) {
-    if (cpu->pc == 0 || cpu->pc == 0x8003d7bcu) {
-        uint32_t round_end = psx_mod_read_word(ROUND_END);
-        if (round_end == 9 || round_end >= 10 || s_round_skip_active) {
-            func_8003DA68(cpu);
-            return;
-        }
-    }
-    __real_func_8003D7BC(cpu);
-}
-
 void __wrap_func_8003CB84(CPUState *cpu) {
     static unsigned held;
     if(cpu->pc==0 || cpu->pc==0x8003cb84) {
-        uint32_t round_end = psx_mod_read_word(ROUND_END);
-        if (round_end == 0) {
-            s_round_skip_active = 0;
-        } else if (round_end == 9 || round_end >= 10) {
-            s_round_skip_active = 1;
-        }
         round_frames++;
         int waiting=wins_task && round_frames-wins_checked<=2;
         if(!waiting)wins_task=0;
         if(wins_left && !waiting)wins_left--;
         if(!waiting && !wins_left)held=0;
-        else if(round_end==ROUND_END_POSE && round_end_moves_on() && held<HOLD_MAX) {
+        else if(psx_mod_read_word(ROUND_END)==ROUND_END_POSE && round_end_moves_on() && held<HOLD_MAX) {
             held++;
             cpu->pc=cpu->gpr[31];return;
         }
     }
     __real_func_8003CB84(cpu);
-    if(cpu->pc==0 || cpu->pc==cpu->gpr[31]) {
-        uint32_t round_end = psx_mod_read_word(ROUND_END);
-        if (round_end == 9 || round_end >= 10) {
-            s_round_skip_active = 1;
-        }
-    }
 }
 
 /* The lasers' own sound: 80116EA4 asks for it when the beam starts
@@ -434,15 +485,15 @@ void tekken3_ttt1_sfx_tick(void) {
     }
 }
 
-/* Called by the voices' spu_render wrapper: out is the stereo output about
- * to be queued; gain as for the voices (host SFX volume, 0..100). */
+/* Called by the voices' spu_render wrapper: out32 is the 32-bit stereo mix
+ * accumulator; gain as for the voices (host SFX volume, 0..100). */
 void tekken3_ttt1_sfx_mix(int32_t *out32,int frames,int audible,const int16_t main_volume[2],int gain) {
     /* SURVIVAL RESULTS (state 14) announces the fighter: a guest's name. */
     if(!in_fight() && psx_mod_read_half(0x800ae204)!=14){tekken3_ttt1_sfx_stop();return;}
     static int boost=-1;
     if(boost<0) {
         const char *v=getenv("TEKKEN3_TTT1_SFX_VOLUME");
-        boost=v?atoi(v):115;
+        boost=v?atoi(v):200;
         if(boost<0)boost=0;
         if(boost>800)boost=800;
     }
@@ -454,7 +505,7 @@ void tekken3_ttt1_sfx_mix(int32_t *out32,int frames,int audible,const int16_t ma
             int32_t value=(int16_t)(q[0]|(unsigned)q[1]<<8);
             /* The pack holds the arcade driver's level relative to the
              * voices; against T3's own sounds it plays quiet, so it gets a
-             * boost (TEKKEN3_TTT1_SFX_VOLUME, percent, default 115). */
+             * boost (TEKKEN3_TTT1_SFX_VOLUME, percent, default 200). */
             value=value*gain/100*boost/100;
             if(!audible)value=0;
             for(unsigned k=0;k<2;k++) {

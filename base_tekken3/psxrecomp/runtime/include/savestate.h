@@ -48,6 +48,7 @@ const char* savestate_root_dir(void);
  * (token empty when never scoped; used to restore after netplay sandbox). */
 const char* savestate_bios_token(void);
 uint32_t savestate_openbios_wordsum(void);
+extern int psx_savestate_hold;
 
 /* Integrity key last passed to savestate_configure (for sandbox rebind). */
 void savestate_get_integrity(uint32_t* bios_checksum, uint32_t* entry_pc);

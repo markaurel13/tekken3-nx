@@ -4,7 +4,6 @@
 #include "tekken3_ttt1_pack.h"
 #include "tekken3_ttt1_assets.h"
 #include "tekken3_fight_camera.h"
-#include "switch_file_io.h"
 #include "gpu_render.h"
 #include "gpu.h"
 #if defined(PSX_DEBUG_SERVER_LITE) || !defined(PSX_NO_DEBUG_TOOLS)
@@ -18,11 +17,19 @@
 extern unsigned tekken3_ttt1_motion_mode(void);
 extern unsigned tekken3_ttt1_player_motion_mode(unsigned player);
 extern int tekken3_devil_jin_player(unsigned player);
+extern int tekken3_ttt1_native_model_player(unsigned player);
+extern int tekken3_f32_native_drawn(unsigned player);   /* tekken3_ttt1_mod.c, F32 E5 */
+extern int tekken3_f32_e4_on(void);
 extern unsigned tekken3_native_moves_id(unsigned player);
 extern int tekken3_ttt1_roster_enabled(void);
+extern int tekken3_guest_character(unsigned id);
 extern void tekken3_ttt1_face_tick(unsigned player,int advanced,int expression,unsigned duration,unsigned flag);
+extern void tekken3_ttt1_shine_tick(unsigned player);
 extern void tekken3_jin_omen_face(unsigned player,unsigned character,int advanced,int expression,unsigned duration);
 extern int tekken3_cine_engine_frame(void);
+extern const unsigned char *switch_cached_file_get(const char *path, size_t *out_size);
+extern void switch_audio_pump_if_needed(void);
+extern void psx_mod_write_bytes(uint32_t addr, const void* src, size_t len);
 static uint32_t face_record[2];
 static unsigned face_frame[2];
 /* A player on TTT1 moves: a guest (mode 2) or a native fighter on its TTT1
@@ -49,19 +56,6 @@ extern void __real_func_8002E0BC(CPUState *cpu);
 extern void __real_func_8002A914(CPUState *cpu);
 extern void __real_func_8002D07C(CPUState *cpu);
 extern void func_8002CA84(CPUState *cpu);
-
-static inline uint64_t tek_get_ticks(void) {
-#if defined(__aarch64__) || defined(__SWITCH__)
-    uint64_t cnt;
-    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(cnt));
-    return cnt;
-#else
-    return 0;
-#endif
-}
-static inline double tek_ticks_to_ms(uint64_t ticks) {
-    return (double)ticks * (625.0 / 12.0) / 1e6;
-}
 /* Each player's guest has its own slot: player 1's guest is slot 0, player
  * 2's slot 1, so the two can be different characters. Guest move IDs are
  * 8192+i for slot 0 and 8192+4096+i for slot 1: a move that animates the
@@ -137,9 +131,15 @@ static GuestCombat slots[2];
  * the retired pack the fighter still plays. */
 enum { SWITCH_NONE, SWITCH_TO, SWITCH_UNDO };
 static GuestCombat retired[2];static int switching[2];
+/* The opponent stays on the pack she left (B147, GH#198): hit before the
+ * switch, it still plays that pack's reactions - a juggle, a long stun, a
+ * K.O. fall - whose records and links name the old pack. retired_records:
+ * where ready() had put that pack's records (still in the other area). */
+static uint32_t retired_records[2];
 static void free_combat(GuestCombat *c) {
     free(c->data);free(c->tables);free(c->events);free(c->hit_effect);free(c->hfx.data);
     memset(c,0,sizeof *c);
+    for(unsigned s=0;s<2;s++)if(c==&retired[s])retired_records[s]=0;
 }
 /* Unknown's hand bone that holds her blade (limb_position). */
 enum { BLADE_BONE=10 };
@@ -161,7 +161,7 @@ static unsigned alias_links;
 /* Where slot s's rows and counters start in the merged tables, beyond the
  * native ones: slot 1 follows slot 0's. */
 static unsigned rx_shift[2],push_shift[2],counter_shift[2];
-static uint32_t push_table=0x8001075cu;
+static uint32_t push_table=0x8001075c;           /* T3_PUSH */
 static uint32_t reactions_table=0x80010ce8u;
 static uint32_t counter_table=0x800177dcu;
 static uint32_t events_table=0x800971f8u;
@@ -172,6 +172,7 @@ uint32_t tekken3_ttt1_counter_base(void) {return counter_table;}
 uint32_t tekken3_ttt1_events_base(void) {return events_table;}
 uint32_t tekken3_ttt1_spacing_base(void) {return spacing_table;}
 extern void dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len);
+unsigned tekken3_ttt1_push_shift(unsigned s) {return s<2?push_shift[s]:0;}
 static uint32_t word(const unsigned char *p) {
     return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;
 }
@@ -183,7 +184,32 @@ static int record_owner(uint32_t record) {
        record<players[p].records+slots[p].count*56 && (record-players[p].records)%56==0)return (int)p;
     return -1;
 }
-static int source_record(uint32_t record) {return record_owner(record)>=0;}
+/* A record of the pack player s left at a switch (B147), whose area the
+ * next switch only reuses. */
+static int retired_record(unsigned s,uint32_t record) {
+    uint32_t base=retired_records[s];
+    return s<2 && base && retired[s].loaded && record>=base && record<base+retired[s].count*56 && (record-base)%56==0;
+}
+/* The merged reaction tables, two copies used in turn (install_tables): a
+ * fighter keeps pointers into the copy it was hit with (hit_entry +0x1A8,
+ * push_curve +0x110), which a switch's rebuild must not overwrite. */
+static uint32_t merged_buf[2],merged_events;static unsigned merged_side;
+/* The fighter `actor` still plays the pack player s left: its move, the
+ * move it shows or the one it has queued is one of its records. */
+static int on_retired(unsigned s,uint32_t actor) {
+    if(s>1 || !retired_records[s])return 0;
+    for(unsigned k=0;k<3;k++)if(retired_record(s,psx_mod_read_word(actor+(k==0?0x54:k==1?0x4c:0x1a4))))return 1;
+    return 0;
+}
+static int source_record(uint32_t record) {
+    return record_owner(record)>=0 || retired_record(0,record) || retired_record(1,record);
+}
+/* For the DR cameras (src/tekken3_dr_camera.c): player p's record as an
+ * index of its own pack, -1 when it is not one. */
+int tekken3_ttt1_record_index(unsigned p,uint32_t record) {
+    if(p>1 || !ttt1_moves(p) || record_owner(record)!=(int)p)return -1;
+    return (int)((record-players[p].records)/56);
+}
 /* A player's moves changed: a new guest at the selector, or a moveset drawn at
  * round start (Tetsujin). Everything read from the files goes and reloads.
  * Mid-fight the engine's slot still names our header, in guest memory about
@@ -199,6 +225,7 @@ static void follow_identity(unsigned s) {
     if(switching[s]==SWITCH_TO) {
         free_combat(&retired[s]);
         retired[s]=*c;memset(c,0,sizeof *c);
+        if(retired[s].loaded)retired_records[s]=players[s].records;
         /* Unknown's hit-effect packs (Unknown-TTT1-hiteffect.tim / .hfx) stay
          * identical across mid-fight style switches: keep them on the active
          * slot so ready() never re-reads or re-uploads 32 hitspark frames. */
@@ -281,16 +308,19 @@ void tekken3_ttt1_ball_boost(uint32_t actor) {
  * same 17 words, load delays filled instead of nops) to take the key from a
  * mask in the immediate at 0x800B1738, a bit per player whose moves are
  * Yoshimitsu's as the hit rules read them (fighter_moveset): the native on
- * either moveset, Mokujin drawing his, a guest on his TTT1 moves. Only while
- * such a guest fights, checked every frame (the fight's guest ticks stop
- * without one); otherwise the overlay's own words are put back. */
-enum { BALL_SWORD_SITE=0x800b1734u, BALL_SWORD_WORDS=17, BALL_SWORD_MASK=1, BALL_SWORD_KEY=4 };
+ * either moveset, Mokujin drawing his, a guest on his TTT1 moves. Kunimitsu's
+ * blade does the same (F31, GH#195): her TTT1 moves (moveset 26, hers,
+ * Unknown's or Tetsujin's on them) set the bit too. Only while such a guest
+ * fights, checked every frame (the fight's guest ticks stop without one);
+ * otherwise the overlay's own words are put back. */
+enum { BALL_SWORD_SITE=0x800b1734u, BALL_SWORD_WORDS=17, BALL_SWORD_MASK=1, BALL_SWORD_KEY=4,
+       BALL_SWORD_KUNIMITSU=26 };
 static const uint32_t ball_sword_stock[BALL_SWORD_WORDS]={
     0x86430016,0x00000000,0x14620023,0x24020607,0x96430064,0x00000000,0x10620003,0x24020706,0x1462001d,
     0x00000000,0x32e20008,0x1440001a,0x24020181,0x864300a0,0x00000000,0x10620016,0x00000000};
 static const uint32_t ball_sword_bits[BALL_SWORD_WORDS]={
     0x86410012,   /* lh   at, 0x12(s2)      player */
-    0x24030000,   /* li   v1, mask          bit 0/1: that player's moves are Yoshimitsu's */
+    0x24030000,   /* li   v1, mask          bit 0/1: that player's moves are Yoshimitsu's or Kunimitsu's */
     0x00231806,   /* srlv v1, v1, at */
     0x30630001,   /* andi v1, v1, 1 */
     0x96410064,   /* lhu  at, 0x64(s2)      move id */
@@ -311,7 +341,8 @@ void tekken3_ttt1_ball_sword_tick(void) {
     unsigned mask=0,guest=0,stock=1,patched=1;
     for(unsigned p=0;p<2;p++) {
         uint32_t actor=0x800a9228+p*0x188c;
-        if(fighter_moveset(actor)!=BALL_SWORD_KEY)continue;
+        unsigned moves=fighter_moveset(actor);
+        if(moves!=BALL_SWORD_KEY && moves!=BALL_SWORD_KUNIMITSU)continue;
         mask|=1u<<p;guest|=psx_mod_read_half(actor+0x16)==23;
     }
     for(unsigned i=0;i<BALL_SWORD_WORDS;i++) {
@@ -393,10 +424,6 @@ static void patch_base(uint32_t high_at,uint32_t low_at,unsigned reg,uint32_t ta
     uint32_t hi_insn = 0x3c000000u|(reg<<16)|((target+0x8000)>>16);
     uint32_t lo_insn = 0x24000000u|(reg<<21)|(reg<<16)|(target&65535);
     if ((high_at & 0x1FFFFFFFu) < 0x000B0000u) {
-        /* Main .text sites are hooked natively in compiled C via
-         * tekken3_ttt1_*_base(); bless the reference image first and then
-         * update RAM via psx_mod_write_word so neither dirty_ram_bitmap nor
-         * text_modified_bitmap is flagged for these .text pages. */
         dirty_ram_text_bless(high_at & 0x1FFFFFFFu, (const uint8_t *)&hi_insn, 4u);
         dirty_ram_text_bless(low_at & 0x1FFFFFFFu, (const uint8_t *)&lo_insn, 4u);
         psx_mod_write_word(high_at, hi_insn);
@@ -417,10 +444,10 @@ static int load_tables(unsigned s,const char *root) {
     uint32_t fixed=nr*42+np+nc*4;
     if(word(h)!=0x3154534a || word(h+4)!=2 || nr<633 || nr>4096 ||
        np<1420 || np>65534 || (np&1) || nc<269 || nc>4096 ||
-       bytes<32+fixed || bytes>1024*1024 || word(h+24) || word(h+28) || bytes != file_size) return 0;
-    unsigned char *p=malloc(bytes-32);if(!p) return 0;
+       bytes<32+fixed || bytes>1024*1024 || word(h+24) || word(h+28) || file_size != bytes){return 0;}
+    unsigned char *p=malloc(bytes-32);if(!p){return 0;}
     memcpy(p, cached + 32, bytes - 32);
-    int ok = 1;
+    int ok=1;
     unsigned chunks=0,event_offset=0,event_bytes=0;
     for(unsigned at=fixed;ok && at<bytes-32;) {
         if(bytes-32-at<8){ok=0;break;}
@@ -543,11 +570,11 @@ static int load_combat(unsigned s) {
     const unsigned char *cached = switch_cached_file_get(path, &file_size);
     if(!cached || file_size < 32) return 0;
     const unsigned char *header = cached;
-    if(word(header)!=0x314d554a || word(header+4)!=4) return 0;
+    if(word(header)!=0x314d554a || word(header+4)!=4){return 0;}
     c->size=word(header+8);c->count=word(header+12);c->neutral=word(header+16);c->records=word(header+28);
     uint32_t ro=word(header+20),rn=word(header+24);
-    if(c->size>16*1024*1024 || c->size != file_size || c->count>RECORDS_MAX || !c->count || c->neutral>=c->count || c->records!=32+c->count*16 || c->records+c->count*56>c->size || ro>c->size || rn>(c->size-ro)/4) return 0;
-    c->data=(unsigned char*)malloc(c->size);if(!c->data) return 0;
+    if(c->size>16*1024*1024 || c->count>RECORDS_MAX || !c->count || c->neutral>=c->count || c->records!=32+c->count*16 || c->records+c->count*56>c->size || ro>c->size || rn>(c->size-ro)/4 || file_size != c->size){return 0;}
+    c->data=(unsigned char*)malloc(c->size);if(!c->data){return 0;}
     memcpy(c->data, cached, c->size);
     int ok=1;
     for(unsigned i=0;ok && i<rn;i++) {
@@ -590,7 +617,6 @@ static int load_combat(unsigned s) {
         unsigned props=word(c->data+rp+32),j=0;
         do {compact+=4;} while(ttt1_pack_half(c->data+props+j++*4));
     }
-    switch_audio_pump_if_needed();
     c->guest=tekken3_guest_pool_alloc(s,compact,16);
     if(!c->guest){fprintf(stderr,"%s combat: cannot allocate %u guest bytes\n",tekken3_guest_name_for(s),compact);return 0;}
     c->guest_size=compact;
@@ -601,24 +627,21 @@ static int load_combat(unsigned s) {
         uint32_t clip=word(c->data+rp);
         if(cp>c->size || n>c->size-cp || clip>c->size-8)return 0;
         c->clip_addresses[i]=c->guest+cursor;c->clip_offsets[i]=clip;
-        psx_mod_write_bytes(c->guest+cursor, c->data+clip, 8);
+        for(unsigned j=0;j<8;j++)psx_mod_write_byte(c->guest+cursor+j,c->data[clip+j]);
         psx_mod_write_word(c->guest+rp,c->guest+cursor);cursor+=8;
         psx_mod_write_word(c->guest+rp+12,c->guest+cursor);
-        psx_mod_write_bytes(c->guest+cursor, c->data+cp, n);
+        for(unsigned j=0;j<n;j++)psx_mod_write_byte(c->guest+cursor+j,c->data[cp+j]);
         cursor+=n;
         uint32_t sounds=word(c->data+rp+28),props=word(c->data+rp+32);
         psx_mod_write_word(c->guest+rp+28,c->guest+cursor);
-        uint8_t sound_buf[8];
-        for(unsigned j=0;j<8;j++) sound_buf[j] = j<6?c->data[sounds+j]:255;
-        psx_mod_write_bytes(c->guest+cursor, sound_buf, 8);
+        for(unsigned j=0;j<8;j++)psx_mod_write_byte(c->guest+cursor+j,j<6?c->data[sounds+j]:255);
         cursor+=8;
         psx_mod_write_word(c->guest+rp+32,c->guest+cursor);
         unsigned j=0;
         do {native_effect_bones(s,c->data+props+j*4);
-            psx_mod_write_word(c->guest+cursor,word(c->data+props+j*4));cursor+=4;}
+            for(unsigned k=0;k<4;k++)psx_mod_write_byte(c->guest+cursor+k,c->data[props+j*4+k]);cursor+=4;}
         while(ttt1_pack_half(c->data+props+j++*4));
     }
-    switch_audio_pump_if_needed();
     uint32_t po=ro+rn*4;
     if(po>c->size-4)return 0;
     c->pattern_count=word(c->data+po);po+=4;if(c->pattern_count>1024)return 0;
@@ -627,7 +650,7 @@ static int load_combat(unsigned s) {
         unsigned command=c->data[po]|(unsigned)c->data[po+1]<<8,n=c->data[po+2]|(unsigned)c->data[po+3]<<8;po+=4;
         if(command!=0xe000+i || n<3 || n>65 || n*2>c->size-po)return 0;
         c->patterns[i]=tekken3_guest_pool_alloc(s,n*2,4);if(!c->patterns[i])return 0;
-        psx_mod_write_bytes(c->patterns[i], c->data+po, n*2);po+=n*2;
+        for(unsigned j=0;j<n*2;j++)psx_mod_write_byte(c->patterns[i]+j,c->data[po+j]);po+=n*2;
     }
     if(!load_tables(s,root)) {
         /* The fighter falls back to its T3 moves. Test builds (debug server
@@ -650,21 +673,62 @@ static int load_combat(unsigned s) {
  * and one event-script table. They hold the native entries followed by slot
  * 0's then slot 1's own, so slot 1's row, pushback and counter indices move
  * past slot 0's (rx_shift, push_shift, counter_shift); ready() applies them
- * to its records. Rebuilt whenever a slot is loaded or released. */
-static uint32_t merged,merged_events;
+ * to its records. Rebuilt whenever a slot is loaded or released, each time
+ * in the other of two copies (merged_buf): a fighter hit before the rebuild
+ * keeps its row and pushback curve (B147: Unknown's switch while her
+ * opponent flew pushed it with the new pack's bytes, across the stage). */
 enum { MERGED_BYTES=0x40000, EVENT_BYTES=0x20000 };
+/* Tekken 3's own tables, which the patched pairs name in SLUS_004.02. */
+enum { T3_EVENTS=0x800971f8, T3_ROWS=0x80010ce8, T3_PUSH=0x8001075c, T3_COUNTERS=0x800177dc };
+static void patch_bases(uint32_t events,uint32_t rows,uint32_t counters) {
+    patch_base(0x80041400,0x80041404,2,events);
+    patch_base(0x8002d7ac,0x8002d7b4,2,rows);
+    patch_base(0x80044590,0x80044598,2,rows);
+    patch_base(0x80044608,0x80044610,3,rows);
+    patch_base(0x80044664,0x8004466c,2,rows);
+    patch_base(0x800445c4,0x800445cc,2,counters);
+    patch_base(0x80044ac0,0x80044ac4,3,counters);
+}
+/* The fighter in player s's place plays Tekken 3 moves of its own: neither
+ * a guest nor a native on its TTT1 moves. The player's guest identity does
+ * not move when a team's next member or the attract mode's next fight is a
+ * native (B129, GH#178): its slot is the previous fighter's. */
+static int native_on_t3_moves(unsigned s) {
+    if(!tekken3_ttt1_roster_enabled() || tekken3_ttt1_native_model_player(s))return 0;
+    unsigned id=psx_mod_read_half(0x800a9240+s*0x188c);
+    return tekken3_guest_character(id)<0 && tekken3_native_moves_id(s)!=id;
+}
 static void install_tables(void) {
-    static unsigned installed[2]={~0u,~0u};
+    static unsigned installed[2];
     unsigned key[2];
     /* A slot left by its player (a native back on Tekken 3 moves: its
      * identity moved on, its moves are not played) is no part of them. */
     for(unsigned s=0;s<2;s++)key[s]=slots[s].loaded && slots[s].tables &&
-        (ttt1_moves(s) || slots[s].generation==tekken3_guest_moves_generation(s))?slots[s].generation:0;
-    if(key[0]==installed[0] && key[1]==installed[1])return;
+        (ttt1_moves(s) || (slots[s].generation==tekken3_guest_moves_generation(s) && !native_on_t3_moves(s)))?
+        slots[s].generation:0;
+    /* What the engine reads now, from its code: a save state brings its own. */
+    uint32_t high=psx_mod_read_word(0x8002d7ac),low=psx_mod_read_word(0x8002d7b4);
+    uint32_t engine=(high<<16)+(uint32_t)(int16_t)low;
+    int on_copy=engine && (engine==merged_buf[0] || engine==merged_buf[1]);
+    if(on_copy && engine==merged_buf[merged_side] && key[0]==installed[0] && key[1]==installed[1])return;
     const GuestCombat *first=key[0]?&slots[0]:key[1]?&slots[1]:NULL;
-    if(!first)return;
-    if(!merged && !(merged=psx_mod_alloc_guest_memory(MERGED_BYTES,16)))return;
+    if(!first) {
+        /* Nobody on TTT1 moves: the engine reads Tekken 3's tables again,
+         * not the last fight's copy (B129). */
+        installed[0]=installed[1]=0;
+        if(!on_copy)return;
+        patch_bases(T3_EVENTS,T3_ROWS,T3_COUNTERS);
+        events_table=T3_EVENTS;reactions_table=T3_ROWS;counter_table=T3_COUNTERS;
+        push_table=T3_PUSH;
+        fprintf(stderr,"TTT1 characters: reaction tables back to Tekken 3's\n");
+        return;
+    }
+    /* The copy the engine does not read: the one it reads stays whole for
+     * the fighters already hit. */
+    unsigned side=on_copy?engine!=merged_buf[0]?0:1:merged_side;
+    if(!merged_buf[side] && !(merged_buf[side]=psx_mod_alloc_guest_memory(MERGED_BYTES,16)))return;
     if(!merged_events && !(merged_events=psx_mod_alloc_guest_memory(EVENT_BYTES,16)))return;
+    uint32_t merged=merged_buf[side];
     unsigned rows=NATIVE_ROWS,push=NATIVE_PUSH,counters=NATIVE_COUNTERS;
     for(unsigned s=0;s<2;s++) {
         rx_shift[s]=rows-NATIVE_ROWS;push_shift[s]=push-NATIVE_PUSH;counter_shift[s]=counters-NATIVE_COUNTERS;
@@ -679,8 +743,8 @@ static void install_tables(void) {
     psx_mod_write_bytes(push_at, native+first->nr*42, NATIVE_PUSH); push_at += NATIVE_PUSH;
     psx_mod_write_bytes(counter_at, native+first->nr*42+first->np, NATIVE_COUNTERS*4); counter_at += NATIVE_COUNTERS*4;
     switch_audio_pump_if_needed();
-    static uint16_t s_row_batch[2048 * 21];
-    static uint16_t s_cnt_batch[2048 * 2];
+    static uint16_t s_row_batch[4096 * 21];
+    static uint16_t s_cnt_batch[4096 * 2];
     for(unsigned s=0;s<2;s++) {
         if(!key[s])continue;
         const GuestCombat *c=&slots[s];
@@ -715,17 +779,21 @@ static void install_tables(void) {
         }
     }
     /* Event scripts: native IDs below 470, then each guest's by TTT1 script
-     * ID (a shared ID names the same script, the first slot's is kept). */
+     * ID (a shared ID names the same script, the first slot's is kept), then
+     * those of a pack left at a switch that the others lack: its records
+     * still play on the opponent (B147). */
     uint32_t cursor=merged_events+4096*4;
     psx_mod_write_word(cursor,0);
     static uint32_t s_evt_table[4096];
     for(unsigned i=0;i<4096;i++) s_evt_table[i] = i<470 ? psx_mod_read_word(0x800971f8+i*4) : cursor;
     psx_mod_write_bytes(merged_events, s_evt_table, sizeof(s_evt_table));
     cursor+=4;
-    for(unsigned s=0;s<2;s++) {
-        if(!key[s])continue;
-        const unsigned char *e=slots[s].events;
-        for(unsigned i=0;i<slots[s].event_bytes;) {
+    for(unsigned k=0;k<4;k++) {
+        unsigned s=k&1;
+        if(k<2?!key[s]:!retired_records[s])continue;
+        const GuestCombat *g=k<2?&slots[s]:&retired[s];
+        const unsigned char *e=g->events;
+        for(unsigned i=0;e && i<g->event_bytes;) {
             unsigned id=word(e+i),ne=word(e+i+4);i+=8;
             if(s_evt_table[id]==merged_events+4096*4 &&
                cursor+ne*4<=merged_events+EVENT_BYTES) {
@@ -738,17 +806,9 @@ static void install_tables(void) {
         }
     }
     switch_audio_pump_if_needed();
-    events_table=merged_events;
-    reactions_table=merged;
-    counter_table=counter_base;
-    push_table=push_base;
-    patch_base(0x80041400,0x80041404,2,merged_events);
-    patch_base(0x8002d7ac,0x8002d7b4,2,merged);
-    patch_base(0x80044590,0x80044598,2,merged);
-    patch_base(0x80044608,0x80044610,3,merged);
-    patch_base(0x80044664,0x8004466c,2,merged);
-    patch_base(0x800445c4,0x800445cc,2,counter_base);
-    patch_base(0x80044ac0,0x80044ac4,3,counter_base);
+    patch_bases(merged_events,merged,counter_base);
+    events_table=merged_events;reactions_table=merged;counter_table=counter_base;
+    push_table=push_base;merged_side=side;
     installed[0]=key[0];installed[1]=key[1];
     fprintf(stderr,"TTT1 characters: reaction tables merged: %u rows, %u pushback bytes, %u counters (%s%s%s)\n",
             rows,push,counters,key[0]?tekken3_guest_name_for(0):"",key[0]&&key[1]?" + ":"",key[1]?tekken3_guest_name_for(1):"");
@@ -842,9 +902,7 @@ static void gon_breath_rule(unsigned player) {
         return;
     }
 }
-static void preload_player_hit_effects(void);
 static int ready(unsigned player) {
-    if(psx_mod_read_word(0x800ae204)!=8)return 0;
     /* Diagnostic ponctuel sous TEKKEN3_GUEST_WHY=1 : dire QUELLE garde bloque.
      * load_combat() a plusieurs sorties muettes. */
     if(getenv("TEKKEN3_GUEST_WHY")) {
@@ -877,8 +935,6 @@ static int ready(unsigned player) {
        p->generation!=c->generation || p->rx_shift!=rx_shift[player] ||
        p->counter_shift!=counter_shift[player] || p->other_records!=other_records ||
        p->other_generation!=slots[other].generation || p->links!=alias_links) {
-        uint64_t t_alias0 = tek_get_ticks();
-        switch_audio_pump_if_needed();
         uint32_t source=psx_mod_read_word(base+8);
         p->original_alias=psx_mod_read_word(base+12);
         if(!p->alias_table)p->alias_table=tekken3_guest_pool_alloc(player,ALIAS_ENTRIES*4,16);
@@ -889,6 +945,7 @@ static int ready(unsigned player) {
         for(unsigned i=0;i<64;i+=4)psx_mod_write_word(p->header+i,psx_mod_read_word(base+i));
         uint32_t idle=p->records+c->neutral*56;
         unsigned native_count=psx_mod_read_word(base)>>16;
+        switch_audio_pump_if_needed();
         static unsigned char keep[4023];
         keep_native_reactions(c,p->original_alias,source-56,keep);
 
@@ -908,8 +965,11 @@ static int ready(unsigned player) {
             for(unsigned i=0;i<ALIAS_ENTRIES;i++) alias_ptr[i] = idle;
             for(unsigned i=0;i<4023;i++) {
                 uint32_t original=psx_mod_read_word(p->original_alias+i*4);
+                /* Shared engine reactions remain available, and so do the
+                 * reactions stored in the Jin cache. Its other moves (attacks)
+                 * must never animate the guest. */
                 if(original>=source && original<source+native_count*56 && !keep[i])continue;
-                if(original==source-56)continue;
+                if(original==source-56)continue; /* native missing-alias record */
                 alias_ptr[i] = original;
             }
         } else {
@@ -948,11 +1008,23 @@ static int ready(unsigned player) {
                 else psx_mod_write_word(dst+52,counter+counter_shift[player]);
             }
             uint32_t limbs=word(c->data+c->records+i*56+40);
+            /* A first limb of 24 or more sends T3's hit test (80047BBC) to
+             * the effect-object capsules used by True Ogre's fire breath,
+             * so the laser's actor capsule would never be tested. Keep the
+             * beam type aside and give the engine an ordinary limb: the
+             * sweep wrapper replaces its capsule with the beam anyway. */
+            /* True Ogre on his TTT1 moves: TTT1 breathes his fire through
+             * the laser's virtual limb 24, T3 through its own effect limb 24
+             * (0x8006F0F4 each active frame, then the effect-object capsules):
+             * the engine's flames, their hit and sound, on his T3 model. */
             int fire=(limbs&255)==TTT1_PACK_LASER_LIMB && tekken3_native_moves_id(player)==TRUE_OGRE;
             if(p->lasers)p->lasers[i]=(limbs&255)==TTT1_PACK_LASER_LIMB && !fire?(limbs>>8&255)|0x80:0;
             if(fire)limbs=(limbs&~0xffffu)|EFFECT_FIRE_LIMB;
             else if((limbs&255)==TTT1_PACK_LASER_LIMB)limbs=(limbs&~255u)|17;
+            /* The mist: the engine's own cloud, its hit and its sound. */
             else if((limbs&255)==TTT1_PACK_MIST_LIMB)limbs=(limbs&~255u)|EFFECT_MIST_LIMB;
+            /* Blade points: kept aside for the capsules, the hand for the
+             * engine (the same reason as the laser). */
             int blade=0;
             for(unsigned k=0;k<4;k++) {
                 unsigned b=limbs>>(8*k)&255;
@@ -1001,20 +1073,8 @@ static int ready(unsigned player) {
         p->native_base=base;p->native_common=common;p->source=source;
         p->generation=c->generation;p->rx_shift=rx_shift[player];p->counter_shift=counter_shift[player];
         p->other_records=other_records;p->other_generation=slots[other].generation;p->links=alias_links;
-        preload_player_hit_effects();
-        uint64_t t_alias1 = tek_get_ticks();
-        static const char* s_last_alias_fighter[2] = {NULL, NULL};
-        const char* cur_fighter = tekken3_guest_name_for(player);
-        if (s_last_alias_fighter[player] != cur_fighter) {
-            s_last_alias_fighter[player] = cur_fighter;
-            fprintf(stdout,"[MOD_LOAD_ALIAS] %s P%u time=%.2fms (original=%08X custom=%08X records=%08X count=%u)\n",
-                    cur_fighter,player+1,tek_ticks_to_ms(t_alias1 - t_alias0),
-                    p->original_alias,p->alias_table,p->records,c->count);
-#ifndef NDEBUG
-            fprintf(stderr,"%s combat: installed P%u alias table, original=%08X custom=%08X records=%08X\n",
-                    cur_fighter,player+1,p->original_alias,p->alias_table,p->records);
-#endif
-        }
+        fprintf(stderr,"%s combat: installed P%u alias table, original=%08X custom=%08X records=%08X\n",
+                tekken3_guest_name_for(player),player+1,p->original_alias,p->alias_table,p->records);
     }
     unsigned opponent=psx_mod_read_half(0x800a9228+other*0x188c+0x16);
     /* The shared T3 move keys are 0..18; a guest opponent (native key 23)
@@ -1040,9 +1100,13 @@ static int ready(unsigned player) {
  * (tekken3_guest_draw_moveset), and their moves are rebuilt
  * before the routine puts the fighters back in their stance. Only on entry:
  * a sliced call resumes through this wrapper with pc at the resume point. */
+void tekken3_ttt1_sfx_round_start(void);
 void __wrap_func_8002A914(CPUState *cpu) {
     if((cpu->pc==0 || cpu->pc==0x8002a914) && tekken3_ttt1_roster_enabled())
         for(unsigned p=0;p<2;p++)if(tekken3_guest_draw_moveset(p))ready(p);
+    /* B174: T3 reads Down for Mokujin's wood in this routine (0x8002AA44):
+     * the same for Tetsujin's metal (tekken3_ttt1_sfx.c). */
+    if(cpu->pc==0 || cpu->pc==0x8002a914)tekken3_ttt1_sfx_round_start();
     __real_func_8002A914(cpu);
 }
 /* As a fight loads (0x8006A158), 0x8002D07C links the two players' alias
@@ -1112,12 +1176,16 @@ void __wrap_func_8002D264(CPUState *cpu) {
         for(unsigned s=0;s<2 && !g;s++)if(slots[s].loaded)
             for(unsigned i=0;i<slots[s].group_count;i++)if(slots[s].groups[i].source==(param&0x3fff)){g=&slots[s].groups[i];owner=s;}
         if(g) {
-            for(unsigned s=0;s<2;s++)if(slots[s].loaded)for(unsigned i=0;i<slots[s].count;i++)
-                if(slots[s].clip_addresses[i]==cpu->gpr[4]) {
-                    unsigned clip=word(slots[s].data+32+i*16),match=0;
-                    for(unsigned k=0;k<g->count;k++)if(g->clips[k]==clip)match=1;
+            /* The packs left at a switch too: their clips still play on the
+             * opponent (B147), as pose() finds them. */
+            for(unsigned k=0;k<4;k++) {
+                const GuestCombat *pk=k<2?&slots[k]:&retired[k-2];
+                if(pk->loaded)for(unsigned i=0;i<pk->count;i++)if(pk->clip_addresses[i]==cpu->gpr[4]) {
+                    unsigned clip=word(pk->data+32+i*16),match=0;
+                    for(unsigned n=0;n<g->count;n++)if(g->clips[n]==clip)match=1;
                     cpu->gpr[2]=match;cpu->pc=cpu->gpr[31];return;
                 }
+            }
             if(g->native==0xffff){cpu->gpr[2]=t3_move_in_group(owner,g,cpu->gpr[4]);cpu->pc=cpu->gpr[31];return;}
             cpu->gpr[5]=g->native;
         } else {cpu->gpr[2]=0;cpu->pc=cpu->gpr[31];return;}
@@ -1351,6 +1419,37 @@ extern void __real_func_800458C8(CPUState *cpu);
 void __wrap_func_800458C8(CPUState *cpu) {
     uint32_t actor=cpu->pc==0 || cpu->pc==0x800458c8?cpu->gpr[4]:cpu->gpr[18];
     int p=actor==0x800a9228?0:actor==0x800aaab4?1:-1;
+    /* F32 E4: native Yoshimitsu drawn by his TTT1 model, on his T3 moves (B48: his win poses light
+     * on bones 18 / 19, the tip and middle of his PS1 sword). On the TTT1 model those bones are
+     * accessories: the slots hold the TTT1 blade's tip and middle (the cabinet's glow points, bone
+     * 10's frame: 0x80193A44) while the properties run. */
+    if(p>=0 && tekken3_f32_e4_on() && tekken3_f32_native_drawn((unsigned)p) &&
+       psx_mod_read_half(actor+0x18)==YOSHIMITSU) {
+        static const int32_t blade[2][3]={{-50,0,950},{40,0,575}};
+        uint32_t saved[2][3],m=actor+0x8f4+BLADE_BONE*68;
+        static int probe=-1;
+        if(probe<0)probe=getenv("TEKKEN3_F32_HAND_PROBE")!=NULL;
+        uint32_t record=psx_mod_read_word(actor+0x54),prop=record?psx_mod_read_word(record+32):0;
+        unsigned frame=psx_mod_read_half(actor+0x58);
+        for(unsigned i=0;probe && prop && i<64;i++,prop+=4) {
+            unsigned at=psx_mod_read_half(prop),op=psx_mod_read_half(prop+2);
+            if(!at)break;
+            if(at==frame && op>>8>=6 && op>>8<=10 && ((op&255)==T3_SWORD_TIP || (op&255)==T3_SWORD_MID))
+                fprintf(stderr,"F32 sword prop: P%d kind %u bone %u frame %u\n",p+1,op>>8,op&255,frame);
+        }
+        for(unsigned k=0;k<2;k++) {
+            uint32_t at=actor+0x908+(T3_SWORD_TIP+k)*68;
+            for(unsigned i=0;i<3;i++) {
+                int32_t v=(int32_t)psx_mod_read_word(m+0x14+i*4);
+                for(unsigned j=0;j<3;j++)v+=((int16_t)psx_mod_read_half(m+(i*3+j)*2)*blade[k][j])>>12;
+                saved[k][i]=psx_mod_read_word(at+i*4);psx_mod_write_word(at+i*4,(uint32_t)v);
+            }
+        }
+        __real_func_800458C8(cpu);
+        for(unsigned k=0;k<2;k++)for(unsigned i=0;i<3;i++)
+            psx_mod_write_word(actor+0x908+(T3_SWORD_TIP+k)*68+i*4,saved[k][i]);
+        return;
+    }
     if(p<0 || !tekken3_guest_switches_on_button((unsigned)p) || tekken3_guest_moveset((unsigned)p)!=YOSHIMITSU_MOVES) {
         __real_func_800458C8(cpu);
         return;
@@ -1368,12 +1467,12 @@ void __wrap_func_800458C8(CPUState *cpu) {
 /* The limbs of player p's record: kept aside for a blade, else the engine's. */
 /* A record of player p's pack that the defender plays as its own (DEFR):
  * the Jacks' haywire after Devil or Angel's laser. */
-static int defender_record(unsigned p,uint32_t record) {
-    uint32_t base=players[p].records;
-    if(!base || record<base || (record-base)%56 || (record-base)/56>=slots[p].count)return 0;
-    for(unsigned i=0;i<slots[p].defender_count;i++)if(slots[p].defender_records[i]==(record-base)/56)return 1;
+static int defender_record_in(const GuestCombat *c,uint32_t base,uint32_t record) {
+    if(!base || record<base || (record-base)%56 || (record-base)/56>=c->count)return 0;
+    for(unsigned i=0;i<c->defender_count;i++)if(c->defender_records[i]==(record-base)/56)return 1;
     return 0;
 }
+static int defender_record(unsigned p,uint32_t record) {return defender_record_in(&slots[p],players[p].records,record);}
 static uint32_t record_limbs(unsigned p,uint32_t record) {
     uint32_t base=players[p].records;
     if(players[p].blades && record>=base && (record-base)%56==0 && (record-base)/56<slots[p].count &&
@@ -1508,8 +1607,10 @@ void __wrap_func_8006A3BC(CPUState *cpu) {
 /* The defender's own rules on a laser reaction (condition SELF_MOVESET), and
  * every rule of the moves they lead to (DEFR): the Jacks' haywire, whose
  * links are automatic (command 0x0010). */
-static int defender_rule(uint32_t actor,unsigned owner,uint32_t entry) {
-    return psx_mod_read_byte(entry+3)==SELF_MOVESET || defender_record(owner,psx_mod_read_word(actor+0x54));
+static int defender_rule(uint32_t actor,unsigned owner,int old,uint32_t entry) {
+    uint32_t record=psx_mod_read_word(actor+0x54);
+    return psx_mod_read_byte(entry+3)==SELF_MOVESET ||
+           (old?defender_record_in(&retired[owner],retired_records[owner],record):defender_record(owner,record));
 }
 /* The victim's way out of a reaction (B73). The stagger that Jin's u/f+4
  * leaves (record 707, TTT1 0x8007940C, a record every TTT1 character has)
@@ -1524,15 +1625,17 @@ static int defender_rule(uint32_t actor,unsigned owner,uint32_t entry) {
  * chain throws among them): those still need the attacker's say. Not during
  * the attacker's throw (+0x74): a throw's victim clip goes with the
  * thrower's (__wrap_func_8002D178). */
-static int reaction_exit(unsigned owner,uint32_t actor,uint32_t entry) {
-    const GuestCombat *c=&slots[owner];
-    uint32_t base=players[owner].records,record=psx_mod_read_word(actor+0x54);
+static int reaction_exit(unsigned owner,int old,uint32_t actor,uint32_t entry) {
+    /* old: the victim plays the pack its attacker left at a switch (B147). */
+    const GuestCombat *c=old?&retired[owner]:&slots[owner];
+    uint32_t base=old?retired_records[owner]:players[owner].records,record=psx_mod_read_word(actor+0x54);
     if(!c->reaction_records[(record-base)/56])return 0;
     if((int16_t)psx_mod_read_half(0x800a9228+owner*0x188c+0x74)>0)return 0;
     unsigned id=psx_mod_read_half(entry+6);
     if(id<slot_base(owner) || id>=slot_base(owner)+c->count)return 0;
     uint32_t target=base+(id-slot_base(owner))*56;
-    return !record_limbs(owner,target) && !psx_mod_read_half(target+0x14);
+    uint32_t limbs=old?psx_mod_read_word(psx_mod_read_word(target+40)):record_limbs(owner,target);
+    return !limbs && !psx_mod_read_half(target+0x14);
 }
 /* A cancel rule on the opponent (fragment DYNC) whose row carries
  * OPPONENT_APPLIED (tools/ttt1/moves.py: Jin's Omen, more damage against
@@ -1561,18 +1664,21 @@ void __wrap_func_8002CC28(CPUState *cpu) {
         cpu->gpr[2]=0;cpu->pc=cpu->gpr[31];return;
     }
     if((cpu->pc==0 || cpu->pc==0x8002cc28) && cpu->gpr[4]==0x800a9228+player*0x188c) {
-        int owner=record_owner(psx_mod_read_word(cpu->gpr[4]+0x54));
+        uint32_t current=psx_mod_read_word(cpu->gpr[4]+0x54);
+        int owner=record_owner(current),old=0;
+        for(unsigned s=0;s<2 && owner<0;s++)if(retired_record(s,current)){owner=(int)s;old=1;}
+        const GuestCombat *pack=owner<0?NULL:old?&retired[owner]:&slots[owner];
         unsigned command=psx_mod_read_half(cpu->gpr[5]);
         /* Only that guest's own lists: the engine's look-ahead at the end of
          * a clip reads the victim's own list (B42, __wrap_func_8002D178),
          * native or, on a TTT1 pack (a guest, a native on its TTT1 moves),
          * in guest memory too - refused, it fell back on the guest's dash
          * and was hit from behind whatever its pad (B68). */
-        uint32_t lists=owner>=0?slots[owner].guest:0;
-        if(owner>=0 && (unsigned)owner!=player && command!=0x10 && (command<0xc000 || command>=0xe000) &&
-           cpu->gpr[5]>=lists && cpu->gpr[5]-lists<slots[owner].guest_size &&
-           !defender_rule(cpu->gpr[4],(unsigned)owner,cpu->gpr[5]) &&
-           !reaction_exit((unsigned)owner,cpu->gpr[4],cpu->gpr[5])) {
+        uint32_t lists=pack?pack->guest:0;
+        if(pack && (unsigned)owner!=player && command!=0x10 && (command<0xc000 || command>=0xe000) &&
+           cpu->gpr[5]>=lists && cpu->gpr[5]-lists<pack->guest_size &&
+           !defender_rule(cpu->gpr[4],(unsigned)owner,old,cpu->gpr[5]) &&
+           !reaction_exit((unsigned)owner,old,cpu->gpr[4],cpu->gpr[5])) {
             cpu->gpr[2]=0;cpu->pc=cpu->gpr[31];return;
         }
     }
@@ -1600,25 +1706,40 @@ void __wrap_func_8002CC28(CPUState *cpu) {
  * own records of the two aliases (the importer keeps them in the pack).
  * Everything else, and every attacker on Tekken 3 moves, goes to the original
  * function untouched. */
-static unsigned guest_alias(unsigned slot,unsigned source_alias) {
-    const GuestCombat *c=&slots[slot];
+static unsigned guest_alias_in(const GuestCombat *c,unsigned slot,unsigned source_alias) {
     if(!c->loaded || !c->data || source_alias>=5515)return 0;
     uint32_t record=c->source_aliases[source_alias];
     if(!record)return 0;
     for(unsigned i=0;i<c->count;i++)if(word(c->data+36+i*16)==record)return slot_base(slot)+i;
     return 0;
 }
+static unsigned guest_alias(unsigned slot,unsigned source_alias) {return guest_alias_in(&slots[slot],slot,source_alias);}
+extern int tekken3_dr_air_reaction(unsigned p);
 void __wrap_func_8002EE94(CPUState *cpu) {
     if((cpu->pc==0 || cpu->pc==0x8002ee94) && (cpu->gpr[5]==0x800a9228 || cpu->gpr[5]==0x800aaab4) &&
        cpu->gpr[4]!=cpu->gpr[5]) {
         unsigned attacker=cpu->gpr[5]==0x800aaab4;
         uint32_t victim=cpu->gpr[4];
         unsigned face_down=0,low=0;
+        int air=ready(attacker)?tekken3_dr_air_reaction(attacker):-1;
+        if(air>=0 && (unsigned)air<slots[attacker].count) {
+            /* A DR pack's own reaction in the air (tekken3_dr_camera.c), as TTT1's branch below. */
+            unsigned alias=slot_base(attacker)+(unsigned)air;
+            psx_mod_write_half(victim+0x90,2);
+            psx_mod_write_half(victim+0x1a0,alias);
+            psx_mod_write_half(victim+0x96,0);
+            cpu->gpr[2]=0;cpu->gpr[3]=alias;cpu->pc=cpu->gpr[31];return;
+        }
         if(ttt1_moves(attacker) && ready(attacker) && (face_down=guest_alias(attacker,0x128b)) &&
            (low=guest_alias(attacker,0x128c))) {
             uint32_t flags=psx_mod_read_word(victim+0x60);
             int number=(int16_t)psx_mod_read_half(victim+0xa0),frame=(int16_t)psx_mod_read_half(victim+0x58);
-            if((flags&0x200) || number==(int)face_down || number==(int)low || number==0xd62 ||
+            /* A victim still on the pack she left at a switch numbers its
+             * moves in that pack (B147). */
+            int old=on_retired(attacker,victim) &&
+                    (number==(int)guest_alias_in(&retired[attacker],attacker,0x128b) ||
+                     number==(int)guest_alias_in(&retired[attacker],attacker,0x128c));
+            if((flags&0x200) || old || number==(int)face_down || number==(int)low || number==0xd62 ||
                ((number==0xd63 || number==0xd64) && frame>=19)) {
                 int32_t counter=(int32_t)psx_mod_read_word(victim+0x3e0),height=(int32_t)psx_mod_read_word(victim+0xf6c);
                 unsigned alias,modifier;
@@ -1679,66 +1800,6 @@ void __wrap_func_800449B4(CPUState *cpu) {
     if(!damage)damage=(int16_t)psx_mod_read_half(a+0x5e);
     cpu->gpr[2]+=damage;
 }
-/* In Tekken Ball, the ball is Entity 2 at 0x800AC340. The overlay stores internal
- * ball parameters in 0x800AC390..0x800AC39C (+84 = 0x217, not an actor/record pointer).
- * When func_80044A8C evaluates combat hits between an actor and the ball, 0x80044AA8
- * attempts to load halfword at [record + 52] to check counter properties.
- * If 0x217 is dereferenced, 0x217+52 = 0x24B (unaligned) triggers a hardware AdEL exception.
- * By temporarily placing a safe dummy record (where record[52] == 0) in 0x800AC394,
- * func_80044A8C takes the branch to block_80044AEC (normal hit & guard evaluation
- * against the ball's hit code at 0x800AC3A4) and completes cleanly. */
-extern void __real_func_80044A8C(CPUState *cpu);
-static uint32_t s_safe_ball_record = 0;
-
-void __wrap_func_80044A8C(CPUState *cpu) {
-    uint32_t victim = cpu->gpr[4];
-    uint32_t attacker = cpu->gpr[5];
-
-    int need_safe_att = 0;
-    int need_safe_vic = 0;
-    uint32_t old_att_rec = 0;
-    uint32_t old_vic_rec = 0;
-
-    if (attacker == 0x800AC340u) {
-        need_safe_att = 1;
-    } else if (attacker >= 0x80000000u && attacker < 0x80200000u) {
-        uint32_t r = psx_mod_read_word(attacker + 84);
-        if (r != 0 && (r < 0x80000000u || (r & 1))) need_safe_att = 1;
-    }
-
-    if (victim == 0x800AC340u) {
-        need_safe_vic = 1;
-    } else if (victim >= 0x80000000u && victim < 0x80200000u) {
-        uint32_t r = psx_mod_read_word(victim + 84);
-        if (r != 0 && (r < 0x80000000u || (r & 1))) need_safe_vic = 1;
-    }
-
-    if (need_safe_att || need_safe_vic) {
-        if (!s_safe_ball_record) {
-            s_safe_ball_record = psx_mod_alloc_guest_memory(128, 4);
-        }
-        if (need_safe_att) {
-            old_att_rec = psx_mod_read_word(attacker + 84);
-            psx_mod_write_word(attacker + 84, s_safe_ball_record);
-        }
-        if (need_safe_vic && victim != attacker) {
-            old_vic_rec = psx_mod_read_word(victim + 84);
-            psx_mod_write_word(victim + 84, s_safe_ball_record);
-        }
-
-        __real_func_80044A8C(cpu);
-
-        if (need_safe_att) {
-            psx_mod_write_word(attacker + 84, old_att_rec);
-        }
-        if (need_safe_vic && victim != attacker) {
-            psx_mod_write_word(victim + 84, old_vic_rec);
-        }
-        return;
-    }
-
-    __real_func_80044A8C(cpu);
-}
 /* Strong-hit effect. Each fighter's file carries a pack of 4-bit TIMs
  * (16-colour palette, 32 x 32 image) that the fight loader places in VRAM:
  * frame k in column 368/376 (player 1) or 496/504 (player 2), row 32*(k/2),
@@ -1755,13 +1816,10 @@ static void load_hit_effect(unsigned s) {
     if(!root)return;
     char path[4096];
     if(snprintf(path,sizeof path,"%s/%s-hiteffect.tim",root,tekken3_guest_data_prefix_for(s))>=(int)sizeof path)return;
-    size_t file_sz = 0;
-    const unsigned char *cached = switch_cached_file_get(path, &file_sz);
-    if(!cached || !file_sz || (file_sz % 576)) return;
-    size_t n = file_sz < 32 * 576 ? file_sz : 32 * 576;
-    unsigned char *p = (unsigned char *)calloc(32 * 576, 1);
-    if(!p) return;
-    memcpy(p, cached, n);
+    FILE *f=fopen(path,"rb");if(!f)return;
+    unsigned char *p=malloc(32*576);
+    size_t n=p?fread(p,1,32*576,f):0;fclose(f);
+    if(!p || !n || n%576){free(p);return;}
     for(size_t o=0;o<n;o+=576)
         if(word(p+o)!=0x10 || word(p+o+4)!=8 || word(p+o+8)!=44 || word(p+o+16)!=0x10010 ||
            word(p+o+52)!=524 || word(p+o+60)!=0x200008){free(p);return;}
@@ -1892,6 +1950,8 @@ enum { HFX_MAX=36, HFX_SIDE=64, HFX_IMAGE=HFX_SIDE*HFX_SIDE/2, HFX_PAL_X=560, HF
 enum { FX_SPRITES=0x800a3408, FX_SPRITE=64, FX_PRIMS=0x800a34c8, FX_PRIM=40,
        FX_OT=0x800a8c54, FX_BUFFER=0x800adefc, FX_DRAW_SKIP=0x800adca4, FX_IDS=0x800a9240 };
 static struct { int on,tried; uint32_t packets; const unsigned char *placed[2]; } hfx;
+/* The strong-hit effects play to their end while TTT Hitspark is on (B139, __wrap_func_80076884). */
+static int full_strong_hits=-1;
 extern unsigned tekken3_stage_high_vram_generation(void);
 extern int tekken3_stage_high_vram_used(int x,int y,int w,int h);
 /* Tekken 3's cast by ID (tools/ttt1_hitspark.py NATIVES): Gon (17) and Dr. B
@@ -1908,6 +1968,7 @@ static void hfx_cell(unsigned p,unsigned k,unsigned *x,unsigned *y) {
 }
 static void hit_effect_64_activate(void) {
     const char *e=getenv("TEKKEN3_HIT_EFFECT_64"),*root=tekken3_ttt1_asset_root();
+    if(full_strong_hits<0)full_strong_hits=1;
     if(e && !strcmp(e,"0")) { fprintf(stderr,"TTT Hitspark: off (TEKKEN3_HIT_EFFECT_64=0)\n"); return; }
     if(!root)return;
     char path[4096];int version=0;
@@ -1926,26 +1987,21 @@ PSX_MOD_CONSTRUCTOR(register_ttt_hitspark) {
 }
 /* <root>/<prefix>-hiteffect64.hfx, checked whole. */
 static int read_hfx(const char *root,const char *prefix,const char *who,Hfx *out) {
-    uint64_t t_hfx0 = tek_get_ticks();
     char path[4096];
     if(!root || snprintf(path,sizeof path,"%s/%s-hiteffect64.hfx",root,prefix)>=(int)sizeof path)return 0;
-    size_t n = 0;
-    const unsigned char *cached = switch_cached_file_get(path, &n);
-    if(!cached) { fprintf(stderr,"TTT Hitspark: no %s, %s's strong-hit effect stays 32 x 32\n",path,who); return 0; }
-    unsigned images=n>=16?cached[6]|cached[7]<<8:0,palettes=n>=16?cached[10]|cached[11]<<8:0;
-    if(n<16 || memcmp(cached,"HFX6",4) || (cached[4]|cached[5]<<8)!=1 || (cached[8]|cached[9]<<8)!=HFX_SIDE ||
+    FILE *f=fopen(path,"rb");
+    if(!f) { fprintf(stderr,"TTT Hitspark: no %s, %s's strong-hit effect stays 32 x 32\n",path,who); return 0; }
+    enum { MOST=16+32*HFX_MAX+HFX_MAX*HFX_IMAGE };
+    unsigned char *p=malloc(MOST+1);
+    size_t n=p?fread(p,1,MOST+1,f):0;fclose(f);
+    unsigned images=n>=16?p[6]|p[7]<<8:0,palettes=n>=16?p[10]|p[11]<<8:0;
+    if(!p || n<16 || memcmp(p,"HFX6",4) || (p[4]|p[5]<<8)!=1 || (p[8]|p[9]<<8)!=HFX_SIDE ||
        !images || images>HFX_MAX || (palettes!=1 && palettes!=images) ||
        n!=16+32u*palettes+(size_t)images*HFX_IMAGE) {
         fprintf(stderr,"TTT Hitspark: %s is not a 64 x 64 effect pack, %s's stays 32 x 32\n",path,who);
-        return 0;
+        free(p); return 0;
     }
-    unsigned char *p=malloc(n);
-    if(!p) return 0;
-    memcpy(p, cached, n);
     out->data=p;out->images=images;out->palettes=palettes;out->flags=p[12]|p[13]<<8;
-    uint64_t t_hfx1 = tek_get_ticks();
-    fprintf(stdout,"[MOD_LOAD_HITSPARK] %s(%s) time=%.2fms images=%u palettes=%u\n",
-            who, prefix, tek_ticks_to_ms(t_hfx1 - t_hfx0), images, palettes);
     fprintf(stderr,"TTT Hitspark: %s, %u images, %u palette(s)\n",who,images,palettes);
     return 1;
 }
@@ -1965,50 +2021,78 @@ static const Hfx *native_hfx(unsigned id) {
     }
     return hfx_natives[id].data?&hfx_natives[id]:NULL;
 }
-/* A cinematic's own pack, <Name>-TTT1-hiteffect.tim: that native's. */
-static const Hfx *cine_hfx(const char *file) {
+/* A cinematic's own pack, <Name>-TTT1-hiteffect.tim: that native's ID, -1 none. */
+static int cine_native(const char *file) {
     const char *base=file,*end;
     for(const char *c=file;*c;c++)if(*c=='/' || *c=='\\')base=c+1;
-    if(!(end=strstr(base,"-TTT1-hiteffect")))return NULL;
+    if(!(end=strstr(base,"-TTT1-hiteffect")))return -1;
     for(unsigned id=0;id<HFX_NATIVES;id++)
         if(hfx_native_names[id] && strlen(hfx_native_names[id])==(size_t)(end-base) &&
-           !strncmp(base,hfx_native_names[id],(size_t)(end-base)))return native_hfx(id);
-    return NULL;
+           !strncmp(base,hfx_native_names[id],(size_t)(end-base)))return (int)id;
+    return -1;
+}
+static const Hfx *cine_hfx(const char *file) {
+    int id=cine_native(file);
+    return id<0?NULL:native_hfx((unsigned)id);
 }
 /* PS2 EFFECTS (src/tekken3_ttt1_ps2_laser.c, TIPS section 164): the
  * Mishima's TTT PS2 strong-hit effects instead of TTT1's, read on the
  * player's PS2 disc (tools/ps2/ttt_hitspark_ps2.py): Jin and Heihachi (the
  * natives, IDs 9 and 13), Kazuya, Devil and Angel (the guests); not Devil
- * Jin (later, the user's choice). At most 32 images (the frame is read from
- * the game's UV, 2 x 16 cells); their length goes to the player's effect
- * entry (ps2_hfx_lengths). In a fight only (state 8): the Embu and the
- * cinematics keep TTT1's. */
+ * Jin (later, the user's choice). And Unknown's own (F33: her ghostly face,
+ * whatever style she copies: her data prefix stays Unknown-TTT1). At most
+ * 32 images for the Mishima (the conversion's choice), Unknown's 34: past
+ * the game's 2 x 16 cells the frame is the sprite's age (fighter_frame);
+ * their length goes to the player's effect
+ * entry (ps2_hfx_lengths). In a fight (state 8) and in the Embus (B131,
+ * GH#176): Tekken 3's (state 6), whose player 1 plays Jin's part, the native
+ * or the guest cast in it (Kazuya), and the TTT Embu (a cinematic in state
+ * 8), whose `effect` is Jin's. The endings keep their own TTT1 pack. */
 extern int tekken3_ps2_effects_on(void);
 extern const char *tekken3_ps2_effects_dir(void);
-enum { PS2_HFX_MOST=32 };
-static const char *const ps2_hfx_names[]={"Jin","Heihachi","Kazuya","Devil","Angel"};
+extern int tekken3_cine_trigger_embu(void);
+extern int tekken3_ttt1_embu_effect_guest(unsigned player);
+/* At most 35: past 32, the palettes go in the last image cell (hfx_palette_at). */
+enum { PS2_HFX_MOST=HFX_MAX-1 };
+static const char *const ps2_hfx_names[]={"Jin","Heihachi","Kazuya","Devil","Angel","Unknown"};
 enum { PS2_HFX=sizeof ps2_hfx_names/sizeof *ps2_hfx_names };
 static Hfx ps2_hfx[PS2_HFX];static int ps2_hfx_tried[PS2_HFX];
-static int s_in_hfx_preload = 0;
-
-extern int tekken3_guest_character(unsigned id);
-extern int tekken3_ttt1_embu_effect_guest(unsigned player);
-static int is_guest_fighter(unsigned p) {
-    if(p >= 2) return 0;
-    if(tekken3_devil_jin_player(p)) return 1;
-    if(tekken3_ttt1_embu_effect_guest(p)) return 1;
-    if(tekken3_ttt1_roster_enabled()) {
-        unsigned id = psx_mod_read_half(FX_IDS + p * 0x188c);
-        return tekken3_guest_character(id) >= 0;
+/* The light a PS2 pack casts on the models (B132, GH#180): the colour of
+ * its pixels, each image in its own palette, summed over the pack, the
+ * strongest channel at 255 like Tekken 3's lights (Angel's gold, Jin's
+ * red). The pack has none of its own; the header's it replaced was the
+ * TTT1 effect's, Tekken 3's blue for every Mishima. */
+static uint8_t ps2_hfx_rgb[PS2_HFX][3];static int ps2_hfx_lit[PS2_HFX];
+static void ps2_hfx_light(unsigned which) {
+    const Hfx *h=&ps2_hfx[which];
+    const unsigned char *palettes=h->data+16,*pixels=palettes+32*h->palettes;
+    uint64_t sum[3]={0,0,0},top=0;
+    for(unsigned k=0;k<h->images;k++) {
+        const unsigned char *pal=palettes+32*(h->palettes==h->images?k:0);
+        for(unsigned i=0;i<2*HFX_IMAGE;i++) {
+            unsigned c=pixels[k*HFX_IMAGE+i/2]>>4*(i&1)&15,v=pal[2*c]|pal[2*c+1]<<8;
+            sum[0]+=(v&31)<<3;sum[1]+=(v>>5&31)<<3;sum[2]+=(v>>10&31)<<3;
+        }
     }
-    return 0;
+    for(unsigned c=0;c<3;c++)if(sum[c]>top)top=sum[c];
+    if(!top)return;
+    for(unsigned c=0;c<3;c++)ps2_hfx_rgb[which][c]=(uint8_t)(sum[c]*255/top);
+    ps2_hfx_lit[which]=1;
+    fprintf(stderr,"PS2 effects: %s's light %u, %u, %u\n",ps2_hfx_names[which],
+            ps2_hfx_rgb[which][0],ps2_hfx_rgb[which][1],ps2_hfx_rgb[which][2]);
 }
-
+/* Devil Jin keeps his own effects. A native on its TTT1 model (F32) has the PS2 pack of its ID,
+ * as on its PS1 model: E1 had left Jin and Heihachi without it, unseen while the TTT1 models
+ * were optional, every Jin and Heihachi once they were the default (E6). */
 static const Hfx *ps2_hfx_for(unsigned p) {
-    if(!hfx.on || !tekken3_ps2_effects_on() || tekken3_devil_jin_player(p))return NULL;
-    if(!s_in_hfx_preload && psx_mod_read_word(0x800ae204)!=8)return NULL;
+    unsigned state=psx_mod_read_word(0x800ae204);
+    if(!hfx.on || (state!=8 && state!=6) || !tekken3_ps2_effects_on() || tekken3_devil_jin_player(p))return NULL;
     int which=-1;
-    if(is_guest_fighter(p)) {
+    const char *own=embu_effect_file(p);
+    if(own && *own && tekken3_cine_frame()>=0) {
+        int id=tekken3_cine_trigger_embu()?cine_native(own):-1;
+        which=id==9?0:id==13?1:-1;
+    } else if(state==6?tekken3_ttt1_embu_effect_guest(p):hit_effect_in_fight[p]) {
         const char *prefix=tekken3_guest_data_prefix_for(p);
         for(int k=2;prefix && k<PS2_HFX;k++)
             if(!strncmp(prefix,ps2_hfx_names[k],strlen(ps2_hfx_names[k])) && !strcmp(prefix+strlen(ps2_hfx_names[k]),"-TTT1"))which=k;
@@ -2027,20 +2111,31 @@ static const Hfx *ps2_hfx_for(unsigned p) {
                     h->images,PS2_HFX_MOST);
             free(h->data);memset(h,0,sizeof *h);
         }
+        if(h->data)ps2_hfx_light((unsigned)which);
     }
     return ps2_hfx[which].data?&ps2_hfx[which]:NULL;
 }
 /* The player's effect entry (0x800A35C8 + 16 * player, set at each round
  * from the 6-byte headers at 0x80027950: frames, then the light's RGB):
- * while a PS2 pack plays, our own header, its length and the light of the
- * header it replaces; the entry given back once the pack is no longer the
- * player's. Every frame before the effects are stepped. */
+ * while a PS2 pack plays, our own header, its length and its light (the
+ * pack's, else the header's it replaces); the entry given back once the
+ * pack is no longer the player's. Every frame before the effects are
+ * stepped. */
+static uint32_t ps2_hfx_ours[2],ps2_hfx_replaced[2];
+static const Hfx *ps2_hfx_playing[2];
+static void ps2_hfx_header_light(unsigned p) {
+    const Hfx *h=ps2_hfx_playing[p];
+    if(!h || !ps2_hfx_lit[h-ps2_hfx])return;
+    for(unsigned k=0;k<3;k++)
+        if(psx_mod_read_byte(ps2_hfx_ours[p]+2+k)!=ps2_hfx_rgb[h-ps2_hfx][k])
+            psx_mod_write_byte(ps2_hfx_ours[p]+2+k,ps2_hfx_rgb[h-ps2_hfx][k]);
+}
 static void ps2_hfx_lengths(void) {
     enum { ROWS=0x800a35c8 };
-    static uint32_t ours[2],replaced[2];
+    uint32_t *ours=ps2_hfx_ours,*replaced=ps2_hfx_replaced;
     for(unsigned p=0;p<2;p++) {
         uint32_t at=ROWS+p*16,now=psx_mod_read_word(at);
-        const Hfx *h=ps2_hfx_for(p);
+        const Hfx *h=ps2_hfx_playing[p]=ps2_hfx_for(p);
         if(!h) {
             if(ours[p] && now==ours[p])psx_mod_write_word(at,replaced[p]);
             continue;
@@ -2052,10 +2147,25 @@ static void ps2_hfx_lengths(void) {
         if(now!=ours[p]) {
             replaced[p]=now;
             for(unsigned k=2;k<6;k++)psx_mod_write_byte(ours[p]+k,psx_mod_read_byte(now+k));
-            psx_mod_write_half(ours[p],(uint16_t)h->images);
             psx_mod_write_word(at,ours[p]);
         }
+        /* The pack can change under it: the Embu's guest is known a few frames in. */
+        if(psx_mod_read_half(ours[p])!=h->images)psx_mod_write_half(ours[p],(uint16_t)h->images);
+        ps2_hfx_header_light(p);
     }
+}
+/* The Embu sets a guest's header every frame (tekken3_ttt1_roster.c,
+ * embu_effect_headers), the game spawning an effect in between: under a
+ * PS2 pack it becomes the header ours replaces, the length and the light
+ * left ours (its light only for a pack without one). 1 if player p's
+ * entry holds ours. */
+int tekken3_ps2_hfx_header_under(unsigned p,uint32_t header) {
+    uint32_t ours=p<2?ps2_hfx_ours[p]:0;
+    if(!ours || psx_mod_read_word(0x800a35c8+p*16)!=ours)return 0;
+    ps2_hfx_replaced[p]=header;
+    for(unsigned k=2;k<6;k++)psx_mod_write_byte(ours+k,psx_mod_read_byte(header+k));
+    ps2_hfx_header_light(p);
+    return 1;
 }
 /* The 64 x 64 of the 32 x 32 now in player p's VRAM rectangle. An Embu
  * guest in Jin's or Yoshimitsu's part has its own there, whatever
@@ -2063,36 +2173,46 @@ static void ps2_hfx_lengths(void) {
  * moves, which an Embu guest is, once a fight with a guest has left the
  * TTT1 characters on (Kunimitsu drew Yoshimitsu's 64 x 64, Kazuya Jin's red
  * lightning: GH#29 again, B115). */
-extern int tekken3_ttt1_embu_effect_guest(unsigned player);
 static const Hfx *hit_effect_64_pack(unsigned p) {
     if(tekken3_ttt1_tiles_up())return NULL;
-    const char *own=embu_effect_file(p);
-    if(own && *own && tekken3_cine_frame()>=0)return cine_hfx(own);
     const Hfx *ps2=ps2_hfx_for(p);
     if(ps2)return ps2;
-    if(is_guest_fighter(p)) {
-        return slots[p].hfx.data?&slots[p].hfx:NULL;
-    }
+    const char *own=embu_effect_file(p);
+    if(own && *own && tekken3_cine_frame()>=0)return cine_hfx(own);
+    if(hit_effect_in_fight[p] || tekken3_ttt1_embu_effect_guest(p))return slots[p].hfx.data?&slots[p].hfx:NULL;
     return native_hfx(psx_mod_read_half(FX_IDS+p*0x188c));
 }
 /* A pack in its cells (image k at cells[k], palette p at row pal_y + p of
  * column pal_x), unless the upper half already holds it (it is in save
  * states: one taken before F12, or with another fighter, is caught). */
 typedef struct { uint16_t x,y; } HfxCell;
+/* Palette k of a pack at (pal_x, pal_y + k), 32 rows a player in the cell
+ * (560, 896); past them (a PS2 pack longer than the game's 2 x 16 cells,
+ * Unknown's 34 images, F33) in the first rows of the player's last image
+ * cell (HFX_MAX - 1), which such a pack never fills (PS2_HFX_MOST). */
+enum { HFX_PAL_ROWS=32 };
+static void hfx_palette_at(const HfxCell *cells,unsigned pal_x,unsigned pal_y,unsigned k,unsigned *x,unsigned *y) {
+    if(k<HFX_PAL_ROWS) { *x=pal_x;*y=pal_y+k; return; }
+    *x=cells[HFX_MAX-1].x;*y=cells[HFX_MAX-1].y+k-HFX_PAL_ROWS;
+}
 static void place_hfx(const Hfx *h,const HfxCell *cells,unsigned pal_x,unsigned pal_y,
                       const unsigned char **placed,const char *who) {
     const uint16_t *hi=gpu_high_vram_pixels();
     const unsigned char *pal=h->data+16,*img=pal+32*h->palettes;
     int same=hi!=NULL;
-    for(unsigned k=0;same && k<h->palettes;k++)
-        same=!memcmp(hi+(size_t)(pal_y-512+k)*1024+pal_x,pal+32*k,32);
+    unsigned px,py;
+    for(unsigned k=0;same && k<h->palettes;k++) {
+        hfx_palette_at(cells,pal_x,pal_y,k,&px,&py);
+        same=!memcmp(hi+(size_t)(py-512)*1024+px,pal+32*k,32);
+    }
     for(unsigned k=0;same && k<h->images;k++)
         for(unsigned row=0;same && row<HFX_SIDE;row++)
             same=!memcmp(hi+(size_t)(cells[k].y-512+row)*1024+cells[k].x,img+k*HFX_IMAGE+row*32,32);
     if(same)return;
-    psx_mod_gpu_high_vram_tag("hfx");       /* [HighVram_CLASH_Diag] */
-    for(unsigned k=0;k<h->palettes;k++)
-        psx_mod_gpu_high_vram_upload((int)pal_x,(int)(pal_y+k),16,1,(const uint16_t*)(pal+32*k));
+    for(unsigned k=0;k<h->palettes;k++) {
+        hfx_palette_at(cells,pal_x,pal_y,k,&px,&py);
+        psx_mod_gpu_high_vram_upload((int)px,(int)py,16,1,(const uint16_t*)(pal+32*k));
+    }
     for(unsigned k=0;k<h->images;k++)
         psx_mod_gpu_high_vram_upload(cells[k].x,cells[k].y,16,HFX_SIDE,(const uint16_t*)(img+k*HFX_IMAGE));
     if(*placed!=h->data)
@@ -2118,7 +2238,9 @@ static const HfxCell *player_cells(unsigned p) {
  *   3 the knockdown smoke ((968, 288), property 10, and the six puffs of
  *     fx_scatter at each fall, below), row 33 (F22).
  * The poison mist (decor effect type 10, below) takes TTT1's: the smoke's
- * images in a palette of its own (Mist-TTT1-hiteffect64.hfx).
+ * images in a palette of its own (Mist-TTT1-hiteffect64.hfx); Dr. B's
+ * Doctor Breath, not in TTT1, the smoke's images in a yellow-green made from
+ * the smoke's palette (smoke_breath_palette, B146).
  * Their cells in the upper half are placed with each stage pack, around it
  * (tekken3_stage_high_vram_used), outside the F12 cells and Unknown's wolf:
  * the smoke's 30 images stay in theirs (the puffs and the mist share them);
@@ -2131,7 +2253,7 @@ static const HfxCell *player_cells(unsigned p) {
  * the guard's entry (0x800A3600) at box 1's header: while ours can be drawn,
  * box 1's header is the throw's and the guard's entry goes to box 2's, read
  * by no one else. Their own lengths otherwise. */
-enum { SPARK_BOXES=4, SPARK_SMOKE=3, SMOKE_FRAMES=30, MIST_FRAMES=21, MIST_ROW=SPARK_BOXES,
+enum { SPARK_BOXES=4, SPARK_SMOKE=3, SMOKE_FRAMES=30, MIST_FRAMES=21, MIST_ROW=SPARK_BOXES, BREATH_ROW=SPARK_BOXES+1,
        SPARK_CELLS=2*3+SMOKE_FRAMES+1, SPARK_HEADER=0x800279d4, GUARD_ENTRY=0x800a3600 };
 static const struct { const char *name; unsigned clut_x,vram_x,vram_y,stock; } hfx_sparks[SPARK_BOXES]={
     {"Spark",32,896,256,27},{"Throw",48,920,352,21},{"Guard",64,896,448,25},{"Smoke",80,968,288,27}};
@@ -2235,43 +2357,35 @@ static void sparks_tick(void) {
     uint32_t entry=ours[1] || ours[2]?SPARK_HEADER+12:SPARK_HEADER+6;
     if(psx_mod_read_word(GUARD_ENTRY)!=entry)psx_mod_write_word(GUARD_ENTRY,entry);
 }
+/* Dr. B's Doctor Breath (B146): T3 draws its cloud (type 10, link 1) with
+ * CLUT (96, 503), its grey smoke's (80, 503) turned yellow-green: red and
+ * green the grey plus 3, blue far below, rising to the top shades (14, 14, 2)
+ * ... (27, 27, 20). TTT1 made its purple mist the same way from its own
+ * smoke (green dropped). TTT1 has no Dr. B: his colour, made from TTT1's
+ * smoke palette with T3's blue curve, red = green = the grey L (5 bits), blue
+ * 0 to L 12, (L - 12) x 7/8 to L 24, then 3 a step (L 28: 28, 28, 22). The
+ * transparent entries and the semi-transparency bit stay. */
+static void smoke_breath_palette(const uint16_t *smoke,uint16_t *out) {
+    for(unsigned i=0;i<16;i++) {
+        unsigned c=smoke[i],l=c&31,b=l>24?10+3*(l-24):l>12?(l-12)*7/8:0;
+        if(b>l)b=l;
+        out[i]=(c&0x7fff)?(uint16_t)((c&0x8000)|b<<10|l<<5|l):(uint16_t)c;
+    }
+}
 /* The smoke's images and every palette in their cells, unless already there. */
 static void sparks_place(void) {
     const Hfx *smoke=spark_pack(SPARK_SMOKE);
     if(smoke)place_hfx(smoke,sparks.smoke,sparks.pal.x,sparks.pal.y+SPARK_SMOKE,&sparks.placed,"Smoke");
     const uint16_t *hi=gpu_high_vram_pixels();
-    for(unsigned s=0;s<=SPARK_BOXES;s++) {
-        const Hfx *h=s<SPARK_BOXES?spark_pack(s):sparks.ready==1 && sparks.mist.data?&sparks.mist:NULL;
+    uint16_t breath[16];
+    for(unsigned s=0;s<=BREATH_ROW;s++) {
+        const Hfx *h=s<SPARK_BOXES?spark_pack(s):s==MIST_ROW?(sparks.ready==1 && sparks.mist.data?&sparks.mist:NULL):smoke;
         if(!h || !hi)continue;
+        const uint16_t *pal=(const uint16_t*)(h->data+16);
+        if(s==BREATH_ROW) { smoke_breath_palette(pal,breath);pal=breath; }
         const uint16_t *row=hi+(size_t)(sparks.pal.y-512+s)*1024+sparks.pal.x;
-        if(memcmp(row,h->data+16,32))psx_mod_gpu_high_vram_tag("sparks");  /* [HighVram_CLASH_Diag] */
-        if(memcmp(row,h->data+16,32))psx_mod_gpu_high_vram_upload(sparks.pal.x,sparks.pal.y+s,16,1,(const uint16_t*)(h->data+16));
+        if(memcmp(row,pal,32))psx_mod_gpu_high_vram_upload(sparks.pal.x,sparks.pal.y+s,16,1,pal);
     }
-}
-static void preload_player_hit_effects(void) {
-    if(!hfx.on || !psx_mod_gpu_high_vram_ready())return;
-    s_in_hfx_preload = 1;
-    sparks_tick();
-    sparks_place();
-    for(unsigned p=0;p<2;p++) {
-        if(is_guest_fighter(p)) {
-            load_hit_effect(p);
-        }
-        const Hfx *h=hit_effect_64_pack(p);
-        if(h) {
-            place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
-            const char *who = is_guest_fighter(p) ? tekken3_guest_name_for(p) : NULL;
-            if(!who) {
-                unsigned id = psx_mod_read_half(FX_IDS + p * 0x188c);
-                if(id == 17 || id == 19) id = 13;
-                if(id < HFX_NATIVES) who = hfx_native_names[id];
-            }
-            printf("[HFX_Preload] P%u (%s): preloaded %u frames, %u palettes into High VRAM\n",
-                   p+1, who ? who : "Native", h->images, h->palettes);
-            fflush(stdout);
-        }
-    }
-    s_in_hfx_preload = 0;
 }
 /* Image k of pack h in cell c, unless it is there already. */
 static void spark_stream(const HfxCell *c,const Hfx *h,unsigned k) {
@@ -2280,14 +2394,13 @@ static void spark_stream(const HfxCell *c,const Hfx *h,unsigned k) {
     if(!hi)return;
     for(unsigned row=0;row<HFX_SIDE;row++)
         if(memcmp(hi+(size_t)(c->y-512+row)*1024+c->x,img+row*32,32)) {
-            psx_mod_gpu_high_vram_tag("spark"); /* [HighVram_CLASH_Diag] */
             psx_mod_gpu_high_vram_upload(c->x,c->y,16,HFX_SIDE,(const uint16_t*)img);
             return;
         }
 }
-/* Our packets, a frame buffer each: the three hit sprites, the 18 puffs, the mists. */
-enum { SCATTER=0x8009e850, SCATTER_SLOT=0x370, SCATTER_PUFFS=18, MIST_MOST=16,
-       HFX_QUADS=3+SCATTER_PUFFS+MIST_MOST };
+/* Our packets, a frame buffer each: the three hit sprites, the 18 puffs, the mists, the ball's effects. */
+enum { SCATTER=0x8009e850, SCATTER_SLOT=0x370, SCATTER_PUFFS=18, MIST_MOST=16, BALL_MOST=2,
+       HFX_QUADS=3+SCATTER_PUFFS+MIST_MOST+BALL_MOST };
 static int hit_effect_64_packets(void) {
     if(hfx.tried)return hfx.packets!=0;
     hfx.tried=1;
@@ -2333,30 +2446,12 @@ static void hfx_swap(const HfxSwap *s,unsigned n,unsigned buffer,int trace) {
         psx_mod_write_word(o+20,page<<16|v<<8|ur);
         psx_mod_write_half(o+28,(uint16_t)((v+63)<<8|ul));
         psx_mod_write_half(o+36,(uint16_t)((v+63)<<8|ur));
-        {
-            uint32_t cmd = psx_mod_read_word(prim+4) & 0xff000000u;
-            /* Hit effect packs have pre-colored or pre-faded palettes (one per frame).
-             * Set raw texture bit (opcode 0x2D / 0x2F) and zero out vertex RGB,
-             * eliminating the 50% grey quad artifact completely. */
-            psx_mod_write_word(o+4, (cmd | 0x01000000u) & 0xff000000u);
-            static int s_logged_swap = 0;
-            if(!s_logged_swap) {
-                s_logged_swap = 1;
-                printf("[HFX_Swap] First swap: slot=%u prim=%08X -> ours=%08X cmd=%08X cell=(%u,%u) pal=(%u,%u) fade=%u\n",
-                       s[k].slot, prim, o, (cmd | 0x01000000u) & 0xff000000u, cell->x, cell->y, s[k].pal_x, s[k].pal_y, s[k].fade);
-                fflush(stdout);
-            }
-        }
+        if(s[k].fade)psx_mod_write_word(o+4,(psx_mod_read_word(prim+4)&0xff000000u)|0x808080);
     }
     for(unsigned k=0;k<n;k++) {
         if(!before[k])continue;
         uint32_t link=before[k];
         for(unsigned j=0;j<n;j++)if(before[j] && s[j].prim==link)link=ours[j];
-        if(link == ours[k])continue;
-        uint32_t o_next = psx_mod_read_word(ours[k]) & 0xffffffu;
-        if(o_next == (link & 0xffffffu) || o_next == (ours[k] & 0xffffffu)) {
-            psx_mod_write_word(ours[k], (psx_mod_read_word(ours[k]) & 0xff000000u) | 0xffffffu);
-        }
         psx_mod_write_word(link,(psx_mod_read_word(link)&0xff000000u)|(ours[k]&0xffffff));
     }
 }
@@ -2378,7 +2473,8 @@ static int hfx_trace(void) {
  * Yoshimitsu's limb 25) that fx_update_draw linked this frame, before the hit
  * sprites in every loop of the game (0x8002AE58): image = the effect's
  * frame (+0x48, 0..20, 0x80072D5C), from the smoke's cells; the mist's
- * palette, the smoke's for limb 28's (+0x4C set: T3's grey). */
+ * palette, or for limb 28's (+0x4C set: Dr. B's Doctor Breath, T3's
+ * yellow-green (96, 503)) the breath's (B146; the smoke's grey before). */
 enum { FX_ACTIVE=0x800a0988 };
 static unsigned mists_64(HfxSwap *s,unsigned buffer) {
     if(sparks.ready!=1 || !sparks.mist.data || !spark_pack(SPARK_SMOKE))return 0;
@@ -2387,9 +2483,49 @@ static unsigned mists_64(HfxSwap *s,unsigned buffer) {
     for(unsigned g=0;g<0x50 && e && e!=FX_ACTIVE && n<MIST_MOST;g++,e=psx_mod_read_word(e+4)) {
         int32_t frame=(int32_t)psx_mod_read_word(e+0x48);
         if(psx_mod_read_byte(e+0xc)!=10 || !(psx_mod_read_byte(e+0xd)&0x40) || frame<0 || frame>=MIST_FRAMES)continue;
-        unsigned row=psx_mod_read_word(e+0x4c)?SPARK_SMOKE:MIST_ROW;
+        unsigned row=psx_mod_read_word(e+0x4c)?BREATH_ROW:MIST_ROW;
         s[n]=(HfxSwap){e+0x50+buffer*FX_PRIM,&sparks.smoke[sparks.mist_image[frame]],sparks.pal.x,sparks.pal.y+row,
                        3+SCATTER_PUFFS+n,0};
+        n++;
+    }
+    return n;
+}
+/* Image k of player p's pack for a quad drawn from its 32 x 32 rectangle (x
+ * base, 368 or 496): the frame from the quad's texture page and UV. */
+/* The frame from the game's UV (2 x 16 cells, then cell 0 again); past them,
+ * a sprite's age (life, 1 at frame 0: the PS2 packs of more than 32 images,
+ * Unknown's 34, F33). life 0: none known (the ball's loop). */
+static const Hfx *fighter_frame(unsigned p,unsigned base,uint32_t prim,int life,unsigned *k) {
+    const Hfx *h=hit_effect_64_pack(p);
+    if(h && life>2*16 && (unsigned)life<=h->images) { *k=(unsigned)life-1; return h; }
+    unsigned tpage=psx_mod_read_half(prim+22),u0=psx_mod_read_byte(prim+12),u1=psx_mod_read_byte(prim+20);
+    unsigned x=(tpage&15)*64+(u0<u1?u0:u1)/4,y=(tpage>>4&1)*256+psx_mod_read_byte(prim+13);
+    if(!h || x<base || x-base>8 || (x-base)%8 || y%32)return NULL;
+    *k=2*(y/32)+(x-base)/8;
+    if(*k>=h->images)*k=h->images-1;
+    return h;
+}
+/* Tekken Ball (B133, GH#179): a hit that charges the ball loops 12 frames of
+ * the hitter's strong-hit effect on it (ovl3 ball_fx15_spawn: a decor effect
+ * of type 15, link 0 at +0x4C; fx_type15_anim, frames 9 to 20 of the
+ * rectangle at +0x44, palette row 503), on its POLY_FT4 at +0x50 + 40 *
+ * buffer that fx_update_draw linked with the mists. The loop stays the
+ * game's; each frame drawn from that player's 64 x 64 pack, PS2's under PS2
+ * EFFECTS, as its fighter's own. */
+static unsigned ball_64(HfxSwap *s,unsigned buffer,unsigned slot) {
+    unsigned n=0;
+    uint32_t e=psx_mod_read_word(FX_ACTIVE+4);
+    for(unsigned g=0;g<0x50 && e && e!=FX_ACTIVE && n<BALL_MOST;g++,e=psx_mod_read_word(e+4)) {
+        uint32_t prim=e+0x50+buffer*FX_PRIM;
+        unsigned base=psx_mod_read_half(e+0x44),p=base==496,k;
+        if(psx_mod_read_byte(e+0xc)!=15 || psx_mod_read_byte(e+0xe)!=1 || psx_mod_read_word(e+0x4c) ||
+           (base!=368 && base!=496) || psx_mod_read_half(prim+14)>>6!=503)continue;
+        const Hfx *h=fighter_frame(p,base,prim,0,&k);
+        if(!h)continue;
+        place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
+        unsigned px,py;
+        hfx_palette_at(player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,h->palettes>1?k:0,&px,&py);
+        s[n]=(HfxSwap){prim,player_cells(p)+k,px,py,slot+n,(h->flags&HFX_PALETTE_FADE)!=0};
         n++;
     }
     return n;
@@ -2398,7 +2534,7 @@ static void hit_effect_64(void) {
     if(!hfx.on || psx_mod_read_word(FX_DRAW_SKIP) || !psx_mod_gpu_high_vram_ready())return;
     unsigned buffer=psx_mod_read_word(FX_BUFFER)&1,n=0;
     int trace=hfx_trace();
-    HfxSwap s[3+MIST_MOST];
+    HfxSwap s[3+MIST_MOST+BALL_MOST];
     for(unsigned i=0;i<3;i++) {
         uint32_t fx=FX_SPRITES+i*FX_SPRITE,prim=FX_PRIMS+(buffer*3+i)*FX_PRIM;
         if(trace && hfx_lives[i]>0)
@@ -2406,19 +2542,17 @@ static void hit_effect_64(void) {
                     psx_mod_read_half(fx+0x22),psx_mod_read_half(fx+0x14),psx_mod_read_half(prim+22),psx_mod_read_byte(prim+12),
                     psx_mod_read_byte(prim+13),psx_mod_read_byte(prim+20));
         if(hfx_lives[i]<=0 || psx_mod_read_half(fx+0x22)!=503)continue;
-        unsigned base=psx_mod_read_half(fx+0x14),tpage=psx_mod_read_half(prim+22);
-        unsigned u0=psx_mod_read_byte(prim+12),u1=psx_mod_read_byte(prim+20);
+        unsigned base=psx_mod_read_half(fx+0x14);
         const Hfx *h=NULL;const HfxCell *cell=NULL;unsigned pal_x=0,pal_y=0,k;
         if(base==368 || base==496) {
             /* A fighter's effect: the frame the game drew, from its texture page and UV. */
             unsigned p=base==496;
-            if(!(h=hit_effect_64_pack(p)))continue;
-            unsigned x=(tpage&15)*64+(u0<u1?u0:u1)/4,y=(tpage>>4&1)*256+psx_mod_read_byte(prim+13);
-            if(x<base || x-base>8 || (x-base)%8 || y%32)continue;
-            k=2*(y/32)+(x-base)/8;
-            if(k>=h->images)k=h->images-1;
-            cell=player_cells(p)+k;pal_x=HFX_PAL_X;pal_y=HFX_PAL_Y+32*p+(h->palettes>1?k:0);
+            if(!(h=fighter_frame(p,base,prim,hfx_lives[i],&k)))continue;
+            cell=player_cells(p)+k;
+            hfx_palette_at(player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,h->palettes>1?k:0,&pal_x,&pal_y);
             place_hfx(h,player_cells(p),HFX_PAL_X,HFX_PAL_Y+32*p,&hfx.placed[p],p?"P2":"P1");
+            if(trace)fprintf(stderr,"TTT Hitspark trace: sprite %u life %d P%u image %u of %u, cell (%u, %u), palette (%u, %u)\n",
+                             i,hfx_lives[i],p+1,k+1,h->images,cell->x,cell->y,pal_x,pal_y);
         } else {
             /* A common spark: its image is its age. */
             unsigned b=0,clut_x=psx_mod_read_half(fx+0x20),vram_y=psx_mod_read_half(fx+0x16);
@@ -2435,6 +2569,7 @@ static void hit_effect_64(void) {
     }
     unsigned m=mists_64(s+n,buffer);
     if(m)sparks_place();
+    m+=ball_64(s+n+m,buffer,3+SCATTER_PUFFS+MIST_MOST);
     if(n+m && hit_effect_64_packets())hfx_swap(s,n+m,buffer,trace);
 }
 /* hit_fx_update (0x8007745C: a pause, a replay's fx_replay_update) and
@@ -2454,6 +2589,64 @@ void __wrap_func_80077524(CPUState *cpu) {
     if(!at || at==0x80077524u)hit_effect_64_lives();
     __real_func_80077524(cpu);
     if(at==0x80077570u)hit_effect_64();
+}
+/* Strong-hit effects played to their end (B139, GH#66): hit_fx_spawn
+ * (0x80076884) takes the three hit sprites in turn (hit_fx_next 0x800A35B8),
+ * as TTT1 does (0x80120420): a spark of the move's timed properties (Gun
+ * Jack's Piston Gun Assault: nine, the third six frames after the hit) lands
+ * on a strong-hit effect still playing and ends it, in the arcade too. While
+ * TTT Hitspark is on, a sprite spawn (a1 without 0x80) skips the slots of the
+ * fighters' effects still alive (base 368 / 496, palette row 503) while
+ * another slot is free of them. TEKKEN3_FULL_STRONG_HITS=0|1 overrides it
+ * (benches). */
+PSX_MOD_CONSTRUCTOR(register_full_strong_hits) {
+    const char *e=getenv("TEKKEN3_FULL_STRONG_HITS");
+    if(e && *e)full_strong_hits=*e!='0';
+}
+enum { HIT_FX_NEXT=0x800a35b8 };
+static int strong_effect_alive(unsigned i) {
+    uint32_t fx=FX_SPRITES+i*FX_SPRITE;
+    unsigned base=psx_mod_read_half(fx+0x14);
+    return (int16_t)psx_mod_read_half(fx+2)>0 && (base==368 || base==496) && psx_mod_read_half(fx+0x22)==503;
+}
+extern void __real_func_80076884(CPUState *cpu);
+void __wrap_func_80076884(CPUState *cpu) {
+    uint32_t at=cpu->pc;
+    if(full_strong_hits>0 && (!at || at==0x80076884u) && !(cpu->gpr[5]&0x80)) {
+        unsigned k=psx_mod_read_half(HIT_FX_NEXT)%3;
+        if(strong_effect_alive(k))
+            for(unsigned d=1;d<3;d++)
+                if(!strong_effect_alive((k+d)%3)) {
+                    fprintf(stderr,"TTT Hitspark: slot %u keeps its strong-hit effect, slot %u taken\n",
+                            k,(k+d)%3);
+                    psx_mod_write_half(HIT_FX_NEXT,(uint16_t)((k+d)%3));
+                    break;
+                }
+    }
+    __real_func_80076884(cpu);
+}
+/* hit_impact (0x80076C28: a0 power, a1 victim, a2 attacker): T3 lights the
+ * attacker's strong-hit effect when the power, max(base, base x the hit
+ * sphere's 90..140 % or x 1.5 clean), is 21 or more. DR's packs say per
+ * record what DR does (tools/psp/dr_pack.py sparks(), byte 47: 0x80 DR's
+ * rule, 0x01 lit on a hit, 0x02 on a clean hit, victim +0xD4): the power is
+ * moved across 21 when they differ, the damage dealt stays T3's. */
+extern void __real_func_80076C28(CPUState *cpu);
+void __wrap_func_80076C28(CPUState *cpu) {
+    unsigned side=cpu->gpr[6];
+    if((cpu->pc==0 || cpu->pc==0x80076c28u) && side<2 && ttt1_moves(side) && players[side].records) {
+        uint32_t record=psx_mod_read_word(0x800a9228+side*0x188c+0x54),base=players[side].records;
+        if(record>=base && (record-base)%56==0 && (record-base)/56<slots[side].count) {
+            unsigned rule=psx_mod_read_byte(record+0x2f);
+            if(rule&0x80) {
+                int lit=rule&(psx_mod_read_byte(cpu->gpr[5]+0xd4)?2:1);
+                int16_t power=(int16_t)cpu->gpr[4];
+                if(lit && power<21)cpu->gpr[4]=21;
+                else if(!lit && power>=21)cpu->gpr[4]=20;
+            }
+        }
+    }
+    __real_func_80076C28(cpu);
 }
 /* The knockdown smoke (F22): fx_scatter, three slots of six puffs at
  * 0x8009E850 (0x370 bytes: the sprites at +0x10, 64 bytes each, a POLY_FT4
@@ -2582,7 +2775,6 @@ static void install_cpu_table(void) {
         uint32_t from=CPU_TABLE+(id<CPU_NATIVE_ROWS?id:CPU_DEFAULT_ROW)*CPU_ROW;
         for(unsigned i=0;i<CPU_ROW;i+=4)psx_mod_write_word(table+id*CPU_ROW+i,psx_mod_read_word(from+i));
     }
-    spacing_table=table;
     patch_base(0x800616cc,0x800616d4,4,table);
 }
 /* Tekken Force's overlay (0x800B2658) picks each stage's boss from a route:
@@ -2605,19 +2797,19 @@ enum { FORCE_TABLE=0x800b6378, FORCE_NATIVE=92, FORCE_ENTRIES=64*4, FORCE_DEFAUL
        FORCE_JIN_ROUTE=0x800b071c, FORCE_ROUTES_END=0x800b088c, FORCE_STAGES=4, NO_BOSS=0xffffffffu };
 static const struct { const char *guest,*boss[FORCE_STAGES]; } force_routes[]={
     {"kazuya",{"lee","paul","jin","heihachi"}},
-    {"jun",{"kuma","lei","kazuya","heihachi"}},
-    {"unknown",{"yoshimitsu","jin","jun","heihachi"}},
-    {"devil",{"paul","jin","angel","heihachi"}},
-    {"angel",{"xiaoyu","kazuya","devil","heihachi"}},
-    {"lee",{"law","jin","kazuya","heihachi"}},
-    {"bruce",{"eddy","bryan","kazuya","heihachi"}},
-    {"baek",{"eddy","jin","hwoarang","heihachi"}},
+    {"jun",{"wang","kazuya","devil","heihachi"}},
+    {"unknown",{"kazuya","jin","jun","heihachi"}},
+    {"devil",{"jun","jin","angel","heihachi"}},
+    {"angel",{"jun","kazuya","devil","heihachi"}},
+    {"lee",{"wang","jin","kazuya","heihachi"}},
+    {"bruce",{"kazuya","bryan","lei","heihachi"}},
+    {"baek",{"armorking","law","hwoarang","heihachi"}},
     {"armorking",{"bryan","ganryu","king","heihachi"}},
     {"kunimitsu",{"lei","michelle","yoshimitsu","heihachi"}},
-    {"michelle",{"kunimitsu","ganryu","julia","heihachi"}},
-    {"ganryu",{"kuma","michelle","julia","heihachi"}},
-    {"wang",{"lei","xiaoyu","kazuya","heihachi"}},
-    {"jack2",{"kuma","pjack","gunjack","heihachi"}},
+    {"michelle",{"kunimitsu","ganryu","kazuya","heihachi"}},
+    {"ganryu",{"yoshimitsu","julia","michelle","heihachi"}},
+    {"wang",{"xiaoyu","jun","kazuya","heihachi"}},
+    {"jack2",{"kazuya","pjack","gunjack","heihachi"}},
     {"pjack",{"bryan","jack2","gunjack","heihachi"}},
     {"roger",{"kuma","panda","alex","heihachi"}},
     {"alex",{"kuma","panda","roger","heihachi"}},
@@ -2672,6 +2864,11 @@ static int switch_entry(unsigned alias) {
     return 0;
 }
 static int may_switch(unsigned player,uint32_t record) {
+    /* Not while the opponent still plays the pack she left at her last
+     * switch (B147): this one would load over it. TTT1 has no such wait (its
+     * moves stay resident); it lasts as long as the reaction, a juggle at
+     * most, and the switch then happens (L1's window, the CPU's next try). */
+    if(on_retired(player,0x800a9228+(1-player)*0x188c))return 0;
     if(record==players[player].records+slots[player].neutral*56)return 1;
     for(unsigned alias=0;alias<=0x11e;alias++)
         if(switch_entry(alias) && psx_mod_read_word(players[player].alias_table+alias*4)==record)return 1;
@@ -2716,6 +2913,13 @@ static void switch_moveset(unsigned player) {
     psx_mod_write_half(actor+0x1a0,3);
     psx_mod_write_word(actor+0x54,stance);psx_mod_write_word(actor+0x4c,stance);psx_mod_write_word(actor+0x1a4,stance);
     psx_mod_write_half(actor+0x58,1);psx_mod_write_half(actor+0x198,1);
+    /* The stance starts with the switch rule's transition: 6 in every
+     * movesets' rule (kind 0x3186, TTT1 RAM), which keeps her facing
+     * (fighter_move_advance, 0x8002F3AC: rot = rot2). The one left pending
+     * here was the stance's own, 0: rot = angle_opp, and a switch with her
+     * back turned faced her to the opponent (B147, GH#198; TTT PS2 and PS3
+     * keep her back turned). No half-turn either (+0x19C, +0x19E). */
+    psx_mod_write_half(actor+0x19a,6);psx_mod_write_half(actor+0x19c,0);psx_mod_write_half(actor+0x19e,0);
 }
 int tekken3_ttt1_switch_ready(unsigned player) {
     return player<2 && ttt1_moves(player) && slots[player].loaded &&
@@ -2920,16 +3124,23 @@ void __wrap_func_8002CD7C(CPUState *cpu) {
     __real_func_8002CD7C(cpu);
 }
 void tekken3_ttt1_combat_tick(void) {
-    if(psx_mod_read_word(0x800ae204)!=8)return;
     install_cpu_table();
     install_force_bosses();
+    /* Also with nobody on TTT1 moves: the last call, as the fight loses its
+     * guests (tekken3_ttt1_select), gives the engine its tables back. */
+    install_tables();
     for(unsigned player=0;player<2;player++) {
         if(ttt1_moves(player)) {
             if(ready(player))switch_moveset(player);
             if(ready(player)) {
                 /* A native on its TTT1 moves and Devil Jin keep their own
                  * strong-hit effect (and Devil Jin his Devil face). */
-                if(tekken3_ttt1_player_motion_mode(player)==2 && !tekken3_devil_jin_player(player) && !hit_effect_64_pack(player))place_hit_effect(player);
+                if(tekken3_ttt1_player_motion_mode(player)==2 && !tekken3_devil_jin_player(player))place_hit_effect(player);
+                /* The native places no pack: a guest before it in a Team
+                 * Battle left the flag set, and its 64 x 64 was then read
+                 * from its own slot, which has none (B134, GH#183: Heihachi
+                 * in 32 x 32, no PS2 effect either). */
+                else if(tekken3_ttt1_player_motion_mode(player)==4)hit_effect_in_fight[player]=0;
                 sample_sweeps(player);
                 uint32_t actor=0x800a9228+player*0x188c,record=psx_mod_read_word(actor+0x54);
                 unsigned frame=psx_mod_read_half(actor+0x58),duration=0;
@@ -2967,8 +3178,10 @@ void tekken3_ttt1_combat_tick(void) {
                         }
                     }
                 }
-                if(tekken3_ttt1_player_motion_mode(player)==2 && !tekken3_devil_jin_player(player))
+                if(tekken3_ttt1_player_motion_mode(player)==2 && !tekken3_devil_jin_player(player)) {
                     tekken3_ttt1_face_tick(player,advanced,expression,duration,flag);
+                    tekken3_ttt1_shine_tick(player);   /* F38: Tetsujin's reflection */
+                }
                 else if(tekken3_ttt1_player_motion_mode(player)==4)   /* Jin's Omen: the Devil mark */
                     tekken3_jin_omen_face(player,psx_mod_read_half(actor+0x18),advanced,expression,duration);
             }
@@ -3007,15 +3220,20 @@ void __wrap_func_8002D178(CPUState *cpu) {
         /* A guest move ID names its graph: a reaction row can animate the
          * other fighter, whose own graph may be another guest's or native. */
         unsigned s=(id-SLOT_BASE)/SLOT_STRIDE,index=(id-SLOT_BASE)%SLOT_STRIDE;
-        unsigned native=slots[s].loaded && index<slots[s].count?slots[s].recovery[index]:0;
+        /* A fighter still on the pack player s left at a switch (B147): its
+         * moves name that pack's records, kept in the other area. */
+        int old=(cpu->gpr[4]==0x800a9228 || cpu->gpr[4]==0x800aaab4) && on_retired(s,cpu->gpr[4]);
+        const GuestCombat *pack=old?&retired[s]:&slots[s];
+        uint32_t records=old?retired_records[s]:players[s].records;
+        unsigned native=pack->loaded && index<pack->count?pack->recovery[index]:0;
         /* Not while the victim still plays one of the guest's unique clips:
          * the throw goes on as a pair. Jack-2's victim clip 809 ends on
          * record 78, the ground state that is also engine alias 0x9C; sent to
          * its own 0x9C, the victim stopped at frame 1 and the thrower (810)
          * at frame 62 of 194, before the laughs. Leaving 78 (get-up), it
          * takes its own moves as before. */
-        if(slots[s].loaded && index<slots[s].count && players[s].records) {
-            uint32_t base=players[s].records,end=base+slots[s].count*56;
+        if(pack->loaded && index<pack->count && records) {
+            uint32_t base=records,end=base+pack->count*56;
             uint32_t current=psx_mod_read_word(cpu->gpr[4]+0x54);
             uint32_t thrower=psx_mod_read_word(0x800a9228+s*0x188c+0x54);
             /* Nor while the guest still plays its own side of the throw (a
@@ -3028,7 +3246,7 @@ void __wrap_func_8002D178(CPUState *cpu) {
              * played the guest's moves through them. */
             int throwing=(int16_t)psx_mod_read_half(0x800a9228+s*0x188c+0x74)>0;
             int unique_throw=s!=player && throwing && thrower>=base && thrower<end && (thrower-base)%56==0 &&
-                             !slots[s].recovery[(thrower-base)/56];
+                             !pack->recovery[(thrower-base)/56];
             int on_guest=current>=base && current<end && (current-base)%56==0;
             /* The end of a victim's clip back on its feet: the engine looks
              * ahead (0x8002DBFC, asking at 0x8002DC00) into the list of the
@@ -3060,7 +3278,7 @@ void __wrap_func_8002D178(CPUState *cpu) {
             /* A victim's unique clip only holds it while the throw goes on: a
              * plain hit's reaction (Paul's 422, crouched) would have kept the
              * CPU in the attacker's crouch 15 for its 70 frames. */
-            if(!lookahead && ((on_guest && !slots[s].recovery[(current-base)/56] && (throwing || s==player)) || unique_throw))
+            if(!lookahead && ((on_guest && !pack->recovery[(current-base)/56] && (throwing || s==player)) || unique_throw))
                 native=0;
             /* The other way round: out of the unique clips, on a record with
              * an engine alias, towards one without. Paul's TTT1 moves (native
@@ -3074,7 +3292,7 @@ void __wrap_func_8002D178(CPUState *cpu) {
              * alias) became the victim's own dash, then run - no fall, and
              * 1+2 mashed there started the victim's running moves (B42). */
             else if(!native && s!=player && on_guest && cpu->gpr[31]!=0x8002ee78)
-                native=slots[s].recovery[(current-base)/56];
+                native=pack->recovery[(current-base)/56];
         }
         if(native && cpu->gpr[4]==0x800a9228+player*0x188c &&
            !(player==s && ttt1_moves(player))) {
@@ -3084,6 +3302,9 @@ void __wrap_func_8002D178(CPUState *cpu) {
             cpu->gpr[5]=native-1;
             if(psx_mod_read_half(cpu->gpr[4]+0x1a0)==id)psx_mod_write_half(cpu->gpr[4]+0x1a0,native-1);
             __real_func_8002D178(cpu);return;
+        }
+        if(old && index<pack->count) {
+            cpu->gpr[2]=records+index*56;cpu->pc=cpu->gpr[31];return;
         }
         if(slots[s].loaded && index<slots[s].count && ready(s)) {
             cpu->gpr[2]=players[s].records+index*56;cpu->pc=cpu->gpr[31];return;
@@ -3150,17 +3371,19 @@ void __wrap_func_800389C0(CPUState *cpu) {
     __real_func_800389C0(cpu);
 }
 
+extern void switch_audio_pump_if_needed(void);
+extern const unsigned char *switch_cached_file_get(const char *path, size_t *out_size);
+extern const char *tekken3_ps2_effects_dir(void);
+
 void tekken3_ttt1_preload_player(unsigned p) {
     if (p > 1) return;
     const char *root = tekken3_ttt1_asset_root();
     if (!root) return;
     switch_audio_pump_if_needed();
-    uint64_t t_pre0 = tek_get_ticks();
     const char *m_prefix = tekken3_guest_moves_prefix_for(p);
     const char *d_prefix = tekken3_guest_data_prefix_for(p);
-    unsigned donor_cnt = tekken3_guest_donor_count(p);
-    printf("[PreloadDiag] P%u inicio: m='%s' d='%s' donors=%u\n",
-           p + 1, m_prefix ? m_prefix : "(null)", d_prefix ? d_prefix : "(null)", donor_cnt);
+    printf("[PreloadDiag] P%u inicio: m='%s' d='%s'\n",
+           p + 1, m_prefix ? m_prefix : "(null)", d_prefix ? d_prefix : "(null)");
     fflush(stdout);
     char path[4096];
     if (m_prefix && m_prefix[0]) {
@@ -3210,33 +3433,11 @@ void tekken3_ttt1_preload_player(unsigned p) {
         }
         switch_audio_pump_if_needed();
     }
-    if (donor_cnt > 0) {
-        for (unsigned k = 0; k < donor_cnt; k++) {
-            const char *donor_pfx = tekken3_guest_donor_prefix(p, k);
-            if (!donor_pfx || !donor_pfx[0]) continue;
-            snprintf(path, sizeof path, "%s/%s-combat.jmv", root, donor_pfx);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-tables.jst", root, donor_pfx);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-sfx.jus", root, donor_pfx);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-idle.poses", root, donor_pfx);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-movelist.bin", root, donor_pfx);
-            (void)switch_cached_file_get(path, NULL);
-            snprintf(path, sizeof path, "%s/%s-combos.bin", root, donor_pfx);
-            (void)switch_cached_file_get(path, NULL);
-            switch_audio_pump_if_needed();
-        }
-    }
     extern void tekken3_ttt1_sfx_preload(unsigned p);
     extern void tekken3_ttt1_voices_preload(unsigned p);
     tekken3_ttt1_sfx_preload(p);
     tekken3_ttt1_voices_preload(p);
     switch_audio_pump_if_needed();
-    double pre_ms = tek_ticks_to_ms(tek_get_ticks() - t_pre0);
-    printf("[PreloadDiag] P%u completado en %.2f ms\n", p + 1, pre_ms);
-    fflush(stdout);
 }
 
 void tekken3_ttt1_preload_fight(void) {
@@ -3302,7 +3503,8 @@ void tekken3_ttt1_precach_kazuya(void) {
     };
     static const char *fighter_exts[] = {
         "-combat.jmv", "-tables.jst", "-sfx.jus", "-voices.juv",
-        "-hiteffect64.hfx", "-hiteffect.tim", "-idle.poses"
+        "-hiteffect64.hfx", "-hiteffect.tim", "-idle.poses",
+        "-movelist.bin", "-combos.bin"
     };
     for (size_t f = 0; f < sizeof(common_fighters)/sizeof(common_fighters[0]); f++) {
         const char *name = common_fighters[f];
@@ -3314,6 +3516,27 @@ void tekken3_ttt1_precach_kazuya(void) {
                 loaded++;
             }
         }
+        switch_audio_pump_if_needed();
+    }
+
+    // 2b. Pack Jin-DR (v1.5.1) y musica PS2 de TTT en RAM (~70 MB total)
+    static const char *jin_dr_exts[] = {
+        "-combat.jmv", "-tables.jst", "-sfx.jus", "-voices.juv",
+        "-idle.poses", "-movelist.bin", "-combos.bin",
+        "-camera.txt", "-reach.txt"
+    };
+    for (size_t e = 0; e < sizeof(jin_dr_exts)/sizeof(jin_dr_exts[0]); e++) {
+        snprintf(path, sizeof(path), "%s/Jin-DR%s", root, jin_dr_exts[e]);
+        size_t sz = 0;
+        if (switch_cached_file_get(path, &sz)) {
+            total_bytes += sz;
+            loaded++;
+        }
+        switch_audio_pump_if_needed();
+    }
+    {
+        extern int tekken3_ttt_music_preload(void);
+        tekken3_ttt_music_preload();
         switch_audio_pump_if_needed();
     }
 

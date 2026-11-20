@@ -70,10 +70,12 @@ void tekken3_ttt1_selector_tick(void) {
 }
 uint16_t __wrap_tekken3_outfits_input(int player,uint16_t buttons) {
     devil_jin_input(player,buttons);                /* raw: both punches */
-    buttons=tekken3_stage_select_input(player,buttons);   /* the STAGE line (F18), before the cards */
     buttons=tekken3_native_moves_input(player,buttons);
-    if(tekken3_ttt1_roster_enabled())
-        return __real_tekken3_outfits_input(player,tekken3_guest_selector_input(player,buttons));
+    if(tekken3_ttt1_roster_enabled()) {
+        buttons=__real_tekken3_outfits_input(player,tekken3_guest_selector_input(player,buttons));
+        return tekken3_stage_select_input(player,buttons);   /* the STAGE line (F18), after the cards and outfits */
+    }
+    buttons=tekken3_stage_select_input(player,buttons);
     if(player==0) {
         uint16_t edges=previous & (uint16_t)~buttons;previous=buttons;
         if(selecting && psx_mod_read_byte(0x80098106)==9) {

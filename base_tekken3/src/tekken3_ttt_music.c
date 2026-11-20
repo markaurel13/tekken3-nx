@@ -676,7 +676,14 @@ void tekken3_ttt_music_state_reset(void) {
 }
 
 int tekken3_ttt_music_preload(void) {
-    return load() && ps2_load();
+    int ok_arc = load();
+    int ok_ps2 = ps2_load();
+    if (ok_ps2) {
+        for (int i = 0; i < ps2.count; i++) {
+            ps2_data(i);
+        }
+    }
+    return ok_arc && ok_ps2;
 }
 
 void tekken3_ttt_music_stage_preload(int stage) {

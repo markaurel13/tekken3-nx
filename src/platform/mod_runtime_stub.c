@@ -258,3 +258,37 @@ void gl_renderer_set_character_texture_pack(int skin, const char *directory) {
     ensure_outfit_catalog_loaded();
     if (directory && *directory) tekken3_outfits_set_available(skin, 1);
 }
+
+/* ---- Savestate / GTE precision / Telemetry stubs for v1.5.1 runtime ---- */
+int psx_savestate_hold = 0;
+uint64_t savestate_load_generation(void) { return 0; }
+
+int g_gte_precision_tracking = 0;
+uint8_t g_gte_precision_interp_pages[512];
+int gte_geometry_position_fallback_enabled = 0;
+int gte_precision_interp_pc(uint32_t pc) { (void)pc; return 0; }
+void gte_precision_interp_before(const CPUState *cpu, uint32_t pc, uint32_t insn) {
+    (void)cpu; (void)pc; (void)insn;
+}
+void gte_precision_cpu_sh(uint32_t addr, uint8_t rt, uint32_t value) {
+    (void)addr; (void)rt; (void)value;
+}
+int gte_precision_word_ideal(uint32_t addr, int32_t *out_x16, int32_t *out_y16, uint32_t *out_z) {
+    (void)addr; (void)out_x16; (void)out_y16; (void)out_z;
+    return 0;
+}
+uint32_t gte_precision_word_writer_pc(uint32_t addr) { (void)addr; return 0; }
+
+uint64_t g_prof_dma2_prepass_ns = 0;
+uint64_t g_prof_dma2_walk_ns = 0;
+uint64_t g_prof_dma2_wolf_pkts = 0;
+uint64_t g_prof_dma2_wolf_walk_ns = 0;
+uint64_t g_prof_dma2_wolf_words = 0;
+uint64_t g_prof_exp_floor_ns = 0;
+uint64_t g_prof_exp_ps1_stage_ns = 0;
+uint64_t g_prof_exp_stage_calls = 0;
+uint64_t g_prof_exp_stage_far_ns = 0;
+uint64_t g_prof_exp_stage_objs_ns = 0;
+uint64_t g_prof_exp_stage_tiles_ns = 0;
+uint64_t g_prof_exp_stage_total_ns = 0;
+uint64_t g_prof_gp0_diag_ns = 0;

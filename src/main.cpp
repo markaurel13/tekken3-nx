@@ -1895,6 +1895,31 @@ static void switch_vblank_callback(void) {
                (double)rt.vram_upload_ns / rt_denom / 1e6,
                (unsigned)((double)rt.vram_upload_bytes / rt_denom / 1024.0));
 
+        double gpu_denom = rt.gpu_hw_samples ? (double)rt.gpu_hw_samples : 1.0;
+        printf("[GpuHW] win%llu: gpu_total=%.3fms (draw=%.3fms pres=%.3fms) | frag_inv=%.1fk prims=%.1f | vtx=%.1f batches=%.1f | xfer=%.1f copy=%.1f fill=%.1f high_wr=%.1f\n",
+               (unsigned long long)report_interval,
+               (double)rt.gpu_hw_total_ns / gpu_denom / 1e6,
+               (double)rt.gpu_hw_draw_ns / gpu_denom / 1e6,
+               (double)rt.gpu_hw_present_ns / gpu_denom / 1e6,
+               (double)rt.gpu_hw_frag_invocations / gpu_denom / 1e3,
+               (double)rt.gpu_hw_input_prims / gpu_denom,
+               (double)rt.draw_vtx_total / rt_denom,
+               (double)rt.draw_batches_total / rt_denom,
+               (double)rt.vram_transfers_total / rt_denom,
+               (double)rt.copy_rects_total / rt_denom,
+               (double)rt.fill_rects_total / rt_denom,
+               (double)rt.high_vram_writes_total / rt_denom);
+        printf("[DrawBreak] win%llu: batches(sidecar=%.1f dual=%.1f cano=%.1f) | area_ps1_kpx(low=%.1f high=%.1f untex=%.1f semi=%.1f) | big_tris=%.1f\n",
+               (unsigned long long)report_interval,
+               (double)rt.batch_sidecar_only / rt_denom,
+               (double)rt.batch_dual_target / rt_denom,
+               (double)rt.batch_cano_only / rt_denom,
+               rt.area_low_tex_kpx / rt_denom,
+               rt.area_high_tex_kpx / rt_denom,
+               rt.area_untex_kpx / rt_denom,
+               rt.area_semi_kpx / rt_denom,
+               (double)rt.big_tris_total / rt_denom);
+
         printf("[FrameHistogram] win%llu: <14ms:%u | 14-16ms:%u | 16-16.67ms:%u | 16.67-17.5ms(jitter):%u | 17.5-20ms:%u | >20ms:%u | drops(>17.5ms):%u/%u (%.1f%%) | max=%.2fms (at f=%llu)\n",
                (unsigned long long)report_interval,
                s_frame_hist.under_14ms, s_frame_hist.b14_to_16ms, s_frame_hist.b16_to_16_67ms,

@@ -261,38 +261,29 @@ void SwitchInput::Update() {
         ShowControllerApplet();
     }
 
-    // Combinación para abrir menú de configuración dinámica (config.txt):
-    // Mando completo: ZL + ZR + Plus  o  L + R + Plus
-    // Joy-Con individual horizontal: SL + SR + Plus
-    // Acceso alternativo por conveniencia: Mantener Minus (-) durante ~1.15 segundos (70 frames)
-    bool cfg_combo_full = ((p1Held & HidNpadButton_ZL) && (p1Held & HidNpadButton_ZR) && (p1Down & HidNpadButton_Plus)) ||
-                          ((p1Held & HidNpadButton_L) && (p1Held & HidNpadButton_R) && (p1Down & HidNpadButton_Plus));
-    bool cfg_combo_single = (p1Held & (HidNpadButton_LeftSL | HidNpadButton_RightSL)) &&
-                            (p1Held & (HidNpadButton_LeftSR | HidNpadButton_RightSR)) &&
-                            (p1Down & HidNpadButton_Plus);
-
+    // Combinación para abrir menú de configuración dinámica (Menú Mod / config.txt):
+    // Únicamente mantener Minus (-) durante 1 segundo (60 frames) sin combinadores (Plus, L, R, ZL, ZR),
+    // para que un toque corto de Minus (-) siga funcionando como Select en Practice Mode.
+    bool no_modifiers = !(p1Held & (HidNpadButton_Plus | HidNpadButton_L | HidNpadButton_R |
+                                    HidNpadButton_ZL | HidNpadButton_ZR));
     static uint32_t s_minus_hold_frames = 0;
-    if (p1Held & HidNpadButton_Minus) {
+    if (no_modifiers && (p1Held & HidNpadButton_Minus)) {
         s_minus_hold_frames++;
     } else {
         s_minus_hold_frames = 0;
     }
-    bool cfg_minus_hold = (s_minus_hold_frames == 70);
-
-    if (cfg_combo_full || cfg_combo_single || cfg_minus_hold) {
+    if (s_minus_hold_frames == 60) {
         switch_config_menu_request_open();
     }
 
     // Combinación para alternar el contador de FPS en pantalla:
-    // Minus (-) + presionar ambos sticks analógicos (L3 + R3)
-    bool minus_held = (p1Held & HidNpadButton_Minus) != 0;
-    bool stick_l_held = (p1Held & HidNpadButton_StickL) != 0;
-    bool stick_r_held = (p1Held & HidNpadButton_StickR) != 0;
-    if (minus_held && stick_l_held && (p1Down & HidNpadButton_StickR)) {
-        host_osd_fps_toggle();
-    } else if (minus_held && stick_r_held && (p1Down & HidNpadButton_StickL)) {
-        host_osd_fps_toggle();
-    } else if (stick_l_held && stick_r_held && (p1Down & HidNpadButton_Minus)) {
+    // L1 + R1 + Flecha Abajo (L + R + D-Pad Down)
+    bool l_held = (p1Held & HidNpadButton_L) != 0;
+    bool r_held = (p1Held & HidNpadButton_R) != 0;
+    bool down_held = (p1Held & HidNpadButton_Down) != 0;
+    if ((l_held && r_held && (p1Down & HidNpadButton_Down)) ||
+        (l_held && down_held && (p1Down & HidNpadButton_R)) ||
+        (r_held && down_held && (p1Down & HidNpadButton_L))) {
         host_osd_fps_toggle();
     }
 

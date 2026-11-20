@@ -40,6 +40,9 @@ venv/
 
 # Large PC mods & local config
 base_tekken3/mods/
+Tekken - Dark Resurrection*
+guides/
+logs/
 .switch_ip
 *.log
 .vscode/

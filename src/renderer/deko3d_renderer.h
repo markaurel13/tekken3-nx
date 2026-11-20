@@ -171,6 +171,26 @@ public:
         uint64_t vram_fence_wait_ns = 0;
         uint64_t vram_upload_ns = 0;
         uint64_t vram_upload_bytes = 0;
+        uint64_t gpu_hw_total_ns = 0;
+        uint64_t gpu_hw_draw_ns = 0;
+        uint64_t gpu_hw_present_ns = 0;
+        uint64_t gpu_hw_frag_invocations = 0;
+        uint64_t gpu_hw_input_prims = 0;
+        uint64_t gpu_hw_samples = 0;
+        uint64_t draw_vtx_total = 0;
+        uint64_t draw_batches_total = 0;
+        uint64_t vram_transfers_total = 0;
+        uint64_t copy_rects_total = 0;
+        uint64_t fill_rects_total = 0;
+        uint64_t high_vram_writes_total = 0;
+        uint64_t batch_sidecar_only = 0;
+        uint64_t batch_dual_target = 0;
+        uint64_t batch_cano_only = 0;
+        double area_low_tex_kpx = 0.0;
+        double area_high_tex_kpx = 0.0;
+        double area_untex_kpx = 0.0;
+        double area_semi_kpx = 0.0;
+        uint64_t big_tris_total = 0;
         uint64_t samples = 0;
     };
     RenderTimings GetAndResetRenderTimings();
@@ -275,6 +295,9 @@ private:
     uint64_t m_curFrameVramUploadBytes = 0;
     uint64_t m_curFrameGpuFenceNs = 0;
     uint64_t m_curFrameAcqWaitNs = 0;
+    uint64_t* m_gpuQueryCpu[NumFrameResources] = {nullptr, nullptr};
+    DkGpuAddr m_gpuQueryGpu[NumFrameResources] = {0, 0};
+    bool m_gpuQueryArmed[NumFrameResources] = {false, false};
 };
 
 #ifdef __cplusplus

@@ -141,11 +141,14 @@ set(TEKKEN3_EXPANDED_SOURCES
     base_tekken3/src/tekken3_jin_omen.c
     base_tekken3/src/tekken3_ttt1_wolf.c
     base_tekken3/src/tekken3_ttt1_ps2_laser.c
+    base_tekken3/src/tekken3_ttt1_ps2_weapons.c
     base_tekken3/src/tekken3_ttt1_voices.c
     base_tekken3/src/tekken3_ttt_music.c
     base_tekken3/src/tekken3_ttt1_sfx.c
     base_tekken3/src/tekken3_ttt1_selector.c
     base_tekken3/src/tekken3_native_moves.c
+    base_tekken3/src/tekken3_dr_camera.c
+    base_tekken3/src/tekken3_dr_content.c
     base_tekken3/src/tekken3_ttt1_roster.c
     base_tekken3/src/tekken3_cine_hooks.c
     base_tekken3/src/tekken3_cine.c
@@ -186,6 +189,7 @@ set(PSX_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/ws_aspect_cone_math.c
     ${PSXRECOMP_ROOT}/runtime/src/tekken3_selector_layout.c
     ${PSXRECOMP_ROOT}/runtime/src/tekken3_force_background.c
+    ${PSXRECOMP_ROOT}/runtime/src/tekken3_ball_background.c
     ${PSXRECOMP_ROOT}/runtime/src/tekken3_outfits.c
     ${PSXRECOMP_ROOT}/runtime/src/tekken3_sound_options.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
@@ -323,9 +327,6 @@ set(TEKKEN3_WRAP_SYMBOLS
     func_800757A8
     func_8008D658
     func_8003CB84
-    func_8003E170
-    func_8003D6B0
-    func_8003D7BC
     spu_render
     spu_set_host_mix_volume
     spu_init
@@ -341,7 +342,6 @@ set(TEKKEN3_WRAP_SYMBOLS
     func_8002CC28
     func_8002EE94
     func_800449B4
-    func_80044A8C
     func_800458C8
     func_8002CD7C
     func_80059890
@@ -396,6 +396,14 @@ set(TEKKEN3_WRAP_SYMBOLS
     func_8004F3B0
     func_8004F0E4
     func_8004CE54
+    func_8002D45C
+    func_8003352C
+    func_80037B28
+    func_80064080
+    func_80070E08
+    func_80071110
+    func_80076884
+    func_80076C28
 )
 foreach(_sym IN LISTS TEKKEN3_WRAP_SYMBOLS)
     target_link_options(tekken3_nx PRIVATE "-Wl,--wrap=${_sym}")

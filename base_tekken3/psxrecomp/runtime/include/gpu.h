@@ -1,4 +1,4 @@
-/* gpu.h — PS1 GPU hardware simulation (Phase 3).
+﻿/* gpu.h — PS1 GPU hardware simulation (Phase 3).
  *
  * Implements GPUSTAT, GP0, GP1, and 1024x512 16-bit VRAM.
  * No rendering to screen — just correct hardware state transitions.
@@ -33,8 +33,12 @@ void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated v
 /* Display presentation accessors (Phase 3). */
 const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */
 uint16_t*       gpu_get_vram_ptr(void);
+/* Opt-in upper VRAM half (VRAM y 512..1023 as on Namco System 12): NULL
+ * until a mod calls psx_mod_gpu_high_vram_enable (mod_plugins.h), else its
+ * 1024x512 halfwords, row 0 = VRAM y 512. Never in reach of the game's own
+ * primitives; savestates carry it only while it exists. */
 const uint16_t* gpu_high_vram_pixels(void);
-uint64_t        gpu_high_vram_primitives(void);
+uint64_t        gpu_high_vram_primitives(void);  /* drawn reading it */
 
 typedef struct {
     uint32_t display_x, display_y;     /* VRAM start of display area (GP1(05h)) */
@@ -142,6 +146,9 @@ void gpu_vblank_release_present_flush_guard(void);
  * 1=crt, 2=composite, 3=trinitron). Config/launcher-driven; the PSX_SCREEN
  * env var, if set, overrides this. Default 0 (raw) is byte-identical. */
 void gpu_set_screen_kind(int kind);
+/* Effective model (env override applied); the OpenGL present pass draws the
+ * CRT scanlines and phosphor mask for every value but 0. */
+int  gpu_get_screen_kind(void);
 
 /* Widescreen proportion correction (active only when aspect != 4:3 and the
  * game's [widescreen] block opts in — see config_loader.h). Tagged
@@ -466,6 +473,8 @@ typedef struct {
     uint32_t angle_max_widened;
 } GpuWsDebug;
 void gpu_ws_get_debug(GpuWsDebug* out);
+/* Tekken Force cells added to the 16:9 margins (x, y, filler below) triples. */
+int gpu_ws_force_reveals(int* xyf, int max);
 
 typedef struct {
     uint32_t address;

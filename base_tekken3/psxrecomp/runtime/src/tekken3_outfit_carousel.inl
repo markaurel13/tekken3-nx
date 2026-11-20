@@ -52,7 +52,7 @@ static void outfit_jun_portrait(OutfitArt *a,const char *base) {
 
 static OutfitArt *outfit_load_art(const char *name) {
     for(OutfitArt *a=outfit_art;a;a=a->next)if(!strcmp(a->name,name))return a;
-    if(!name[0] || outfit_art_count>=128)return NULL;
+    if(!name[0] || outfit_art_count>=128) return NULL;
     OutfitArt *a=(OutfitArt*)calloc(1,sizeof *a);if(!a)return NULL;
     snprintf(a->name,sizeof a->name,"%s",name);
     a->next=outfit_art;outfit_art=a;outfit_art_count++;
@@ -61,7 +61,7 @@ static OutfitArt *outfit_load_art(const char *name) {
     const char *file_name = name;
     if (!strcmp(name, "kazuya-original-1")) file_name = "kazuya-original-2";
     else if (!strcmp(name, "kazuya-original-2")) file_name = "kazuya-original-1";
-    char path[1400];
+    char path[1400], path2[1400];
 #if defined(PSX_SDL3)
     const char *base=SDL_GetBasePath();
 #else
@@ -69,18 +69,25 @@ static OutfitArt *outfit_load_art(const char *name) {
 #endif
     snprintf(path,sizeof path,"%smods/outfit-menu/%s.rgba",base?base:"",file_name);
     int fd = open(path, O_RDONLY);
+    path2[0] = '\0';
     if(fd < 0) {
-        snprintf(path,sizeof path,"%smods/assets/outfit-menu/%s.rgba",base?base:"",file_name);
-        fd = open(path, O_RDONLY);
+        snprintf(path2,sizeof path2,"%smods/assets/outfit-menu/%s.rgba",base?base:"",file_name);
+        fd = open(path2, O_RDONLY);
     }
     if(fd < 0 && !strncmp(name,"jun-arcade-",11))outfit_jun_portrait(a,base);
+    if(fd < 0 && !a->loaded) {
+        printf("[OutfitArt] FAIL open name='%s' p1='%s' p2='%s'\n", name, path, path2);
+    }
 #if !defined(PSX_SDL3)
     SDL_free(base);
 #endif
     if(fd < 0) return a;
 
     struct stat st;
-    if(fstat(fd, &st) != 0 || st.st_size < 16) { close(fd); return a; }
+    if(fstat(fd, &st) != 0 || st.st_size < 16) {
+        printf("[OutfitArt] FAIL fstat '%s' sz=%lld\n", path, (long long)st.st_size);
+        close(fd); return a;
+    }
     size_t file_sz = (size_t)st.st_size;
     unsigned char *data = (unsigned char *)malloc(file_sz);
     if(!data) { close(fd); return a; }
@@ -93,12 +100,17 @@ static OutfitArt *outfit_load_art(const char *name) {
     }
     close(fd);
 
-    if(rd != file_sz || memcmp(data, "HDRGBA01", 8) != 0) { free(data); return a; }
+    if(rd != file_sz || memcmp(data, "HDRGBA01", 8) != 0) {
+        printf("[OutfitArt] FAIL magic/read '%s' rd=%zu/%zu\n", path, rd, file_sz);
+        free(data); return a;
+    }
     uint32_t w = *(uint32_t*)(data + 8);
     uint32_t h = *(uint32_t*)(data + 12);
     if(!w || !h || w > 8192 || h > 8192 || (uint64_t)w * h > 16777216 ||
        file_sz < 16 + (size_t)w * h * 4 ||
        outfit_art_pixels + (size_t)w * h > 64u * 1024u * 1024u) {
+        printf("[OutfitArt] FAIL bounds/budget '%s' w=%u h=%u cur_px=%zu\n",
+               name, w, h, outfit_art_pixels);
         free(data);
         return a;
     }

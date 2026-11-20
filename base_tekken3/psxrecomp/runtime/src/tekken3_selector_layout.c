@@ -402,7 +402,13 @@ static Tekken3SelectorPlacement other_menu_place(
         out.role = TEKKEN3_SELECTOR_LEFT_PLAYER;
         out.group_id = 1;
         out.sidecar_dx = -margin;
-    } else if (p->y >= 270 && p->x >= 208) {
+    } else if (p->y >= 270 && (p->x >= 208 ||
+               /* The mode banner on the prompt row (QUICK SELECT's Time
+                * Attack: TIME ATTACK! in 14x24 glyphs from x = 204 to
+                * 361) is centred under the right panel; its first letter
+                * starts left of x = 208. */
+               (p->y < 300 && p->opcode == 0x65 && p->width == 14 &&
+                p->height == 24 && p->x + p->width / 2 >= f->display_width / 2))) {
         out.role = TEKKEN3_SELECTOR_RIGHT_PLAYER;
         out.group_id = 2;
         out.sidecar_dx = margin;

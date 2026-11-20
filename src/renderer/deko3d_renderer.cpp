@@ -471,6 +471,10 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     for (unsigned i = 0; i < NumFrameResources; i++) {
         m_viewportUboGpuPool[i] = dataGpu + 0x01E00800 + i * DK_UNIFORM_BUF_ALIGNMENT;
         m_wideViewportUboGpuPool[i] = dataGpu + 0x01E00B00 + i * DK_UNIFORM_BUF_ALIGNMENT;
+        m_gpuQueryCpu[i] = (uint64_t*)(dataCpu + 0x01E01000 + i * 128);
+        m_gpuQueryGpu[i] = dataGpu + 0x01E01000 + i * 128;
+        memset(m_gpuQueryCpu[i], 0, 128);
+        m_gpuQueryArmed[i] = false;
     }
     m_viewportUboGpu = m_viewportUboGpuPool[0];
     m_wideViewportUboGpu = m_wideViewportUboGpuPool[0];
@@ -598,6 +602,25 @@ void Deko3DRenderer::BeginFrame() {
     m_timings.gpu_fence_wait_ns += gpu_wait_ns;
     m_curFrameGpuFenceNs = gpu_wait_ns;
 
+    // Leer contadores hardware de GPU del slot recién completado (sin bloquear pipeline)
+    if (m_gpuQueryArmed[m_frameResIdx] && m_gpuQueryCpu[m_frameResIdx]) {
+        const uint64_t* q = m_gpuQueryCpu[m_frameResIdx];
+        uint64_t ts_begin   = dkTimestampToNs(q[1]);
+        uint64_t ts_pre     = dkTimestampToNs(q[3]);
+        uint64_t frag_inv   = q[4];
+        uint64_t input_prim = q[6];
+        uint64_t ts_end     = dkTimestampToNs(q[9]);
+        if (ts_end >= ts_begin && ts_pre >= ts_begin && ts_end >= ts_pre) {
+            m_timings.gpu_hw_draw_ns += (ts_pre - ts_begin);
+            m_timings.gpu_hw_present_ns += (ts_end - ts_pre);
+            m_timings.gpu_hw_total_ns += (ts_end - ts_begin);
+            m_timings.gpu_hw_frag_invocations += frag_inv;
+            m_timings.gpu_hw_input_prims += input_prim;
+            m_timings.gpu_hw_samples++;
+        }
+        m_gpuQueryArmed[m_frameResIdx] = false;
+    }
+
     m_cmdBuf = m_cmdBufPool[m_frameResIdx];
     m_vtxRingCpu = m_vtxRingCpuPool[m_frameResIdx];
     m_vtxRingGpu = m_vtxRingGpuPool[m_frameResIdx];
@@ -607,6 +630,12 @@ void Deko3DRenderer::BeginFrame() {
     m_cmdBuf.clear();
     m_cmdPoolOffset[m_frameResIdx] = m_cmdPoolBase[m_frameResIdx] + CmdBufferSize;
     m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[m_frameResIdx], CmdBufferSize);
+
+    if (m_gpuQueryGpu[m_frameResIdx]) {
+        m_cmdBuf.resetCounter(DkCounter_FragmentShaderInvocations);
+        m_cmdBuf.resetCounter(DkCounter_InputPrimitives);
+        m_cmdBuf.reportCounter(DkCounter_TimestampPipelineTop, m_gpuQueryGpu[m_frameResIdx] + 0);
+    }
 
     u64 t2 = armGetSystemTick();
     m_curSlot = m_queue.acquireImage(m_swapchain);
@@ -1044,6 +1073,19 @@ void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, cons
     m_vtxRingCpu[m_vtxAllocated + 1] = v1;
     m_vtxRingCpu[m_vtxAllocated + 2] = v2;
     m_vtxAllocated += 3;
+
+    float area = fabsf((v1.pos[0] - v0.pos[0]) * (v2.pos[1] - v0.pos[1]) -
+                       (v2.pos[0] - v0.pos[0]) * (v1.pos[1] - v0.pos[1])) * 0.5f;
+    double ak = (double)area * 0.001;
+    uint32_t fl = v0.flags;
+    if (fl & 0x8u) m_timings.area_semi_kpx += ak;
+    if (fl & 0x40u) {
+        if (fl & 0x80u) m_timings.area_high_tex_kpx += ak;
+        else m_timings.area_low_tex_kpx += ak;
+    } else {
+        m_timings.area_untex_kpx += ak;
+    }
+    if (area > 20000.0f) m_timings.big_tris_total++;
 }
 
 /* [Deko3D_Wrap]: the staging ring's reset, which submits the whole command
@@ -1229,7 +1271,14 @@ void Deko3DRenderer::FlushBatch() {
     ubo.wideCenter[2] = 0.0f;
     ubo.wideCenter[3] = 0.0f;
 
-    bool sidecar_only = (m_wideCurIdx >= 0 && m_wideMirrorAuthoritative && m_wideSidecarComplete && !m_widePrimSuppressed && m_wideW > 0);
+    bool sidecar_only = (m_wideCurIdx >= 0 && m_wideMirrorAuthoritative && !m_widePrimSuppressed && m_wideW > 0);
+    if (sidecar_only) {
+        m_timings.batch_sidecar_only++;
+    } else if (m_wideCurIdx >= 0 && !m_widePrimSuppressed && m_wideW > 0) {
+        m_timings.batch_dual_target++;
+    } else {
+        m_timings.batch_cano_only++;
+    }
 
     // Blending de PS1
     dk::BlendState bState;
@@ -2354,6 +2403,12 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
     // (ej. clip=(0,98..367,166) -> 736x138), clearColor solo limpia ese pequeño recuadro,
     // dejando restos congelados de la imagen anterior en las franjas negras laterales al alternar
     // entre Docked (1920x1080) y Handheld (1280x720).
+    if (m_gpuQueryGpu[m_frameResIdx]) {
+        m_cmdBuf.reportCounter(DkCounter_Timestamp, m_gpuQueryGpu[m_frameResIdx] + 16);
+        m_cmdBuf.reportCounter(DkCounter_FragmentShaderInvocations, m_gpuQueryGpu[m_frameResIdx] + 32);
+        m_cmdBuf.reportCounter(DkCounter_InputPrimitives, m_gpuQueryGpu[m_frameResIdx] + 48);
+    }
+
     DkScissor fullOutScissor{ 0, 0, TargetWidth, TargetHeight };
     m_cmdBuf.setScissors(0, { fullOutScissor });
 
@@ -2592,6 +2647,11 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
         host_osd_present_done();
     }
 
+    if (m_gpuQueryGpu[m_frameResIdx]) {
+        m_cmdBuf.reportCounter(DkCounter_Timestamp, m_gpuQueryGpu[m_frameResIdx] + 64);
+        m_gpuQueryArmed[m_frameResIdx] = true;
+    }
+
     DkCmdList finalCmdList = m_cmdBuf.finishList();
     u64 t_submit_start = armGetSystemTick();
     m_queue.submitCommands(finalCmdList);
@@ -2646,6 +2706,13 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
 #endif
 
     m_lastFrameVtx = m_vtxAllocated;
+    m_timings.draw_vtx_total += m_vtxAllocated;
+    m_timings.draw_batches_total += s_frame_flush_batches;
+    m_timings.vram_transfers_total += s_frame_vram_transfers;
+    m_timings.copy_rects_total += s_frame_copy_rects;
+    m_timings.fill_rects_total += s_frame_fill_rects;
+    m_timings.high_vram_writes_total += s_frame_high_vram_writes;
+
     u64 t_fence_start = armGetSystemTick();
     // Alternar al otro búfer de recursos para el siguiente frame (CPU/GPU en paralelo)
     m_frameResIdx = 1 - m_frameResIdx;
@@ -2899,11 +2966,16 @@ static int dk_render_wide_display(uint32_t* out, int pitch, int base_x, int disp
 }
 
 // Vtable del backend Deko3D
+static int dk_scale(void) {
+    int s = (int)Deko3DRenderer::Instance().m_internalScale;
+    return (s > 0) ? s : 1;
+}
+
 static const GpuRenderBackend DEKO3D_BACKEND = {
     .name                           = "deko3d",
     .init                           = dk_init,
     .set_scale                      = sw_renderer_set_scale,
-    .scale                          = sw_renderer_scale,
+    .scale                          = dk_scale,
     .set_texture_filter             = sw_set_texture_filter,
     .texture_filter                 = sw_texture_filter,
     .set_semi_transparency          = dk_set_semi_transparency,

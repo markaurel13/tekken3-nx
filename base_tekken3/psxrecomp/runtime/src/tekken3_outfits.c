@@ -91,7 +91,7 @@ static const Tekken3OutfitEntry *stock_entry(int cid,int index) {
 static int valid_entry(const Tekken3OutfitEntry *e) {
  if(e->character<0 || e->character>=T3_OUTFIT_MAX_CHARS || e->skin < -1 || e->skin>=T3_SKIN_COUNT)return 0;
  if(e->skin>=0 && skin_characters[e->skin]!=e->character)return 0;
- if(e->confirm!=0x8000 && e->confirm!=0x4000 && e->confirm!=8)return 0;
+ if(e->confirm!=0x8000 && e->confirm!=0x4000 && e->confirm!=0x2000 && e->confirm!=0x1000 && e->confirm!=8)return 0;
  if(!e->id[0] || !e->name[0])return 0;
  for(const char *p=e->id;*p;p++)if(!isalnum((unsigned char)*p) && *p!='-' && *p!='_')return 0;
  for(const char *p=e->art;*p;p++)if(!isalnum((unsigned char)*p) && *p!='-' && *p!='_')return 0;
@@ -354,4 +354,9 @@ int tekken3_outfits_skin_enabled(int skin,int cy) {
    return cid>=0 && cid<T3_OUTFIT_MAX_CHARS && team_skins[p][cid]==skin;
  }
  return committed[p]==skin;
+}
+int tekken3_outfits_player_has_hd_skin(int p,int cid) {
+ if(p<0 || p>1 || cid<0 || cid>=T3_OUTFIT_MAX_CHARS)return 0;
+ int skin=team_session ? team_skins[p][cid] : committed[p];
+ return skin>=0 && skin<T3_SKIN_COUNT && available[skin] && skin_characters[skin]==cid;
 }

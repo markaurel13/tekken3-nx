@@ -165,7 +165,6 @@ static void upload_pack(void) {
     const unsigned char *p=pack.pack+18;
     for(unsigned r=0,n=half(pack.pack+6);r<n;r++) {
         unsigned x=half(p),y=half(p+2),w=half(p+4),h=half(p+6);
-        psx_mod_gpu_high_vram_tag("wolf");  /* [HighVram_CLASH_Diag] */
         psx_mod_gpu_high_vram_upload((int)x,(int)y,(int)w,(int)h,(const uint16_t*)(p+8));
         p+=8+2u*w*h;
     }

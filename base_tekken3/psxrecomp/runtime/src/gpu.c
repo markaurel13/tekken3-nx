@@ -16,6 +16,7 @@
 #include "gpu_sw_renderer.h"
 #include "gpu_vram_dirty.h"
 #include "gpu_render.h"
+#include "gte_precision_diag.h"
 #include "text_xlate.h"
 #include "crash_trace.h"
 #include "debug_server.h"
@@ -32,6 +33,7 @@
 #include "widescreen_layer_classifier.h"
 #include "tekken3_selector_layout.h"
 #include "tekken3_force_background.h"
+#include "tekken3_ball_background.h"
 #include "tekken3_outfits.h"
 #include "native_wide_margin_policy.h"
 #include <stdint.h>
@@ -44,8 +46,8 @@ extern uint8_t  psx_read_byte(uint32_t addr);
 extern uint32_t psx_read_word(uint32_t addr);
 
 /* ---- VRAM ---- */
-static uint16_t vram[1024 * 512];
 int g_psx_gpu_allow_oversize = 0;
+static uint16_t vram[1024 * 512];
 
 /* ---- GP0 state machine ---- */
 
@@ -66,15 +68,6 @@ static int      gp0_words_needed;
 static uint32_t gp0_next_source_addr = 0xFFFFFFFFu;
 static uint32_t gp0_cmd_source_addr  = 0xFFFFFFFFu;
 static uint16_t gp0_ot_rank = 0xFFFFu;
-
-#ifdef __SWITCH__
-#define GP0_RING_CAP        (1u << 12)
-#else
-#define GP0_RING_CAP        (1u << 20)  /* 1 048 576 entries */
-#endif
-static GpuGp0RingEntry *gp0_ring = NULL;  /* lazy-alloc on first record */
-static uint64_t gp0_ring_seq    = 0;      /* total commands recorded */
-static uint32_t gp0_ring_head   = 0;      /* next write slot */
 
 /* ---- Widescreen proportion correction --------------------------------------
  * Active only when [video] aspect_ratio != 4:3 AND the game's [widescreen]
@@ -127,10 +120,21 @@ static T3SelectorPrepassItem t3_selector_prepass[T3_SELECTOR_PREPASS_MAX];
 static uint32_t t3_selector_prepass_count;
 static Tekken3SelectorFrame t3_selector_frame;
 static Tekken3SelectorFrame t3_selector_session_frame;
-static unsigned t3_selector_fade_emitted;
 static Tekken3LoadingFrame t3_loading_frame;
 static Tekken3ForceReveal t3_force_reveals[36];
 static size_t t3_force_reveal_count;
+/* The last Force background frame's cells, for the debug server: a later
+ * list without the plane resets the live set. */
+static Tekken3ForceReveal t3_force_shown[36];
+static size_t t3_force_shown_count;
+int gpu_ws_force_reveals(int *xyf, int max) {
+    int n = 0;
+    for (size_t i = 0; i < t3_force_shown_count && n < max; i++, n++) {
+        xyf[3*n] = t3_force_shown[i].x; xyf[3*n+1] = t3_force_shown[i].y;
+        xyf[3*n+2] = t3_force_shown[i].filler && psx_read_word(0x800B6BB0u) == 3;
+    }
+    return n;
+}
 static int t3_force_background_active;
 static int t3_retained_gameplay;
 int gpu_tekken3_selector_active(void) {
@@ -179,7 +183,8 @@ static int32_t ws_disp_h(void);
 static void ws_clear_all_reveal_margins(void);
 static void parse_vertex(uint32_t word, int32_t* x, int32_t* y);
 extern int gte_precision_load_word(uint32_t addr, uint32_t packed,
-                                   int32_t *x16, int32_t *y16, uint16_t *z);
+                                   int32_t *x16, int32_t *y16, uint16_t *z,
+                                   uint8_t *derived);
 
 /* Gameplay vs full-2D screen. Character/billboard prims tag (psx_ws_sprite_tag)
  * within the last couple of frames => the actor render funnel is running =>
@@ -207,10 +212,14 @@ void gpu_ws_set_auto_ui_squash(int on) {
 }
 static int ws_clear_reveal = 0;
 static int ws_nw_full_mirror = 0;
-static int ws_nw_world_history = 0;
 static int g_mmx6_void_sides = 0;
 static uint32_t g_mmx6_void_generation = 1;
 void gpu_ws_set_clear_reveal(int on) { ws_clear_reveal = on ? 1 : 0; }
+/* Keep the full-mirror sidecar's pixels between gameplay frames, as PSX VRAM
+ * does. A title that never clears its 3D framebuffer relies on that history
+ * wherever a frame lacks polygon coverage (Tekken 3 while the fight camera
+ * pulls back); clearing the sidecar shows those gaps as black holes. */
+static int ws_nw_world_history = 0;
 void gpu_ws_set_nw_world_history(int on) { ws_nw_world_history = on ? 1 : 0; }
 void gpu_ws_set_nw_full_mirror(int on) { ws_nw_full_mirror = on ? 1 : 0; }
 int gpu_ws_nw_background_history_enabled(void) {
@@ -2367,7 +2376,7 @@ static int ws_nw_backdrop_quad(const int32_t *vx, const int32_t *vy,
         for (int i = 0; i < 4; i++) {
             int wi = word_indices[i];
             uint32_t addr = (gp0_cmd_source_addr + (uint32_t)wi * 4u) & 0x1FFFFCu;
-            if (gte_precision_load_word(addr, gp0_cmd_buf[wi], NULL, NULL, NULL))
+            if (gte_precision_load_word(addr, gp0_cmd_buf[wi], NULL, NULL, NULL, NULL))
                 gte_mask |= (uint8_t)(1u << i);
         }
     }
@@ -2589,6 +2598,18 @@ static void ws_nw_sync_target(void) {
         t3_selector_session_frame.layout_kind == 1 &&
         base == 48u && draw_area_right == 367u)
         base = 0;
+    /* Selector and loading frames also clip single cells (the grid's cursor
+     * frame, a defeated member's check mark). The cursor frame is
+     * drawn with the draw area narrowed to its cell. That area still lies
+     * inside the displayed buffer, so draw it into that buffer's sidecar
+     * (without its X clip) instead of dropping it from the 16:9 view. */
+    if ((t3_selector_frame.active || t3_selector_session_frame.active ||
+         t3_loading_frame.active) &&
+        !ws_is_fb_base(base)) {
+        for (int i = 0; i < ws_fb_n; i++)
+            if (base > ws_fb_base[i] && draw_area_right < ws_fb_base[i] + ws_disp_w())
+                base = ws_fb_base[i];
+    }
     if (ws_is_fb_base(base)) gr_wide_set_target((int)base);
     else                     gr_wide_disable_target();
 }
@@ -2597,6 +2618,14 @@ static void ws_clear_all_reveal_margins(void) {
     for (int i = 0; i < ws_fb_n; i++)
         gr_wide_clear_margins((int)ws_fb_base[i], 0, 512, 0, 3);
 }
+
+/* Set by the linked-list prepass: this frame's list submits polygons under an
+ * empty draw area (E4 above E3). Tekken 3's COMMAND LIST keeps the paused
+ * stage in the framebuffer that way, submitting the stage clipped away, then
+ * draws only its panels and icons: clearing the sidecar rows for them leaves
+ * the list over black. */
+static int ws_prepass_retains = 0;
+static uint32_t ws_prepass_frame = 0xFFFFFFFFu;
 
 static void ws_refresh_current_reveal_margins(void) {
     /* Most PSX 3D stages retain chunks of their backdrop in the framebuffer
@@ -2629,7 +2658,14 @@ static void ws_refresh_current_reveal_margins(void) {
             /* Gameplay cannot retain the previous menu's artwork, including
              * rows outside its letterboxed draw area. Later partial updates
              * (pause) preserve the current stage below their clip region. */
-            gr_wide_clear((int)base, 0, 512, clear_color);
+            gr_wide_clear((int)base, 0, 512, 0);
+        else if (ws_nw_full_mirror && world_mode && ws_nw_world_history)
+            ;
+        else if (ws_nw_full_mirror && ws_prepass_retains &&
+                 ws_prepass_frame == (uint32_t)s_frame_count)
+            /* The stage is retained, not redrawn (the command list): keep
+             * the sidecar's copy of it under the new draws. */
+            ;
         else if (ws_nw_full_mirror)
             gr_wide_clear((int)base, (int)draw_area_top,
                 (int)(draw_area_bottom < 512u ? draw_area_bottom + 1u : 512u) -
@@ -2654,16 +2690,14 @@ static inline void ws_refresh_current_reveal_margins_fast(void) {
 /* A native-wide sidecar is host-owned and is not automatically redrawn like
  * the guest's canonical framebuffer. Refresh its synthetic columns once per
  * active back buffer and frame, before this list submits any margin geometry. */
+/* Only a linked-list DMA names the guest address of the packet each GP0 word
+ * comes from; the upper VRAM half (see psx_mod_gpu_high_vram_source) trusts
+ * that address inside the walk only. */
 static int s_hivram_in_list;
 
 void gpu_ws_begin_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
     s_hivram_in_list = 1;
-    if (gp0_state != GP0_IDLE) {
-        gp0_state = GP0_IDLE;
-        gp0_words_collected = 0;
-        gp0_words_needed = 0;
-    }
     ws_nw_sync_target();
     if (!ws_nw_full_mirror) ws_refresh_current_reveal_margins();
 }
@@ -2679,11 +2713,6 @@ void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
 void gpu_ws_end_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
     s_hivram_in_list = 0;
-    if (gp0_state != GP0_IDLE) {
-        gp0_state = GP0_IDLE;
-        gp0_words_collected = 0;
-        gp0_words_needed = 0;
-    }
 }
 
 
@@ -3187,6 +3216,19 @@ void gpu_set_screen_kind(int kind) {
     s_screen_lut_init = 0;  /* rebuild on next scanout */
 }
 
+/* The effective screen model (PSX_SCREEN env first, then the config value),
+ * read by the OpenGL present pass that draws the CRT scanlines and mask. */
+int gpu_get_screen_kind(void) {
+    static int env_read = 0, env_kind = -1;
+    if (!env_read) {
+        const char* name = getenv("PSX_SCREEN");
+        ScreenKind k;
+        if (name && screen_kind_from_name(name, &k)) env_kind = (int)k;
+        env_read = 1;
+    }
+    return env_kind >= 0 ? env_kind : s_screen_kind_cfg;
+}
+
 static void screen_lut_ensure(void) {
     if (s_screen_lut_init) return;
     s_screen_lut_init = 1;
@@ -3386,6 +3428,7 @@ static void parse_vertex(uint32_t word, int32_t* x, int32_t* y) {
 extern int gte_geometry_correction_lookup(uint32_t packed,
                                           int32_t *x16, int32_t *y16);
 extern int gte_geometry_correction_enabled(void);
+extern int gte_geometry_position_fallback_enabled(void);
 static int s_texture_correction_enabled = 0;
 extern void gte_precision_tracking_set(int enabled);
 
@@ -3394,28 +3437,406 @@ void gpu_texture_correction_set(int enabled) {
     gte_precision_tracking_set(enabled);
 }
 
+int gpu_texture_correction_enabled(void) {
+    return s_texture_correction_enabled;
+}
+
 uint32_t gpu_texture_correction_hits(void) {
     return sw_perspective_triangle_count();
 }
 
-/* Match all three GP0 positions to recent GTE projections. Requiring a full
- * triangle match prevents screen-space HUD/sprites that happen to share one
- * coordinate from receiving world-geometry correction. The integer delta
- * folds in draw offsets and any widescreen adjustment already applied. */
-static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
+/* Renderer-independent census of the enhancement seam (ENHANCEMENTS.md
+ * G1.10). gpu_texture_correction_hits above counts in the software backend
+ * only, so it reads 0 under OpenGL / Vulkan; these count in GP0 parsing. */
+static uint32_t s_precision_diag[GPU_PRECISION_DIAG_COUNT];
+
+void gpu_precision_diag_stats(uint32_t out[GPU_PRECISION_DIAG_COUNT]) {
+    memcpy(out, s_precision_diag, sizeof(s_precision_diag));
+}
+
+/* Geometry triangles with exact words, by the store PC of the first one (the
+ * packet builder), so a census can tell one renderer from another (G1.12).
+ * Saturates at 32 sites; later ones are not counted. */
+#define PRECISE_SITE_MAX 32
+static struct { uint32_t pc, exact, partial; } s_precise_sites[PRECISE_SITE_MAX];
+static int s_precise_site_count = 0;
+
+static void precise_site_note(uint32_t pc, int full) {
+    int i;
+    for (i = 0; i < s_precise_site_count; i++)
+        if (s_precise_sites[i].pc == pc) break;
+    if (i == s_precise_site_count) {
+        if (i == PRECISE_SITE_MAX) return;
+        s_precise_sites[i].pc = pc;
+        s_precise_sites[i].exact = s_precise_sites[i].partial = 0;
+        s_precise_site_count++;
+    }
+    if (full) s_precise_sites[i].exact++;
+    else s_precise_sites[i].partial++;
+}
+
+/* Seam census (G1.12). On the console a mesh is watertight because two
+ * triangles that share an edge carry the same two integer vertices. Every
+ * geometry triangle's edges go into a per-frame table keyed by those integer
+ * endpoints; an edge seen again whose sub-pixel endpoints differ is a seam
+ * the correction opened (or a corrected triangle meeting an uncorrected
+ * one). Counted each frame, with the last frame's first samples kept so the
+ * vertices involved can be traced (writer PC, derived). */
+#define SEAM_TABLE 16384u
+#define SEAM_TOLERANCE 1024      /* 1/64 pixel in 16.16 */
+typedef struct {
+    uint32_t frame;
+    uint64_t key;
+    int32_t px[2], py[2];        /* sub-pixel endpoints, key order */
+    uint32_t pc[2];              /* store PC of each endpoint, 0 = none */
+    uint8_t derived[2];
+} SeamEdge;
+static SeamEdge *s_seam_edges = NULL;
+static int s_seam_census = 0;     /* bench only: off, the census costs per edge */
+
+void gpu_geometry_seam_census_set(int enabled) { s_seam_census = enabled ? 1 : 0; }
+int gpu_geometry_seam_census_enabled(void) { return s_seam_census; }
+#define SEAM_SAMPLE_MAX 16
+static GpuSeamSample s_seam_samples[SEAM_SAMPLE_MAX];
+static int s_seam_sample_count = 0;
+static uint32_t s_seam_sample_frame = 0;
+
+static void seam_note_edge(const int32_t vx[2], const int32_t vy[2],
+                           const int32_t fx[2], const int32_t fy[2],
+                           const uint32_t pc[2], const uint8_t derived[2]) {
+    const uint32_t frame = (uint32_t)s_frame_count;
+    int a = 0, b = 1;
+    if (vx[1] < vx[0] || (vx[1] == vx[0] && vy[1] < vy[0])) { a = 1; b = 0; }
+    if (vx[a] == vx[b] && vy[a] == vy[b]) return;
+    const uint64_t key = ((uint64_t)(uint16_t)vx[a] << 48) | ((uint64_t)(uint16_t)vy[a] << 32) |
+                         ((uint64_t)(uint16_t)vx[b] << 16) | (uint64_t)(uint16_t)vy[b];
+    uint32_t h = (uint32_t)((key * 0x9E3779B97F4A7C15ull) >> 50) & (SEAM_TABLE - 1u);
+    for (int probe = 0; probe < 8; probe++, h = (h + 1u) & (SEAM_TABLE - 1u)) {
+        SeamEdge *e = &s_seam_edges[h];
+        if (e->frame != frame) {
+            e->frame = frame; e->key = key;
+            e->px[0] = fx[a]; e->py[0] = fy[a]; e->px[1] = fx[b]; e->py[1] = fy[b];
+            e->pc[0] = pc[a]; e->pc[1] = pc[b];
+            e->derived[0] = derived[a]; e->derived[1] = derived[b];
+            return;
+        }
+        if (e->key != key) continue;
+        const int32_t d = abs(e->px[0] - fx[a]) + abs(e->py[0] - fy[a]) +
+                          abs(e->px[1] - fx[b]) + abs(e->py[1] - fy[b]);
+        if (d <= SEAM_TOLERANCE) return;
+        s_precision_diag[GPU_DIAG_SEAM_EDGES]++;
+        if (s_seam_sample_frame != frame) { s_seam_sample_frame = frame; s_seam_sample_count = 0; }
+        if (s_seam_sample_count < SEAM_SAMPLE_MAX) {
+            GpuSeamSample *o = &s_seam_samples[s_seam_sample_count++];
+            o->frame = frame;
+            for (int k = 0; k < 2; k++) {
+                const int src = k ? b : a;
+                o->x[k] = (int16_t)vx[src]; o->y[k] = (int16_t)vy[src];
+                o->first_fx[k] = e->px[k]; o->first_fy[k] = e->py[k];
+                o->first_pc[k] = e->pc[k]; o->first_derived[k] = e->derived[k];
+                o->second_fx[k] = fx[src]; o->second_fy[k] = fy[src];
+                o->second_pc[k] = pc[src]; o->second_derived[k] = derived[src];
+            }
+        }
+        return;
+    }
+}
+
+static void seam_note_triangle(const int32_t vx[3], const int32_t vy[3],
+                               const int32_t fx[3], const int32_t fy[3],
+                               const uint32_t pc[3], const uint8_t derived[3]) {
+    if (!s_seam_edges) {
+        s_seam_edges = (SeamEdge *)calloc(SEAM_TABLE, sizeof(SeamEdge));
+        if (!s_seam_edges) return;
+    }
+    for (int i = 0; i < 3; i++) {
+        const int j = (i + 1) % 3;
+        const int32_t ex[2] = { vx[i], vx[j] }, ey[2] = { vy[i], vy[j] };
+        const int32_t px[2] = { fx[i], fx[j] }, py[2] = { fy[i], fy[j] };
+        const uint32_t epc[2] = { pc[i], pc[j] };
+        const uint8_t ed[2] = { derived[i], derived[j] };
+        seam_note_edge(ex, ey, px, py, epc, ed);
+    }
+}
+
+/* Pixel-cell merge (G1.12). Models often carry distinct vertices a fraction
+ * of a pixel apart where two parts meet (unwelded joints); the console's
+ * integer positions put them on the same pixel and the mesh is watertight.
+ * At sub-pixel precision they come apart and the gap shows (Tekken 3: thin
+ * lines between body parts, more of them as a fighter gets small on screen).
+ * So within a frame, every corrected vertex whose packet word lands on an
+ * integer pixel already used by a corrected vertex takes that vertex's
+ * sub-pixel position: wherever the console joins two vertices, they stay
+ * joined; a vertex alone on its pixel keeps its own position. Keyed by the
+ * drawn integer position (offsets included), reset every frame. */
+#define CELL_TABLE 16384u
+typedef struct { uint32_t frame; int32_t x, y; int32_t fx, fy; } PreciseCell;
+static PreciseCell *s_precise_cells = NULL;
+static int s_cell_merge = 1;
+
+void gpu_geometry_cell_merge_set(int enabled) { s_cell_merge = enabled ? 1 : 0; }
+int gpu_geometry_cell_merge_enabled(void) { return s_cell_merge; }
+
+static void precise_cell_merge(const int32_t vx[3], const int32_t vy[3],
+                               int32_t fx[3], int32_t fy[3]) {
+    if (!s_precise_cells) {
+        s_precise_cells = (PreciseCell *)calloc(CELL_TABLE, sizeof(PreciseCell));
+        if (!s_precise_cells) return;
+    }
+    const uint32_t frame = (uint32_t)s_frame_count + 1u;   /* 0 = empty */
+    for (int i = 0; i < 3; i++) {
+        uint32_t h = ((uint32_t)vx[i] * 0x9E3779B1u ^ (uint32_t)vy[i] * 0x85EBCA77u) >> 18;
+        for (int probe = 0; probe < 8; probe++, h = (h + 1u) & (CELL_TABLE - 1u)) {
+            PreciseCell *c = &s_precise_cells[h];
+            if (c->frame != frame) {
+                c->frame = frame; c->x = vx[i]; c->y = vy[i];
+                c->fx = fx[i]; c->fy = fy[i];
+                break;
+            }
+            if (c->x != vx[i] || c->y != vy[i]) continue;
+            if (c->fx != fx[i] || c->fy != fy[i]) {
+                fx[i] = c->fx; fy[i] = c->fy;
+                s_precision_diag[GPU_DIAG_PRECISE_VERTICES_MERGED]++;
+            }
+            break;
+        }
+    }
+}
+
+/* Triangle record (bench, G1.12): the geometry triangles drawn during each
+ * of the last two guest VBlank periods, with drawn integer and sub-pixel
+ * positions, store PC and derived flag per vertex. capture_plan arms it and
+ * dumps it beside a capture taken at the same VBlank, so a defect seen in
+ * one frame can be traced to the triangles that drew it. Off: one flag. */
+typedef struct {
+    int32_t vx[3], vy[3], fx[3], fy[3];
+    int32_t ix[3], iy[3];        /* ideal 16.16 position, INT32_MIN unknown */
+    uint32_t pc[3], addr[3], src, cmd;
+    uint8_t derived[3], exact;
+    /* Reference comparison (pgxp-vertex-log): packet word index, raw
+     * position word and tracked depth (0 = none) per vertex. */
+    uint32_t word[3];
+    uint8_t idx[3];
+    uint16_t z[3];
+} GpuTriRecord;
+#define TRI_RECORD_MAX 8192
+static GpuTriRecord *s_tri_rec[3];
+static int s_tri_rec_n[3];
+static int s_tri_rec_cur = 0;
+int g_gpu_tri_record = 0;
+
+void gpu_tri_record_vblank(void) {
+    s_tri_rec_cur = (s_tri_rec_cur + 1) % 3;
+    s_tri_rec_n[s_tri_rec_cur] = 0;
+}
+
+extern int gte_precision_word_ideal(uint32_t addr, uint32_t packed,
+                                    int32_t *ix16, int32_t *iy16);
+
+/* Address of word `index` of the current command for the precision store:
+ * RAM folded to 2 MiB as the DMA does, but a word in the mods' GPU-DMA
+ * aperture kept whole (mod_memory.h; the DMA reaches it with 24-bit tags),
+ * so that it is not taken for a RAM word (G1.13). */
+static uint32_t packet_word_addr(int index) {
+    const uint32_t a = (gp0_cmd_source_addr + (uint32_t)index * 4u) & 0x00FFFFFCu;
+    return a >= PSX_MOD_GPU_DMA_APERTURE_BASE ? a : (a & 0x1FFFFCu);
+}
+
+/* Packet word address of vertex i of the current command, 0 if unknown. */
+static uint32_t tri_word_addr(int index) {
+    if (gp0_cmd_source_addr == 0xFFFFFFFFu) return 0;
+    return packet_word_addr(index);
+}
+
+static void tri_record(const int indices[3], const int32_t vx[3], const int32_t vy[3],
+                       const int32_t fx[3], const int32_t fy[3], const uint32_t pc[3],
+                       const uint8_t derived[3], int exact, const uint16_t z[3]) {
+    if (!s_tri_rec[s_tri_rec_cur]) {
+        s_tri_rec[s_tri_rec_cur] = (GpuTriRecord *)calloc(TRI_RECORD_MAX, sizeof(GpuTriRecord));
+        if (!s_tri_rec[s_tri_rec_cur]) return;
+    }
+    if (s_tri_rec_n[s_tri_rec_cur] >= TRI_RECORD_MAX) return;
+    GpuTriRecord *r = &s_tri_rec[s_tri_rec_cur][s_tri_rec_n[s_tri_rec_cur]++];
+    for (int i = 0; i < 3; i++) {
+        r->vx[i] = vx[i]; r->vy[i] = vy[i]; r->fx[i] = fx[i]; r->fy[i] = fy[i];
+        r->pc[i] = pc[i]; r->derived[i] = derived[i];
+        r->addr[i] = tri_word_addr(indices[i]);
+        r->ix[i] = r->iy[i] = INT32_MIN;
+        int32_t ix, iy, raw_x, raw_y;
+        const uint32_t word = gp0_cmd_buf[indices[i]];
+        if (r->addr[i] && gte_precision_word_ideal(r->addr[i], word, &ix, &iy)) {
+            parse_vertex(word, &raw_x, &raw_y);
+            r->ix[i] = (int32_t)((int64_t)ix + (int64_t)(vx[i] - raw_x) * 65536);
+            r->iy[i] = (int32_t)((int64_t)iy + (int64_t)(vy[i] - raw_y) * 65536);
+        }
+        r->idx[i] = (uint8_t)indices[i]; r->word[i] = gp0_cmd_buf[indices[i]]; r->z[i] = z[i];
+    }
+    r->exact = (uint8_t)exact;
+    r->src = gp0_cmd_source_addr;
+    r->cmd = gp0_cmd_buf[0];
+}
+
+/* Text, one triangle a line: period (-1 = previous VBlank period, 0 = the
+ * one that just ended), exact words, source address, then per vertex the
+ * drawn integer x y, drawn x y (sub-pixel when corrected), store PC,
+ * derived, packet word address, ideal x y ("-" when unknown); then the
+ * packet's command word (opcode and colour: tells one surface from another
+ * in a census), and for tools/pgxp_ref_capture.py the three packet word
+ * indices, the three raw position words and the three tracked depths
+ * (0 = none). */
+const char *gpu_tri_record_dump(const char *path) {
+    FILE *f = fopen(path, "w");
+    if (!f) return "cannot open triangle dump";
+    for (int k = 1; k >= 0; k--) {
+        const int b = (s_tri_rec_cur + 3 - 1 - k) % 3;
+        for (int t = 0; t < s_tri_rec_n[b] && s_tri_rec[b]; t++) {
+            const GpuTriRecord *r = &s_tri_rec[b][t];
+            fprintf(f, "%d %d %08X", -k, r->exact, r->src);
+            for (int i = 0; i < 3; i++) {
+                fprintf(f, " %d %d %.4f %.4f %08X %d %06X", r->vx[i], r->vy[i],
+                        r->fx[i] / 65536.0, r->fy[i] / 65536.0, r->pc[i], r->derived[i],
+                        r->addr[i]);
+                if (r->ix[i] == INT32_MIN) fprintf(f, " - -");
+                else fprintf(f, " %.4f %.4f", r->ix[i] / 65536.0, r->iy[i] / 65536.0);
+            }
+            fprintf(f, " %08X %d %d %d %08X %08X %08X %u %u %u\n", r->cmd, r->idx[0], r->idx[1],
+                    r->idx[2], r->word[0], r->word[1], r->word[2], r->z[0], r->z[1], r->z[2]);
+        }
+    }
+    fclose(f);
+    return NULL;
+}
+
+int gpu_precision_diag_seams(GpuSeamSample *out, int max) {
+    int n = s_seam_sample_count < max ? s_seam_sample_count : max;
+    memcpy(out, s_seam_samples, (size_t)n * sizeof(*out));
+    return n;
+}
+
+int gpu_precision_diag_triangle_sites(uint32_t *pc, uint32_t *exact,
+                                      uint32_t *partial, int max) {
+    int n = s_precise_site_count < max ? s_precise_site_count : max;
+    for (int i = 0; i < n; i++) {
+        pc[i] = s_precise_sites[i].pc;
+        exact[i] = s_precise_sites[i].exact;
+        partial[i] = s_precise_sites[i].partial;
+    }
+    return n;
+}
+
+/* A tracked projection is usable for a packet word only if its integer part
+ * is the word itself: a saturated (off-screen) projection keeps its true
+ * 16.16 position, which no longer matches the clamped SXY. A vertex the CPU
+ * computed from packed words (G1.12, `derived`) is allowed one pixel per
+ * half-word: the game rounds each term before adding, the shadow does not.
+ * Every packet sharing that vertex reads the same shadow, so they agree.
+ * The word is read as the GPU reads it, 11 bits per coordinate: packed
+ * arithmetic on a negative X carries garbage into bits 11-15 (Tekken 3's
+ * joint welds give 0x7FFF for -1), which the console never sees. The
+ * comparison itself is plain, so a position that would wrap is refused. */
+static int precise_matches_word(uint32_t word, int32_t x16, int32_t y16,
+                                int derived) {
+    int32_t raw_x, raw_y;
+    parse_vertex(word, &raw_x, &raw_y);
+    const int32_t dx = (x16 >> 16) - raw_x;
+    const int32_t dy = (y16 >> 16) - raw_y;
+    const int32_t tol = derived ? 1 : 0;
+    return dx >= -tol && dx <= tol && dy >= -tol && dy <= tol;
+}
+
+/* Sub-pixel positions for one GP0 triangle (geometry_correction).
+ *
+ * Exact path first (ENHANCEMENTS.md G1.11): a position word whose packet
+ * address holds a tracked SWC2 projection store of that same value gets that
+ * projection's 16.16 position, the primary path of both reference PGXP
+ * implementations (G1.2). It is per vertex: a word without provenance keeps
+ * its integer position, and since a word's answer depends only on its own
+ * store, two packets that carry the same projected vertex agree on it. No
+ * screen-position guess is involved, so nothing on this path can be ambiguous.
+ *
+ * The position-keyed cache (G1.4) is only a fallback, off unless
+ * gte_geometry_position_fallback_set(1), used all three or nothing for a
+ * triangle with no exact word at all: requiring a full match keeps HUD and
+ * sprites that share one coordinate with a projection uncorrected. The
+ * integer delta folds in draw offsets and any widescreen adjustment. */
+static void prepare_precise_triangle(int i0, int i1, int i2,
                                      const int32_t vx[3], const int32_t vy[3]) {
-    uint32_t words[3] = { w0, w1, w2 };
+    const int indices[3] = { i0, i1, i2 };
     int32_t fx[3], fy[3];
     const int geometry_enabled = gte_geometry_correction_enabled();
     gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
+    s_precision_diag[GPU_DIAG_PRECISE_TRIANGLES]++;
     if (!geometry_enabled) {
+        gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
+        if (g_gpu_tri_record) {
+            /* Record the console's own positions too: the baseline the
+             * geometry gates are calibrated against (G1.12). */
+            const uint32_t no_pc[3] = { 0, 0, 0 };
+            const uint8_t no_derived[3] = { 0, 0, 0 };
+            const uint16_t no_z[3] = { 0, 0, 0 };
+            int32_t ix[3], iy[3];
+            for (int i = 0; i < 3; i++) {
+                ix[i] = (int32_t)((int64_t)vx[i] * 65536);
+                iy[i] = (int32_t)((int64_t)vy[i] * 65536);
+            }
+            tri_record(indices, vx, vy, ix, iy, no_pc, no_derived, 0, no_z);
+        }
+        return;
+    }
+    int exact = 0;
+    uint32_t first_exact_addr = 0;
+    uint32_t seam_pc[3] = { 0, 0, 0 };
+    uint8_t seam_derived[3] = { 0, 0, 0 };
+    uint16_t rec_z[3] = { 0, 0, 0 };
+    for (int i = 0; i < 3; i++) {
+        fx[i] = (int32_t)((int64_t)vx[i] * 65536);
+        fy[i] = (int32_t)((int64_t)vy[i] * 65536);
+    }
+    if (gp0_cmd_source_addr != 0xFFFFFFFFu) {
+        for (int i = 0; i < 3; i++) {
+            const uint32_t word = gp0_cmd_buf[indices[i]];
+            const uint32_t addr = packet_word_addr(indices[i]);
+            int32_t raw_x, raw_y, x16, y16;
+            uint8_t derived = 0;
+            parse_vertex(word, &raw_x, &raw_y);
+            uint16_t z16 = 0;
+            const int tracked = gte_precision_load_word(addr, word, &x16, &y16, &z16, &derived);
+            if (tracked && precise_matches_word(word, x16, y16, derived)) {
+                rec_z[i] = z16;
+                fx[i] = (int32_t)((int64_t)x16 + (int64_t)(vx[i] - raw_x) * 65536);
+                fy[i] = (int32_t)((int64_t)y16 + (int64_t)(vy[i] - raw_y) * 65536);
+                if (!exact) first_exact_addr = addr;
+                exact++;
+                seam_pc[i] = gte_precision_word_writer_pc(addr);
+                seam_derived[i] = derived;
+                if (derived) s_precision_diag[GPU_DIAG_PRECISE_WORDS_DERIVED]++;
+            } else {
+                if (tracked) s_precision_diag[GPU_DIAG_PRECISE_WORDS_REFUSED]++;
+                fx[i] = (int32_t)((int64_t)vx[i] * 65536);
+                fy[i] = (int32_t)((int64_t)vy[i] * 65536);
+            }
+        }
+    }
+    if (exact > 0 && s_cell_merge) precise_cell_merge(vx, vy, fx, fy);
+    if (s_seam_census) seam_note_triangle(vx, vy, fx, fy, seam_pc, seam_derived);
+    if (g_gpu_tri_record) tri_record(indices, vx, vy, fx, fy, seam_pc, seam_derived, exact, rec_z);
+    if (exact > 0) {
+        s_precision_diag[GPU_DIAG_PRECISE_WORDS_EXACT] += (uint32_t)exact;
+        s_precision_diag[exact == 3 ? GPU_DIAG_PRECISE_TRIANGLES_EXACT
+                                    : GPU_DIAG_PRECISE_TRIANGLES_PARTIAL]++;
+        precise_site_note(gte_precision_word_writer_pc(first_exact_addr), exact == 3);
+        gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
+        return;
+    }
+    if (!gte_geometry_position_fallback_enabled()) {
         gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
         return;
     }
     for (int i = 0; i < 3; i++) {
+        const uint32_t word = gp0_cmd_buf[indices[i]];
         int32_t raw_x, raw_y;
-        parse_vertex(words[i], &raw_x, &raw_y);
-        if (!gte_geometry_correction_lookup(words[i], &fx[i], &fy[i])) {
+        parse_vertex(word, &raw_x, &raw_y);
+        if (!gte_geometry_correction_lookup(word, &fx[i], &fy[i])) {
             gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
             return;
         }
@@ -3424,7 +3845,73 @@ static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
         fy[i] = (int32_t)((int64_t)fy[i] +
                           (int64_t)(vy[i] - raw_y) * 65536);
     }
+    s_precision_diag[GPU_DIAG_PRECISE_TRIANGLES_POSITION]++;
     gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
+}
+
+/* Axis-aligned quads under geometry correction (G1.14). The textured-quad
+ * path and the semi-transparent mono-quad path draw a quad whose integer
+ * corners form a screen-aligned rectangle as a single rect, which has no
+ * sub-pixel corners. A world quad that faces the camera rounds to such a
+ * rectangle: drawn as a rect it stays on the integer grid while its
+ * corrected neighbours move by their fraction, and a crack up to a pixel
+ * wide opens along the shared edge (Tekken 3's arcade stages: the sky
+ * through a courtyard door). With geometry on, a quad with an exact
+ * position word is drawn as its two triangles instead; with geometry off,
+ * or without an exact word (2D, UI), the rect path is unchanged.
+ * video_enhancements geometry_rect_quads (on by default) switches it. */
+static int s_rect_quads_precise = 1;
+
+void gpu_geometry_rect_quads_set(int enabled) { s_rect_quads_precise = enabled ? 1 : 0; }
+int gpu_geometry_rect_quads_enabled(void) { return s_rect_quads_precise; }
+
+/* idx: the quad's four position word indices, in packet order. */
+static int precise_rect_quad(const int idx[4]) {
+    if (!s_rect_quads_precise || !gte_geometry_correction_enabled() ||
+        gp0_cmd_source_addr == 0xFFFFFFFFu)
+        return 0;
+    for (int i = 0; i < 4; i++) {
+        const uint32_t word = gp0_cmd_buf[idx[i]];
+        int32_t x16, y16;
+        uint8_t derived = 0;
+        if (gte_precision_load_word(packet_word_addr(idx[i]), word, &x16, &y16, NULL, &derived) &&
+            precise_matches_word(word, x16, y16, derived)) {
+            s_precision_diag[GPU_DIAG_PRECISE_RECT_QUADS]++;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A quad the rect path keeps, in the triangle record: its two triangles
+ * (0 1 2, 2 1 3) at the integer corners it is drawn at, uncorrected, with
+ * the store PC of each tracked word so that the gates put it in its mesh.
+ * Without it the record has a hole wherever a rect was drawn and the gates
+ * cannot see a crack along its edge. vx, vy: drawn positions. */
+static void tri_record_rect_quad(const int idx[4], const int32_t vx[4], const int32_t vy[4]) {
+    static const int tri[2][3] = { { 0, 1, 2 }, { 2, 1, 3 } };
+    if (!g_gpu_tri_record) return;
+    for (int t = 0; t < 2; t++) {
+        int ind[3];
+        int32_t x[3], y[3], fx[3], fy[3];
+        uint32_t pc[3] = { 0, 0, 0 };
+        const uint8_t no_derived[3] = { 0, 0, 0 };
+        const uint16_t no_z[3] = { 0, 0, 0 };
+        for (int k = 0; k < 3; k++) {
+            const int i = tri[t][k];
+            ind[k] = idx[i];
+            x[k] = vx[i];
+            y[k] = vy[i];
+            fx[k] = (int32_t)((int64_t)vx[i] * 65536);
+            fy[k] = (int32_t)((int64_t)vy[i] * 65536);
+            if (gp0_cmd_source_addr != 0xFFFFFFFFu) {
+                const uint32_t addr = packet_word_addr(idx[i]);
+                if (gte_precision_load_word(addr, gp0_cmd_buf[idx[i]], NULL, NULL, NULL, NULL))
+                    pc[k] = gte_precision_word_writer_pc(addr);
+            }
+        }
+        tri_record(ind, x, y, fx, fy, pc, no_derived, 0, no_z);
+    }
 }
 
 /* Enable perspective UVs only when every position word came from an exact
@@ -3436,12 +3923,17 @@ static void prepare_texture_triangle(int i0, int i1, int i2) {
         return;
     int indices[3] = { i0, i1, i2 };
     uint16_t z[3];
+    int exact = 0;
+    s_precision_diag[GPU_DIAG_TEXTURE_TRIANGLES]++;
     for (int i = 0; i < 3; i++) {
-        uint32_t addr = (gp0_cmd_source_addr + (uint32_t)indices[i] * 4u) & 0x1FFFFCu;
-        if (!gte_precision_load_word(addr, gp0_cmd_buf[indices[i]], NULL, NULL, &z[i]) ||
-            z[i] == 0)
-            return;
+        uint32_t addr = packet_word_addr(indices[i]);
+        if (gte_precision_load_word(addr, gp0_cmd_buf[indices[i]], NULL, NULL, &z[i], NULL) &&
+            z[i] != 0)
+            exact++;
     }
+    s_precision_diag[GPU_DIAG_TEXTURE_WORDS_EXACT] += (uint32_t)exact;
+    if (exact != 3) return;
+    s_precision_diag[GPU_DIAG_TEXTURE_TRIANGLES_EXACT]++;
     float q[3] = { 1.0f / (float)z[0], 1.0f / (float)z[1], 1.0f / (float)z[2] };
     float qmax = q[0];
     if (q[1] > qmax) qmax = q[1];
@@ -3634,7 +4126,7 @@ static void gp0_exec_mono_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_buf[3],
+    prepare_precise_triangle(1, 2, 3,
                              vx, vy);
     gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
 }
@@ -3699,7 +4191,8 @@ static void gp0_exec_mono_quad(void) {
     /* Semi axis-aligned mono quads (UI boxes/borders): one rect, not two tris.
      * Thin semi borders (e.g. CTR name-entry OT-1144 teal 3×H) otherwise double-
      * blend their shared diagonal — nearly the whole strip — and overpaint 3D. */
-    if (semi_trans && ws_axis_aligned_quad(vx, vy)) {
+    static const int mono_idx[4] = { 1, 2, 3, 4 };
+    if (semi_trans && ws_axis_aligned_quad(vx, vy) && !precise_rect_quad(mono_idx)) {
         int32_t min_x = vx[0], max_x = vx[0], min_y = vy[0], max_y = vy[0];
         for (int i = 1; i < 4; i++) {
             if (vx[i] < min_x) min_x = vx[i];
@@ -3710,6 +4203,7 @@ static void gp0_exec_mono_quad(void) {
         int w = (int)(max_x - min_x);
         int h = (int)(max_y - min_y);
         if (w > 0 && h > 0) {
+            tri_record_rect_quad(mono_idx, vx, vy);
             gr_draw_flat_rect(min_x, min_y, w, h, color);
             return;
         }
@@ -3717,15 +4211,13 @@ static void gp0_exec_mono_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2],
-                                 gp0_cmd_buf[3], tx, ty);
+        prepare_precise_triangle(1, 2, 3, tx, ty);
         gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[3], gp0_cmd_buf[2],
-                                 gp0_cmd_buf[4], tx, ty);
+        prepare_precise_triangle(3, 2, 4, tx, ty);
         gr_draw_flat_triangle(vx[2], vy[2], vx[1], vy[1], vx[3], vy[3], color);
     }
 }
@@ -3748,7 +4240,7 @@ static void gp0_exec_shaded_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
+    prepare_precise_triangle(1, 3, 5,
                              vx, vy);
     gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
                              vx[1], vy[1], c[1],
@@ -3800,8 +4292,7 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[5], tx, ty);
+        prepare_precise_triangle(1, 3, 5, tx, ty);
         gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
                                  vx[1], vy[1], c[1],
                                  vx[2], vy[2], c[2]);
@@ -3809,8 +4300,7 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[7], tx, ty);
+        prepare_precise_triangle(5, 3, 7, tx, ty);
         gr_draw_gouraud_triangle(vx[2], vy[2], c[2],
                                  vx[1], vy[1], c[1],
                                  vx[3], vy[3], c[3]);
@@ -3864,13 +4354,13 @@ static void gp0_exec_textured_tri(void) {
     u[0] = gp0_cmd_buf[2] & 0xFF;        v[0] = (gp0_cmd_buf[2] >> 8) & 0xFF;
     u[1] = gp0_cmd_buf[4] & 0xFF;        v[1] = (gp0_cmd_buf[4] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[6] & 0xFF;        v[2] = (gp0_cmd_buf[6] >> 8) & 0xFF;
+    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
     /* Texpage from word 4 bits 16-31 */
     uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[4] >> 16);
     uint16_t tpage = tpage_word & 0x1FF;
     set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
-    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-    uint16_t clut_x = (clut & 0x3F) * 16;
-    uint16_t clut_y = (clut >> 6) & 0x1FF;
     if (psx_gpu_triangle_oversize(vx, vy, 0, 1, 2)) return;
 
     ws_nw_hud_shift_vertices(vx, 3);
@@ -3881,7 +4371,7 @@ static void gp0_exec_textured_tri(void) {
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     setup_textured_draw(color24, semi_trans, raw_texture);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
+    prepare_precise_triangle(1, 3, 5,
                              vx, vy);
     prepare_texture_triangle(1, 3, 5);
     gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
@@ -3906,12 +4396,12 @@ static void gp0_exec_textured_quad(void) {
     u[1] = gp0_cmd_buf[4] & 0xFF;  v[1] = (gp0_cmd_buf[4] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[6] & 0xFF;  v[2] = (gp0_cmd_buf[6] >> 8) & 0xFF;
     u[3] = gp0_cmd_buf[8] & 0xFF;  v[3] = (gp0_cmd_buf[8] >> 8) & 0xFF;
-    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[4] >> 16);
-    uint16_t tpage = tpage_word & 0x1FF;
-    set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
     uint16_t clut_x = (clut & 0x3F) * 16;
     uint16_t clut_y = (clut >> 6) & 0x1FF;
+    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[4] >> 16);
+    uint16_t tpage = tpage_word & 0x1FF;
+    set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
@@ -3934,10 +4424,11 @@ static void gp0_exec_textured_quad(void) {
 
     setup_textured_draw(color24, semi_trans, raw_texture);
 
+    static const int tex_idx[4] = { 1, 3, 5, 7 };
     if (vy[0] == vy[1] && vy[2] == vy[3] &&
         vx[0] == vx[2] && vx[1] == vx[3] &&
         u[0] == u[2] && u[1] == u[3] &&
-        v[0] == v[1] && v[2] == v[3]) {
+        v[0] == v[1] && v[2] == v[3] && !precise_rect_quad(tex_idx)) {
         int x = vx[0] < vx[1] ? vx[0] : vx[1];
         int y = vy[0] < vy[2] ? vy[0] : vy[2];
         int w = vx[0] < vx[1] ? vx[1] - vx[0] : vx[0] - vx[1];
@@ -3947,6 +4438,7 @@ static void gp0_exec_textured_quad(void) {
         int top_v   = vy[0] < vy[2] ? v[0] : v[2];
         int bot_v   = vy[0] < vy[2] ? v[2] : v[0];
         if (w > 0 && h > 0) {
+            tri_record_rect_quad(tex_idx, vx, vy);
             if (right_u - left_u == w && bot_v - top_v == h) {
                 gr_draw_textured_rect(x, y, w, h, left_u, top_v,
                                       clut_x, clut_y, tpage);
@@ -3962,8 +4454,7 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[5], tx, ty);
+        prepare_precise_triangle(1, 3, 5, tx, ty);
         prepare_texture_triangle(1, 3, 5);
         gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
                                   vx[1], vy[1], u[1], v[1],
@@ -3973,8 +4464,7 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[7], tx, ty);
+        prepare_precise_triangle(5, 3, 7, tx, ty);
         prepare_texture_triangle(5, 3, 7);
         gr_draw_textured_triangle(vx[2], vy[2], u[2], v[2],
                                   vx[1], vy[1], u[1], v[1],
@@ -4000,12 +4490,12 @@ static void gp0_exec_shaded_textured_tri(void) {
     u[0] = gp0_cmd_buf[2] & 0xFF;  v[0] = (gp0_cmd_buf[2] >> 8) & 0xFF;
     u[1] = gp0_cmd_buf[5] & 0xFF;  v[1] = (gp0_cmd_buf[5] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[8] & 0xFF;  v[2] = (gp0_cmd_buf[8] >> 8) & 0xFF;
-    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[5] >> 16);
-    uint16_t tpage = tpage_word & 0x1FF;
-    set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
     uint16_t clut_x = (clut & 0x3F) * 16;
     uint16_t clut_y = (clut >> 6) & 0x1FF;
+    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[5] >> 16);
+    uint16_t tpage = tpage_word & 0x1FF;
+    set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     if (psx_gpu_triangle_oversize(vx, vy, 0, 1, 2)) return;
 
     ws_nw_hud_shift_vertices(vx, 3);
@@ -4016,7 +4506,7 @@ static void gp0_exec_shaded_textured_tri(void) {
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4], gp0_cmd_buf[7],
+    prepare_precise_triangle(1, 4, 7,
                              vx, vy);
     prepare_texture_triangle(1, 4, 7);
     gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
@@ -4045,12 +4535,12 @@ static void gp0_exec_shaded_textured_quad(void) {
     u[1] = gp0_cmd_buf[5] & 0xFF;   v[1] = (gp0_cmd_buf[5] >> 8) & 0xFF;
     u[2] = gp0_cmd_buf[8] & 0xFF;   v[2] = (gp0_cmd_buf[8] >> 8) & 0xFF;
     u[3] = gp0_cmd_buf[11] & 0xFF;  v[3] = (gp0_cmd_buf[11] >> 8) & 0xFF;
-    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[5] >> 16);
-    uint16_t tpage = tpage_word & 0x1FF;
-    set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
     uint16_t clut_x = (clut & 0x3F) * 16;
     uint16_t clut_y = (clut >> 6) & 0x1FF;
+    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[5] >> 16);
+    uint16_t tpage = tpage_word & 0x1FF;
+    set_tpage_from_poly(tpage_word);   /* latches even for size-rejected polys */
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
@@ -4067,8 +4557,7 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4],
-                                 gp0_cmd_buf[7], tx, ty);
+        prepare_precise_triangle(1, 4, 7, tx, ty);
         prepare_texture_triangle(1, 4, 7);
         gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
                                          vx[1], vy[1], u[1], v[1], c[1],
@@ -4078,8 +4567,7 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[7], gp0_cmd_buf[4],
-                                 gp0_cmd_buf[10], tx, ty);
+        prepare_precise_triangle(7, 4, 10, tx, ty);
         prepare_texture_triangle(7, 4, 10);
         gr_draw_shaded_textured_triangle(vx[2], vy[2], u[2], v[2], c[2],
                                          vx[1], vy[1], u[1], v[1], c[1],
@@ -4144,10 +4632,19 @@ static void gp0_exec_mono_rect(void) {
     ws_expand_fullscreen_rect(&x0, y0, &w, h);
     x0 += ws_nw_hud_shift(x0, w);   /* native-wide HUD corner re-anchor (no-op else) */
     x0 += draw_offset_x; y0 += draw_offset_y;
-    int is_out = draw_area_out_rect(x0, y0, w, h);
-    if (is_out) return;
+    if (draw_area_out_rect(x0, y0, w, h)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     gr_draw_flat_rect(x0, y0, w, h, color);
+    /* Force's underlay at its two packet slots fills above the sprite plane.
+     * A partial one that meets a screen edge (272 px from x = 0 on the last
+     * stage) continues into that 16:9 margin, in the sidecar only. */
+    uint32_t src = gp0_cmd_source_addr & 0x1fffffu;
+    int margin = ws_nw_offset(), sx = x0 - draw_offset_x;
+    if (t3_force_background_active && margin > 0 && w < 368 &&
+        (src == 0xB6B18u || src == 0xB6B28u)) {
+        if (sx == 0) gr_draw_flat_rect(x0 - margin, y0, margin, h, color);
+        if (sx + w == 368) gr_draw_flat_rect(x0 + w, y0, margin, h, color);
+    }
 }
 
 /* Additional Force cells lie wholly outside the original framebuffer. The
@@ -4162,8 +4659,80 @@ static void t3_force_draw_reveal(uint32_t source, uint32_t color24, int semi, in
             (r->cell.tile & 3)*64, ((r->cell.tile >> 2)&3)*64,
             (r->cell.clut & 63)*16, (r->cell.clut >> 6)&511,
             (current_texpage() & ~31u) | ((r->cell.tile >> 8)&31));
+        if (r->filler && psx_read_word(0x800B6BB0u) == 3) {
+            gr_set_semi_transparency(0, (int)semi_transparency);
+            gr_draw_flat_rect(r->x + draw_offset_x, r->y + 64 + draw_offset_y, 64, 32,
+                rgb888_to_rgb555(psx_read_word(0x800B6B38u) & 0xFFFFFFu));
+        }
     }
 }
+
+/* SLUS-00402 Tekken Ball overlay: 800B5A48 draws the beach panorama as rows
+ * of fifteen 32px sprites from x = -(scroll mod 32), so nothing reaches the
+ * left 16:9 margin. Its two 120-slot sprite buffers are full. When a row's
+ * first sprite executes, find the row in the original tile/palette maps and
+ * draw the missing cells in the sidecar only, without guest writes. */
+static void t3_ball_draw_reveal(uint32_t source, uint32_t color24, int semi, int raw) {
+    int margin = ws_nw_offset();
+    if (margin <= 0 || !ws_engaged() || ws_mode != 2 || !ws_nw_full_mirror ||
+        !ws_game_mode() || ws_disp_w() != 368 || ws_disp_h() != 480 ||
+        psx_read_word(0x800B5A48u) != 0x27bdff48u ||
+        psx_read_word(0x800B5D50u) != 0x244212c0u ||
+        psx_read_word(0x800B5E74u) != 0x30820007u ||
+        psx_read_word(0x800B5F0Cu) != 0x2a82000fu) return;
+    uint32_t base = psx_read_word(0x800ADD58u);
+    uint32_t tiles = psx_read_word(0x800B6668u), palettes = psx_read_word(0x800B666Cu);
+    int columns = (int)psx_read_word(0x800B6660u), rows = (int)psx_read_word(0x800B6664u);
+    if (columns < 1 || columns > T3_BALL_MAX_COLUMNS || rows < 1 ||
+        rows > T3_BALL_MAX_ROWS ||
+        (base & 0xffe00003u) != 0x80000000u ||
+        (tiles & 0xffe00001u) != 0x80000000u ||
+        (palettes & 0xffe00001u) != 0x80000000u ||
+        (base & 0x1fffffu) + 6720u > 0x200000u ||
+        (tiles & 0x1fffffu) + (unsigned)(columns*rows*2) > 0x200000u ||
+        (palettes & 0x1fffffu) + (unsigned)(columns*rows*2) > 0x200000u) return;
+    /* Buffer b: sprites at base + 2400b, texture pages at base + 4800 + 960b.
+     * The command word follows each packet's 4-byte link. */
+    uint32_t start = (source & 0x1fffffu) - 4u;
+    uint32_t offset = start - (base & 0x1fffffu);
+    if (offset >= 4800u || offset % 20u) return;
+    unsigned buffer = offset / 2400u, first = (offset % 2400u) / 20u;
+    if (first % T3_BALL_ROW_CELLS) return;
+    Tekken3BallCell row[T3_BALL_ROW_CELLS];
+    int32_t x0 = 0, y0 = 0;
+    for (int k = 0; k < T3_BALL_ROW_CELLS; k++) {
+        uint32_t packet = start + (uint32_t)k*20u;
+        uint32_t xy = psx_read_word(packet + 8u), uv = psx_read_word(packet + 12u);
+        uint32_t page = psx_read_word((base & 0x1fffffu) + 4800u + buffer*960u +
+                                      (first + (unsigned)k)*8u + 4u);
+        int32_t x, y;
+        parse_vertex(xy, &x, &y);
+        if (!k) { x0 = x; y0 = y; }
+        if ((psx_read_word(packet + 4u) >> 24) != 0x64u ||
+            psx_read_word(packet + 16u) != 0x00200020u ||
+            x != x0 + k*32 || y != y0 || (uv & 0x1f1fu) ||
+            (page & 0xffffffe0u) != 0xe1000200u) return;
+        row[k] = (Tekken3BallCell){(uint16_t)(((uv & 255u) >> 5) |
+            (((uv >> 8) & 255u) >> 5) << 3 | (page & 31u) << 8), (uint16_t)(uv >> 16)};
+    }
+    Tekken3BallCell map[T3_BALL_MAX_COLUMNS*T3_BALL_MAX_ROWS];
+    for (int i = 0; i < columns*rows; i++) {
+        map[i].tile = psx_read_half(tiles + (uint32_t)i*2);
+        map[i].clut = psx_read_half(palettes + (uint32_t)i*2);
+    }
+    Tekken3BallReveal reveals[16];
+    size_t n = tekken3_ball_reveal(map, columns, rows, row, x0, y0, margin, reveals, 16);
+    for (size_t i = 0; i < n; i++) {
+        const Tekken3BallCell *c = &reveals[i].cell;
+        setup_textured_draw(color24, semi, raw);
+        gr_draw_textured_rect(reveals[i].x + draw_offset_x, reveals[i].y + draw_offset_y,
+            32, 32, (c->tile & 7)*32, ((c->tile >> 3) & 7)*32,
+            (c->clut & 63)*16, (c->clut >> 6) & 511,
+            (current_texpage() & ~31u) | ((c->tile >> 8) & 31));
+    }
+}
+
+static int sprite_hd_draw(int x, int y, int dw, int h, int w, uint32_t uv);
 
 /* Execute textured rectangle (GP0 0x64-0x67) */
 static void gp0_exec_textured_rect(void) {
@@ -4183,6 +4752,8 @@ static void gp0_exec_textured_rect(void) {
     if (h > 511)  h = 511;
     if (t3_force_reveal_count && w == 64 && h == 64)
         t3_force_draw_reveal(gp0_cmd_source_addr, color24, semi_trans, raw_texture);
+    if (w == 32 && h == 32 && gp0_cmd_source_addr != 0xFFFFFFFFu)
+        t3_ball_draw_reveal(gp0_cmd_source_addr, color24, semi_trans, raw_texture);
 
     /* Widescreen: tagged sprite parts squash around their projected anchor;
      * untagged SPRTs are screen-space 2D (HUD/menus) and squash around the
@@ -4213,6 +4784,8 @@ static void gp0_exec_textured_rect(void) {
             return;
     }
     setup_textured_draw(color24, semi_trans, raw_texture);
+    if (sprite_hd_draw(x0, y0, (ws_w && ws_w != w) ? ws_w : w, h, w, gp0_cmd_buf[2]))
+        return;
     if (ws_w && ws_w != w)
         gr_draw_textured_rect_scaled(x0, y0, ws_w, h, u0, v0, u0 + w, v0 + h,
                                      clut_x, clut_y, current_texpage());
@@ -4492,18 +5065,6 @@ static void gp0_exec_cpu_to_vram(void) {
     t3_note_framebuffer_write(vram_write_x, vram_write_y,
                              vram_write_w, vram_write_h);
 
-    if (vram_write_y >= 480 || (vram_write_y + vram_write_h) > 480) {
-        static uint32_t s_a0_clut_log_cnt = 0;
-        if (s_a0_clut_log_cnt++ < 60 || vram_write_h > 1 || (vram_write_x == 208 && vram_write_y == 505)) {
-            printf("[GP0_A0_Upload] f=%llu rect=(%u,%u %ux%u) rem_words=%u RA=0x%08x PC=0x%08x\n",
-                   (unsigned long long)s_frame_count, vram_write_x, vram_write_y, vram_write_w, vram_write_h,
-                   (uint32_t)((((uint32_t)vram_write_w * (uint32_t)vram_write_h) + 1) / 2),
-                   debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
-                   debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
-            fflush(stdout);
-        }
-    }
-
     /* Record for debug */
     if (a0_history_count < A0_HISTORY_CAP) {
         int slot = a0_history_count++;
@@ -4683,8 +5244,13 @@ static int gp0_command_word_count(uint8_t opcode) {
         case 0xE6: return 1;  /* mask bits */
 
         default:
-            /* Real PS1 hardware: All unknown/reserved GP0 opcodes (0x03-0x1E, 0xE7-0xFF, etc.) are 1-word NOPs */
-            return 1;
+            /* 0x03-0x1E, 0xE7-0xEF, 0xFF: NOP (1 word) per DuckStation */
+            if ((opcode >= 0x03 && opcode <= 0x1E) ||
+                (opcode >= 0xE7 && opcode <= 0xEF) ||
+                opcode == 0xFF) {
+                return 1;
+            }
+            return 0;  /* unknown */
     }
 }
 
@@ -4838,7 +5404,8 @@ static void t3_force_prepare_reveal(void) {
     int sine = (int16_t)psx_read_half(0x8001E8C4u+angle*2u);
     if (!cosine) return;
     int64_t slope = (int64_t)(0xc0000/cosine)*sine;
-    if (slope < -64*4096 || slope > 64*4096) return;
+    /* The last stage's bridge tilts 66 px per three columns. */
+    if (slope < -128*4096 || slope > 128*4096) return;
     int columns = (int)psx_read_word(0x800B6B94u);
     int rows = (int)psx_read_word(0x800B6B98u);
     int divisor = (int)psx_read_word(0x800B6BA4u);
@@ -4879,6 +5446,8 @@ static void t3_force_prepare_reveal(void) {
             ws_nw_offset(), sprites, count, t3_force_reveals+t3_force_reveal_count,
             36-t3_force_reveal_count);
     }
+    memcpy(t3_force_shown, t3_force_reveals, t3_force_reveal_count*sizeof(*t3_force_reveals));
+    t3_force_shown_count = t3_force_reveal_count;
 }
 
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {
@@ -4888,13 +5457,14 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     t3_force_background_active = 0;
     int t3_loading_foreign_draw = 0;
     int has_draw = 0;
+    int polys_clipped = 0;
+    uint32_t pa_left = draw_area_left, pa_top = draw_area_top;
+    uint32_t pa_right = draw_area_right, pa_bottom = draw_area_bottom;
     ws_ui_prepass_count = 0;
     ws_ui_prepass_rank = 0xFFFFu;
     ws_auto_ui_dense = 0;
     t3_selector_prepass_count = 0;
-    t3_selector_fade_emitted = 0;
     memset(&t3_selector_frame, 0, sizeof(t3_selector_frame));
-
     extern int fntrace_is_game_started(void);
     int screenState = fntrace_is_game_started() ? (int)(int16_t)psx_read_half(0x800AE204u) : -1;
     int is_force_mode = (psx_read_word(0x800B4914u) == 0x27bdff50u) ||
@@ -4927,14 +5497,12 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     const uint32_t max_nodes = 0x40000u;
 
     for (;;) {
-        if ((addr & 0x00FFFFFFu) == 0x00FFFFFFu) break;
         if (safety++ > max_nodes) {
             ws_ui_prepass_count = 0;
             return;
         }
         uint32_t header = psx_read_word(addr);
         uint32_t num_words = (header >> 24) & 0xFFu;
-        uint32_t next = header & 0xFFFFFFu;
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
         } else if (rank != 0xFFFFu) {
@@ -4947,6 +5515,14 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                         word_addr + offset * 4u));
                 uint8_t op = (uint8_t)(first >> 24);
                 if (op >= 0x20u && op < 0x80u) has_draw = 1;
+                if (op == 0xE3u) {
+                    pa_left = first & 0x3FFu; pa_top = (first >> 10) & 0x3FFu;
+                } else if (op == 0xE4u) {
+                    pa_right = first & 0x3FFu; pa_bottom = (first >> 10) & 0x3FFu;
+                } else if (op >= 0x20u && op < 0x60u &&
+                           (pa_right < pa_left || pa_bottom < pa_top)) {
+                    polys_clipped = 1;
+                }
                 int count = gp0_command_word_count(op);
                 if (count <= 0 || offset + (uint32_t)count > num_words)
                     break;
@@ -4972,9 +5548,12 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             }
         }
 
+        uint32_t next = header & 0xFFFFFFu;
         if (next == 0xFFFFFFu) break;
         addr = psx_mod_gpu_dma_resolve_address(next);
     }
+    ws_prepass_retains = polys_clipped;
+    ws_prepass_frame = (uint32_t)s_frame_count;
     {
         /* State flags change before the CD wait ends. A no-draw list still
          * displays the completed stage, regardless of time or game_mode.
@@ -5156,6 +5735,16 @@ static void gp0_capture_builder_chain(uint32_t out[6]) {
     }
 }
 
+#ifdef __SWITCH__
+#define GP0_RING_CAP        (1u << 12)
+#else
+#define GP0_RING_CAP        (1u << 20)  /* 1 048 576 entries */
+#endif
+/* GpuGp0RingEntry + GPU_GP0_RING_MAX_WORDS are public types in gpu.h. */
+
+static GpuGp0RingEntry *gp0_ring = NULL;  /* lazy-alloc on first record */
+static uint64_t gp0_ring_seq    = 0;      /* total commands recorded */
+static uint32_t gp0_ring_head   = 0;      /* next write slot */
 
 static void gp0_ring_record(const uint32_t *words, int n) {
     if (!gp0_ring) {
@@ -5384,11 +5973,21 @@ static int tex_alias_uv(unsigned u, unsigned v) {
 
 static void gp0_execute_command_now(void);
 
+/* ---- Opt-in upper VRAM half --------------------------------------------
+ * Namco System 12's GPU has 1024 x 1024 VRAM; the PS1's has 512 lines and
+ * wraps y at 512. A mod can add the upper half, y 512..1023 (see
+ * mod_plugins.h): nothing is allocated and nothing changes until
+ * psx_mod_gpu_high_vram_enable(). Then only the primitives of the guest
+ * packet memory named by psx_mod_gpu_high_vram_source() may read it, with
+ * the System 12 bits: texpage bit 11 = texture page y + 512 (polygons, and
+ * sprites after such an E1 or polygon), CLUT bit 15 = CLUT y + 512. Every
+ * other primitive, the game's included, keeps the PS1's 512-line VRAM.
+ * Primitives never draw into the upper half. */
 #define HIVRAM_SOURCES 8
 static uint16_t *s_hivram;
 static struct { uint32_t lo, hi; } s_hivram_src[HIVRAM_SOURCES];
 static int s_hivram_nsrc;
-static unsigned s_hivram_sprite_page;
+static unsigned s_hivram_sprite_page;   /* texpage bit 11 last set by a trusted packet */
 static uint64_t s_hivram_prims;
 
 int psx_mod_gpu_high_vram_enable(void) {
@@ -5406,14 +6005,6 @@ int psx_mod_gpu_high_vram_ready(void) {
 const uint16_t *gpu_high_vram_pixels(void) { return s_hivram; }
 uint64_t gpu_high_vram_primitives(void) { return s_hivram_prims; }
 
-/* [HighVram_CLASH_Diag]: which mod writes the upper half. Each writer sets
- * the tag around its uploads (pack load, animated texture, hivram_move,
- * TTT Hitspark, PS2 lasers, Unknown's wolf); psx_mod_gpu_high_vram_upload
- * hands it to tekken3_stage_vram_write_watch, which flags writes landing on
- * the loaded stage pack's rectangles (stage texture flicker, hypothesis H1). */
-static const char *s_hivram_tag = "untagged";
-void psx_mod_gpu_high_vram_tag(const char *tag) { s_hivram_tag = tag ? tag : "untagged"; }
-
 int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h, const uint16_t *pixels) {
     if (!s_hivram || !pixels || w <= 0 || h <= 0 || x < 0 || y < 512 ||
         x + w > 1024 || y + h > 1024)
@@ -5430,13 +6021,10 @@ int psx_mod_gpu_high_vram_upload(int x, int y, int w, int h, const uint16_t *pix
     if (!changed)
         return 1;
     gr_high_vram_written(x, y - 512, w, h);
-    {
-        extern void tekken3_stage_vram_write_watch(const char *tag, int x, int y, int w, int h);
-        tekken3_stage_vram_write_watch(s_hivram_tag, x, y, w, h);
-    }
     return 1;
 }
 
+/* Savestates: the whole half, while it exists. */
 int gpu_high_vram_restore(const uint16_t *pixels) {
     if (!s_hivram) return 0;
     memcpy(s_hivram, pixels, 1024u * 512u * sizeof *s_hivram);
@@ -5468,7 +6056,7 @@ static void hivram_execute_command(uint8_t opcode) {
     unsigned tex = 0, clut = 0;
     if (opcode == 0xE1u) {
         s_hivram_sprite_page = (gp0_cmd_buf[0] >> 11) & 1u;
-        gp0_cmd_buf[0] &= ~(1u << 11);
+        gp0_cmd_buf[0] &= ~(1u << 11);      /* not the PS1's texture-disable bit */
         gp0_execute_command_now();
         return;
     }
@@ -5484,11 +6072,156 @@ static void hivram_execute_command(uint8_t opcode) {
         gp0_execute_command_now();
         return;
     }
+    /* A backend that cannot sample the half skips the primitive. */
     if (gr_set_high_vram(s_hivram, (int)tex, (int)clut)) {
         s_hivram_prims++;
         gp0_execute_command_now();
     }
     gr_set_high_vram(s_hivram, 0, 0);
+}
+
+/* Sprite HD substitutes (mod_plugins.h, psx_mod_gpu_sprite_hd_set): the
+ * game's sprite keeps its packet, place and blending; above native
+ * resolution its texels come from a finer copy in the upper half. */
+#define SPRITE_HD_SLOTS 64
+typedef struct {
+    uint32_t uv;
+    uint16_t page, w, h, hx, hy, hw, hh;
+    uint8_t on;
+} SpriteHd;
+static SpriteHd s_sprite_hd[SPRITE_HD_SLOTS];
+static unsigned s_sprite_hd_on;
+
+int psx_mod_gpu_sprite_hd_set(unsigned slot, unsigned page, uint32_t uv,
+                              unsigned w, unsigned h, unsigned hx, unsigned hy,
+                              unsigned hw, unsigned hh) {
+    /* The copy lies inside one 15-bit texture page of the upper half (256 x
+     * 256 texels from a 64-halfword column). */
+    if (!s_hivram || slot >= SPRITE_HD_SLOTS || !w || !h || !hw || !hh ||
+        hy < 512 || hx % 64u + hw > 256u || (hy - 512u) % 256u + hh > 256u ||
+        hx + hw > 1024u || hy + hh > 1024u)
+        return 0;
+    if (!s_sprite_hd[slot].on) s_sprite_hd_on++;
+    s_sprite_hd[slot].uv = uv;
+    s_sprite_hd[slot].page = (uint16_t)(page & 0x19Fu);
+    s_sprite_hd[slot].w = (uint16_t)w;  s_sprite_hd[slot].h = (uint16_t)h;
+    s_sprite_hd[slot].hx = (uint16_t)hx; s_sprite_hd[slot].hy = (uint16_t)hy;
+    s_sprite_hd[slot].hw = (uint16_t)hw; s_sprite_hd[slot].hh = (uint16_t)hh;
+    s_sprite_hd[slot].on = 1;
+    return 1;
+}
+
+void psx_mod_gpu_sprite_hd_clear(unsigned slot) {
+    if (slot >= SPRITE_HD_SLOTS || !s_sprite_hd[slot].on) return;
+    s_sprite_hd[slot].on = 0;
+    s_sprite_hd_on--;
+}
+
+/* Draws the sprite (dw x h at x, y; w texels wide, word 2 = uv) from its
+ * substitute and returns 1, or returns 0 to draw it as it is. */
+static int sprite_hd_draw(int x, int y, int dw, int h, int w, uint32_t uv) {
+    if (!s_sprite_hd_on || !s_hivram || gr_scale() <= 1) return 0;
+    unsigned page = texpage_x | texpage_y << 4 | texpage_colors << 7;
+    for (unsigned i = 0; i < SPRITE_HD_SLOTS; i++) {
+        const SpriteHd *s = &s_sprite_hd[i];
+        if (!s->on || s->uv != uv || s->page != page || s->w != (unsigned)w || s->h != (unsigned)h)
+            continue;
+        unsigned row = s->hy - 512u;
+        uint16_t tpage = (uint16_t)(s->hx / 64u | (row >= 256u) << 4 |
+                                    semi_transparency << 5 | 2u << 7);
+        int u0 = s->hx % 64u, v0 = (int)(row % 256u);
+        if (gr_set_high_vram(s_hivram, 1, 0)) {
+            gr_draw_textured_rect_scaled(x, y, dw, h, u0, v0, u0 + s->hw, v0 + s->hh, 0, 0, tpage);
+            s_hivram_prims++;
+            gr_set_high_vram(s_hivram, 0, 0);
+            return 1;
+        }
+        gr_set_high_vram(s_hivram, 0, 0);
+        return 0;
+    }
+    return 0;
+}
+
+/* Texture HD substitutes (mod_plugins.h, psx_mod_gpu_texture_hd_set): a
+ * textured polygon reading a registered region (page, CLUT row and columns,
+ * every UV inside it) is drawn from the region's finer 15-bit copy in the
+ * upper half, its UVs scaled; colours, shading and blending stay the
+ * game's. Above native resolution only, as the sprite substitutes. */
+#define TEXTURE_HD_SLOTS 8
+typedef struct {
+    uint16_t page, clut_y, clut_x0, clut_x1, u0, v0, w, h, hx, hy, hw, hh;
+    uint8_t on;
+} TextureHd;
+static TextureHd s_texture_hd[TEXTURE_HD_SLOTS];
+static unsigned s_texture_hd_on;
+
+int psx_mod_gpu_texture_hd_set(unsigned slot, unsigned page, unsigned clut_y,
+                               unsigned clut_x0, unsigned clut_x1,
+                               unsigned u0, unsigned v0, unsigned w, unsigned h,
+                               unsigned hx, unsigned hy, unsigned hw, unsigned hh) {
+    if (!s_hivram || slot >= TEXTURE_HD_SLOTS || !w || !h || !hw || !hh ||
+        u0 + w > 256u || v0 + h > 256u || clut_x0 >= clut_x1 ||
+        hy < 512 || hx % 64u + hw > 256u || (hy - 512u) % 256u + hh > 256u ||
+        hx + hw > 1024u || hy + hh > 1024u)
+        return 0;
+    TextureHd *t = &s_texture_hd[slot];
+    if (!t->on) s_texture_hd_on++;
+    *t = (TextureHd){ (uint16_t)(page & 0x19Fu), (uint16_t)clut_y, (uint16_t)clut_x0, (uint16_t)clut_x1,
+                      (uint16_t)u0, (uint16_t)v0, (uint16_t)w, (uint16_t)h,
+                      (uint16_t)hx, (uint16_t)hy, (uint16_t)hw, (uint16_t)hh, 1 };
+    return 1;
+}
+
+void psx_mod_gpu_texture_hd_clear(unsigned slot) {
+    if (slot >= TEXTURE_HD_SLOTS || !s_texture_hd[slot].on) return;
+    s_texture_hd[slot].on = 0;
+    s_texture_hd_on--;
+}
+
+/* Draws the textured polygon in gp0_cmd_buf from its substitute and returns
+ * 1, or returns 0 to draw it as it is. */
+static int texture_hd_poly(uint8_t opcode) {
+    if (!s_hivram || gr_scale() <= 1) return 0;
+    unsigned n = (opcode & 8u) ? 4u : 3u, step = (opcode & 0x10u) ? 3u : 2u;
+    uint16_t tpage_word = (uint16_t)(gp0_cmd_buf[2u + step] >> 16), clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    unsigned clut_y = (clut >> 6) & 0x1FFu, clut_x = (clut & 0x3Fu) * 16u;
+    for (unsigned i = 0; i < TEXTURE_HD_SLOTS; i++) {
+        const TextureHd *t = &s_texture_hd[i];
+        if (!t->on || (tpage_word & 0x19Fu) != t->page || clut_y != t->clut_y ||
+            clut_x < t->clut_x0 || clut_x >= t->clut_x1)
+            continue;
+        int inside = 1;
+        for (unsigned k = 0; k < n && inside; k++) {
+            uint32_t uv = gp0_cmd_buf[2u + step * k];
+            unsigned u = uv & 255u, v = (uv >> 8) & 255u;
+            inside = u >= t->u0 && u <= t->u0 + t->w && v >= t->v0 && v <= t->v0 + t->h;
+        }
+        if (!inside) continue;
+        uint32_t saved[12];
+        memcpy(saved, gp0_cmd_buf, sizeof saved);
+        unsigned row = t->hy - 512u, bu = t->hx % 64u, bv = row % 256u;
+        for (unsigned k = 0; k < n; k++) {
+            uint32_t *uv = &gp0_cmd_buf[2u + step * k];
+            unsigned u = *uv & 255u, v = (*uv >> 8) & 255u;
+            unsigned hu = bu + ((u - t->u0) * t->hw + t->w / 2u) / t->w;
+            unsigned hv = bv + ((v - t->v0) * t->hh + t->h / 2u) / t->h;
+            if (hu > 255u) hu = 255u;
+            if (hv > 255u) hv = 255u;
+            *uv = (*uv & 0xFFFF0000u) | hv << 8 | hu;
+        }
+        uint16_t hd_page = (uint16_t)(t->hx / 64u | (row >= 256u) << 4 | (tpage_word & 0x60u) | 2u << 7);
+        gp0_cmd_buf[2u + step] = (gp0_cmd_buf[2u + step] & 0xFFFFu) | (uint32_t)hd_page << 16;
+        int drawn = gr_set_high_vram(s_hivram, 1, 0);
+        if (drawn) {
+            gp0_execute_command_now();
+            s_hivram_prims++;
+        }
+        gr_set_high_vram(s_hivram, 0, 0);
+        memcpy(gp0_cmd_buf, saved, sizeof saved);
+        set_tpage_from_poly(tpage_word);   /* later sprites read the game's page */
+        return drawn;
+    }
+    return 0;
 }
 
 /* Execute a fully-collected GP0 command */
@@ -5498,6 +6231,9 @@ static void gp0_execute_command(void) {
         hivram_execute_command(opcode);
         return;
     }
+    if (s_texture_hd_on && opcode >= 0x20u && opcode < 0x40u && (opcode & 4u) &&
+        texture_hd_poly(opcode))
+        return;
     if (!tex_alias.on || opcode < 0x20u || opcode >= 0x80u || !(opcode & 4u)) {
         gp0_execute_command_now();
         return;
@@ -5506,6 +6242,7 @@ static void gp0_execute_command(void) {
     memcpy(saved, gp0_cmd_buf, sizeof saved);
     const uint32_t tx = texpage_x, ty = texpage_y;
     if (opcode < 0x40u) {
+        /* Polygon: its own texpage word, carried by the second vertex's UV. */
         unsigned n = (opcode & 8u) ? 4u : 3u, step = (opcode & 0x10u) ? 3u : 2u;
         uint32_t tpage = gp0_cmd_buf[2u + step] >> 16;
         int hit = (tpage & 0x1Fu) == tex_alias.page && !((tpage >> 7) & 3u) &&
@@ -5524,9 +6261,11 @@ static void gp0_execute_command(void) {
                                  (tex_alias.dst_page << 16);
         gp0_execute_command_now();
         memcpy(gp0_cmd_buf, saved, sizeof saved);
+        /* Later sprites read the page this polygon names, not the alias. */
         texpage_x = tpage & 0xFu; texpage_y = (tpage >> 4) & 1u;
         return;
     }
+    /* Sprite: the current texpage state. */
     static const unsigned side[4] = {0, 1, 8, 16};
     uint32_t uv = gp0_cmd_buf[2];
     unsigned u = uv & 255u, v = (uv >> 8) & 255u;
@@ -5546,130 +6285,111 @@ static void gp0_execute_command(void) {
     texpage_x = tx; texpage_y = ty;
 }
 
-uint64_t g_prof_dma2_prepass_ns = 0;
-uint64_t g_prof_dma2_walk_ns = 0;
-uint64_t g_prof_gp0_diag_ns = 0;
-uint64_t g_prof_dma2_wolf_walk_ns = 0;
-uint32_t g_prof_dma2_wolf_pkts = 0;
-uint32_t g_prof_dma2_wolf_words = 0;
-
 static void gp0_execute_command_now(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
-    int selector_fade_side = 0;
-    int selector_fade_y = 0;
+    if (ws_nw_full_mirror && opcode >= 0x20u && opcode < 0x80u)
+        ws_refresh_current_reveal_margins();
     t3_selector_sidecar_unclipped = 0;
-
-    if (__builtin_expect(ws_engaged() || t3_selector_frame.active || t3_loading_frame.active || t3_force_background_active, 0)) {
-        if (ws_nw_full_mirror && opcode >= 0x20u && opcode < 0x80u)
-            ws_refresh_current_reveal_margins_fast();
-        /* Do this after the complete GP0 packet has been collected, but before it
-         * reaches either the canonical renderer or the native-wide sidecar. */
-        if (opcode >= 0x20u && opcode <= 0x3Fu &&
-            ws_background_packet_projection_overflow(opcode)) {
-            return;
-        }
-        if (opcode >= 0x20u && opcode <= 0x7Fu) {
-            /* Default identity for every DRAW. Environment commands and NOPs emit
-             * no geometry, so they intentionally retain the pending delta until
-             * the next draw selects its own value. This keeps each rigid selector
-             * strip group batchable instead of flushing on every interleaved NOP. */
-            int sidecar_dx = 0;
-            int sidecar_dy = 0;
-            int sidecar_clip_bottom = -1;
-            int suppress_sidecar = 0;
-            int unclipped_sidecar = 0;
-            int expand_sidecar = 0;
-            if ((t3_selector_frame.active || t3_loading_frame.active) &&
-                gp0_cmd_source_addr != 0xFFFFFFFFu) {
-                Tekken3SelectorPacket packet;
-                if (ws_prepass_packet_bounds(gp0_cmd_buf, &packet)) {
-                    packet.source_addr = gp0_cmd_source_addr & 0x1FFFFCu;
-                    Tekken3SelectorPlacement placement = t3_loading_frame.active
-                        ? tekken3_loading_place(&t3_loading_frame, &packet, ws_nw_offset())
-                        : tekken3_selector_place(&t3_selector_frame, &packet, ws_nw_offset());
-                    sidecar_dx = placement.sidecar_dx;
-                    sidecar_dy = placement.sidecar_dy;
-                    if (placement.sidecar_clip_bottom > 0)
-                        sidecar_clip_bottom = draw_offset_y + placement.sidecar_clip_bottom;
-                    if (placement.portrait_fade && placement.group_id >= 1 &&
-                        placement.group_id <= 2) {
-                        unsigned bit = 1u << (placement.group_id - 1);
-                        if (!(t3_selector_fade_emitted & bit)) {
-                            selector_fade_side = (int)placement.group_id;
-                            selector_fade_y = draw_offset_y +
-                                t3_selector_frame.backdrop_height - 44;
-                            t3_selector_fade_emitted |= bit;
-                        }
-                    }
-                    suppress_sidecar = placement.suppress_sidecar;
-                    unclipped_sidecar = placement.unclipped_sidecar;
-                    expand_sidecar = placement.expand_backdrop;
-
-                }
-            }
-            /* The Force overlay also emits a solid sky/underlay at these two
-             * fixed packet slots. Extend its authored full-width rectangle. */
-            if (t3_force_background_active && opcode == 0x60 &&
-                ((gp0_cmd_source_addr & 0x1fffffu) == 0xB6B18u ||
-                 (gp0_cmd_source_addr & 0x1fffffu) == 0xB6B28u) &&
-                (gp0_cmd_buf[1] & 0xffffu) == 0 &&
-                (gp0_cmd_buf[2] & 0xffffu) == 368)
-                expand_sidecar = ws_nw_offset() > 0;
-
-            /* Top HUD banner full-width expansion (Tekken Ball / match HUD):
-             * Expands a full-width banner at y <= 40 across the 16:9 screen (0..490)
-             * so it eliminates the top-left and top-right black margin holes. */
-            if (!expand_sidecar && ws_nw_offset() > 0) {
-                if ((opcode & 0xF8) == 0x60) {
-                    int32_t x0 = (int16_t)(gp0_cmd_buf[1] & 0xffffu);
-                    int32_t y0 = (int16_t)((gp0_cmd_buf[1] >> 16) & 0xffffu);
-                    int32_t w = (opcode & 0x04) ? (int32_t)(gp0_cmd_buf[3] & 0x3ffu) : (int32_t)(gp0_cmd_buf[2] & 0xffffu);
-                    int32_t h = (opcode & 0x04) ? (int32_t)((gp0_cmd_buf[3] >> 16) & 0x1ffu) : (int32_t)((gp0_cmd_buf[2] >> 16) & 0xffffu);
-                    if (x0 <= 0 && x0 + w >= 360 && y0 <= 40 && h <= 100) {
-                        expand_sidecar = 1;
-                    }
-                } else if ((opcode & 0xF8) == 0x28) {
-                    int32_t vx0, vy0, vx1, vy1, vy2;
-                    parse_vertex(gp0_cmd_buf[1], &vx0, &vy0);
-                    if (opcode & 0x04) {
-                        parse_vertex(gp0_cmd_buf[3], &vx1, &vy1);
-                        int32_t dummy_x;
-                        parse_vertex(gp0_cmd_buf[5], &dummy_x, &vy2);
-                    } else {
-                        parse_vertex(gp0_cmd_buf[2], &vx1, &vy1);
-                        int32_t dummy_x;
-                        parse_vertex(gp0_cmd_buf[3], &dummy_x, &vy2);
-                    }
-                    if (vx0 <= 0 && vx1 >= 360 && vy0 <= 40 && vy2 <= 100) {
-                        expand_sidecar = 1;
-                    }
-                }
-            }
-
-            gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
-            gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
-            gr_wide_set_primitive_suppressed(suppress_sidecar);
-            gr_wide_set_primitive_unclipped(unclipped_sidecar);
-            gr_wide_set_primitive_expanded(expand_sidecar);
-            t3_selector_sidecar_unclipped = unclipped_sidecar;
-        }
+    /* Do this after the complete GP0 packet has been collected, but before it
+     * reaches either the canonical renderer or the native-wide sidecar. */
+    if (opcode >= 0x20u && opcode <= 0x3Fu &&
+        ws_background_packet_projection_overflow(opcode)) {
+        return;
     }
-
-    gp0_opcode_count[opcode]++;
-#ifndef NDEBUG
-    gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
-#endif
-    if (__builtin_expect(ws_engaged(), 0)) {
-        extern void ws_bg_phase_note(uint32_t op);
-        ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
-
-        /* Draw-census: capture every drawing primitive's first vertex + camera. */
-        if (opcode >= 0x20 && opcode <= 0x7F) {
-            int32_t cvx, cvy;
-            parse_vertex(gp0_cmd_buf[1], &cvx, &cvy);
-            ws_census_record(opcode, cvx, cvy);
-            ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
+    /* Tekken's VS / Team / Ball grid draws its cursor frame on the first
+     * frame before the frame has a cell: at (0..35, 0..63), under a draw area
+     * narrowed to that spot. The game draws in y = 20..467, so nothing ever
+     * repaints rows 0..19 and the red frame stayed at the top left (overscan
+     * on a PS1 screen). The grid's cells start at y = 67. */
+    if (opcode >= 0x20u && opcode < 0x80u && t3_selector_frame.active &&
+        t3_selector_frame.layout_kind == 2 && draw_area_top < 20u &&
+        draw_area_right - draw_area_left + 1u < (uint32_t)ws_disp_w())
+        return;
+    if (opcode >= 0x20u && opcode <= 0x7Fu) {
+        /* Default identity for every DRAW. Environment commands and NOPs emit
+         * no geometry, so they intentionally retain the pending delta until
+         * the next draw selects its own value. This keeps each rigid selector
+         * strip group batchable instead of flushing on every interleaved NOP. */
+        int sidecar_dx = 0;
+        int sidecar_dy = 0;
+        int sidecar_clip_bottom = -1;
+        int suppress_sidecar = 0;
+        int unclipped_sidecar = 0;
+        int expand_sidecar = 0;
+        if ((t3_selector_frame.active || t3_loading_frame.active) &&
+            gp0_cmd_source_addr != 0xFFFFFFFFu) {
+            Tekken3SelectorPacket packet;
+            if (ws_prepass_packet_bounds(gp0_cmd_buf, &packet)) {
+                packet.source_addr = gp0_cmd_source_addr & 0x1FFFFCu;
+                Tekken3SelectorPlacement placement = t3_loading_frame.active
+                    ? tekken3_loading_place(&t3_loading_frame, &packet, ws_nw_offset())
+                    : tekken3_selector_place(&t3_selector_frame, &packet, ws_nw_offset());
+                sidecar_dx = placement.sidecar_dx;
+                sidecar_dy = placement.sidecar_dy;
+                if (placement.sidecar_clip_bottom > 0)
+                    sidecar_clip_bottom = draw_offset_y + placement.sidecar_clip_bottom;
+                suppress_sidecar = placement.suppress_sidecar;
+                unclipped_sidecar = placement.unclipped_sidecar;
+                expand_sidecar = placement.expand_backdrop;
+            }
         }
+        /* The Force overlay also emits a solid sky/underlay at these two
+         * fixed packet slots. Extend its authored full-width rectangle. */
+        if (t3_force_background_active && opcode == 0x60 &&
+            ((gp0_cmd_source_addr & 0x1fffffu) == 0xB6B18u ||
+             (gp0_cmd_source_addr & 0x1fffffu) == 0xB6B28u) &&
+            (gp0_cmd_buf[1] & 0xffffu) == 0 &&
+            (gp0_cmd_buf[2] & 0xffffu) == 368)
+            expand_sidecar = ws_nw_offset() > 0;
+
+        /* Top HUD banner full-width expansion (Tekken Ball / match HUD):
+         * Expands a full-width banner at y <= 40 across the 16:9 screen (0..490)
+         * so it eliminates the top-left and top-right black margin holes. */
+        if (!expand_sidecar && ws_nw_offset() > 0) {
+            if ((opcode & 0xF8) == 0x60) {
+                int32_t x0 = (int16_t)(gp0_cmd_buf[1] & 0xffffu);
+                int32_t y0 = (int16_t)((gp0_cmd_buf[1] >> 16) & 0xffffu);
+                int32_t w = (opcode & 0x04) ? (int32_t)(gp0_cmd_buf[3] & 0x3ffu) : (int32_t)(gp0_cmd_buf[2] & 0xffffu);
+                int32_t h = (opcode & 0x04) ? (int32_t)((gp0_cmd_buf[3] >> 16) & 0x1ffu) : (int32_t)((gp0_cmd_buf[2] >> 16) & 0xffffu);
+                if (x0 <= 0 && x0 + w >= 360 && y0 <= 40 && h <= 100) {
+                    expand_sidecar = 1;
+                }
+            } else if ((opcode & 0xF8) == 0x28) {
+                int32_t vx0, vy0, vx1, vy1, vy2;
+                parse_vertex(gp0_cmd_buf[1], &vx0, &vy0);
+                if (opcode & 0x04) {
+                    parse_vertex(gp0_cmd_buf[3], &vx1, &vy1);
+                    int32_t dummy_x;
+                    parse_vertex(gp0_cmd_buf[5], &dummy_x, &vy2);
+                } else {
+                    parse_vertex(gp0_cmd_buf[2], &vx1, &vy1);
+                    int32_t dummy_x;
+                    parse_vertex(gp0_cmd_buf[3], &dummy_x, &vy2);
+                }
+                if (vx0 <= 0 && vx1 >= 360 && vy0 <= 40 && vy2 <= 100) {
+                    expand_sidecar = 1;
+                }
+            }
+        }
+
+        gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
+        gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
+        gr_wide_set_primitive_suppressed(suppress_sidecar);
+        gr_wide_set_primitive_unclipped(unclipped_sidecar);
+        gr_wide_set_primitive_expanded(expand_sidecar);
+        t3_selector_sidecar_unclipped = unclipped_sidecar;
+    }
+    gp0_opcode_count[opcode]++;
+    gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
+    extern void ws_bg_phase_note(uint32_t op);
+    ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
+
+    /* Draw-census: capture every drawing primitive's first vertex + camera. */
+    if (opcode >= 0x20 && opcode <= 0x7F) {
+        int32_t cvx, cvy;
+        parse_vertex(gp0_cmd_buf[1], &cvx, &cvy);
+        ws_census_record(opcode, cvx, cvy);
+        ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
     }
 
     /* Categorize for diagnostics */
@@ -5819,18 +6539,6 @@ static void gp0_execute_command_now(void) {
             if (src_x != dst_x || src_y != dst_y)
                 t3_note_framebuffer_write((uint32_t)dst_x, (uint32_t)dst_y,
                                          (uint32_t)w, (uint32_t)h);
-
-            if (dst_y >= 480 || (dst_y + h) > 480) {
-                static uint32_t s_copy_alert_cnt = 0;
-                if (s_copy_alert_cnt++ < 40) {
-                    printf("[GP0_CopyRect_ALERT] f=%llu src=(%d,%d) dst=(%d,%d %dx%d) RA=0x%08x PC=0x%08x\n",
-                           (unsigned long long)s_frame_count, src_x, src_y, dst_x, dst_y, w, h,
-                           debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
-                           debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
-                    fflush(stdout);
-                }
-            }
-
             gr_copy_rect(src_x, src_y, dst_x, dst_y, w, h);
             break;
         }
@@ -5858,13 +6566,24 @@ static void gp0_execute_command_now(void) {
             break;
 
         default:
-            /* NOP range / unhandled opcodes: silently consume as NOP per PS1 hardware */
-            break;
-    }
-    if (selector_fade_side) {
-        int x = selector_fade_side == 1 ? 33 :
-            t3_selector_frame.display_width - 159 + 2 * ws_nw_offset();
-        gr_wide_fade_white(x, selector_fade_y, 126, 24);
+            /* NOP range: 0x03-0x1E, 0xE0, 0xE7-0xEF, 0xFF */
+            if ((opcode >= 0x03 && opcode <= 0x1E) ||
+                opcode == 0xE0 ||
+                (opcode >= 0xE7 && opcode <= 0xEF) ||
+                opcode == 0xFF) {
+                break;  /* NOP — silently consume */
+            }
+
+            /* Any other command (drawing, VRAM-to-VRAM, etc.) is not yet
+             * implemented. Fatal halt so we know exactly what's needed next,
+             * with all rings queryable post-mortem. */
+            {
+                static char reason[96];
+                snprintf(reason, sizeof(reason),
+                         "GPU GP0 unimplemented command 0x%02X (word 0x%08X)",
+                         opcode, gp0_cmd_buf[0]);
+                psx_fatal_halt(reason);
+            }
     }
 }
 
@@ -5922,18 +6641,6 @@ static void gpu_write_gp0_body(uint32_t val) {
             /* CPU VRAM remains immediately authoritative, preserving mid-DMA
              * reads/savestates. The renderer mirror is committed in bulk when
              * the GP0 payload completes. */
-            if (pixel == 0x37F4 || ((pixel & 0x7FFF) == 0x37F4)) {
-                static uint32_t s_pixel_alert_cnt = 0;
-                if (s_pixel_alert_cnt++ < 40) {
-                    printf("[GP0_A0_ALERT_0x37F4] f=%llu pixel=0x%04x stored at (%u,%u) [transfer rect: %u,%u %ux%u] RA=0x%08x PC=0x%08x\n",
-                           (unsigned long long)s_frame_count, pixel, wx, wy,
-                           vram_write_x, vram_write_y, vram_write_w, vram_write_h,
-                           debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,
-                           debug_cpu_ptr ? debug_cpu_ptr->pc : 0);
-                    fflush(stdout);
-                }
-            }
-
             vram[(uint32_t)wy * 1024u + wx] = pixel;
             gpu_vram_dirty_mark_row((uint32_t)wy);
 
@@ -6042,9 +6749,11 @@ static void gpu_write_gp0_body(uint32_t val) {
     int word_count = gp0_command_word_count(opcode);
 
     if (word_count == 0) {
-        /* Unknown command — warn and skip as 1-word NOP per PS1 hardware */
-        printf("[GPU GP0] Warning: unknown opcode 0x%02X (word 0x%08X), treating as 1-word NOP\n", opcode, val);
-        return;
+        /* Unknown command — fatal halt with rings queryable post-mortem */
+        static char reason[96];
+        snprintf(reason, sizeof(reason),
+                 "GPU GP0 unknown command 0x%02X (word 0x%08X)", opcode, val);
+        psx_fatal_halt(reason);
     }
 
     if (word_count < 0) {
@@ -6299,9 +7008,12 @@ void gpu_write_gp1(uint32_t val) {
         case 0x18: case 0x19: case 0x1A: case 0x1B:
         case 0x1C: case 0x1D: case 0x1E: case 0x1F:
             gp1_get_info(val); break;
-        default:
-            printf("[GPU GP1] Warning: unknown command 0x%02X (word 0x%08X), ignored\n", cmd, val);
-            break;
+        default: {
+            static char reason[96];
+            snprintf(reason, sizeof(reason),
+                     "GPU GP1 unknown command 0x%02X (word 0x%08X)", cmd, val);
+            psx_fatal_halt(reason);
+        }
     }
 }
 
@@ -6384,24 +7096,35 @@ static int gpu_snap_emit(PstW *w) {
 }
 static int gpu_snap_parse(PstR *r) {
     uint32_t u; int32_t i; uint16_t h;
+    uint32_t st; int32_t got, need;
 #define RU(f) do { if (!pst_r_u32(r, &u)) return 0; (f) = u; } while (0)
 #define RI(f) do { if (!pst_r_i32(r, &i)) return 0; (f) = i; } while (0)
 #define RH(f) do { if (!pst_r_u16(r, &h)) return 0; (f) = h; } while (0)
-    RU(texpage_x); RU(texpage_y); RU(semi_transparency); RU(texpage_colors);
+/* Register fields the live setters mask (GP0 E1/E3/E4, GP1 05h): refuse
+ * anything wider before it lands, VRAM/page coordinates feed host offsets. */
+#define RUM(f, m) do { if (!pst_r_u32(r, &u) || (u & ~(uint32_t)(m))) return 0; (f) = u; } while (0)
+    RUM(texpage_x, 0xF); RUM(texpage_y, 1); RUM(semi_transparency, 3); RUM(texpage_colors, 3);
     RU(dither_enabled); RU(draw_to_display); RU(texture_disable); RU(texture_window_value);
     RU(set_mask_bit); RU(check_mask_bit);
     RU(interlace_field); RU(reverse_flag);
-    RU(draw_area_left); RU(draw_area_top); RU(draw_area_right); RU(draw_area_bottom);
+    RUM(draw_area_left, 0x3FF); RUM(draw_area_top, 0x3FF);
+    RUM(draw_area_right, 0x3FF); RUM(draw_area_bottom, 0x3FF);
     RI(draw_offset_x); RI(draw_offset_y);
     RU(hres1); RU(hres2); RU(vres); RU(video_mode); RU(display_depth); RU(vertical_interlace);
     RU(display_disabled); RU(irq1_flag); RU(dma_direction); RU(lcf);
-    RU(display_area_x); RU(display_area_y);
+    RUM(display_area_x, 0x3FF); RUM(display_area_y, 0x1FF);
     RU(h_display_x1); RU(h_display_x2); RU(v_display_y1); RU(v_display_y2);
     RU(gpuread_latch);
-    if (!pst_r_u32(r, &u)) return 0;
-    gp0_state = (Gp0State)u;
+    if (!pst_r_u32(r, &st)) return 0;
     for (int k = 0; k < 16; k++) RU(gp0_cmd_buf[k]);
-    RI(gp0_words_collected); RI(gp0_words_needed);
+    if (!pst_r_i32(r, &got) || !pst_r_i32(r, &need)) return 0;
+    /* GP0 collection cursor indexes gp0_cmd_buf[16]: live it is
+     * 0 <= collected <= needed <= 16, strictly below needed while COLLECTING. */
+    if (need < 0 || need > 16 || got < 0 || got > need ||
+        (st == GP0_COLLECTING && got >= need))
+        return 0;
+    gp0_state = (Gp0State)st;
+    gp0_words_collected = got; gp0_words_needed = need;
     RU(gp0_next_source_addr); RU(gp0_cmd_source_addr);
     RH(polyline_color); RI(polyline_prev_x); RI(polyline_prev_y); RH(polyline_prev_c);
     RI(polyline_semi_trans); RI(polyline_has_prev);
@@ -6413,6 +7136,7 @@ static int gpu_snap_parse(PstR *r) {
 #undef RU
 #undef RI
 #undef RH
+#undef RUM
     return 1;
 }
 

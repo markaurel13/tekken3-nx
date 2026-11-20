@@ -39,6 +39,7 @@ int tekken3_outfits_cycle(int player, int direction);
 void tekken3_outfits_close(int accept); /* legacy no-op; use normal pad confirm */
 Tekken3OutfitView tekken3_outfits_view(int player);
 int tekken3_outfits_skin_enabled(int skin, int clut_y);
+int tekken3_outfits_player_has_hd_skin(int player, int cid);
 #ifdef __cplusplus
 }
 #endif

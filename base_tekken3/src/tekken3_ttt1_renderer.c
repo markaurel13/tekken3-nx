@@ -7,6 +7,7 @@
 #include "gpu.h"
 #include "tekken3_ttt1_assets.h"
 #include "tekken3_ttt1_ps2_laser.h"
+#include "tekken3_ttt1_ps2_weapons.h"
 
 extern void __real_func_80036CAC(CPUState *cpu);
 extern void tekken3_cine_near_begin(uint32_t packets);
@@ -305,25 +306,53 @@ static void draw_laser_beam(const uint32_t *ctrl,uint32_t ot,unsigned p) {
  * poignee se range avec la main qui la tient. */
 extern int tekken3_ttt1_hilt(unsigned player,unsigned moveset,unsigned *bone,const int16_t (**points)[3],
                              const unsigned char (**corners)[4],uint32_t words[][4]);
-enum { HILT_QUADS=14, HILT_POINTS=16 };
-static void draw_hilt(const uint32_t *ctrl,uint32_t ot,unsigned p,unsigned moveset) {
-    unsigned bone; const int16_t (*point)[3]; const unsigned char (*corner)[4]; uint32_t words[HILT_QUADS][4];
-    if(tekken3_ttt1_hilt(p,moveset,&bone,&point,&corner,words)!=HILT_QUADS) return;
-    static uint32_t bufs[2][2];
-    uint32_t *buf=bufs[p];
-    if(!buf[0]) { buf[0]=psx_mod_alloc_gpu_dma_memory(HILT_QUADS*40,16); buf[1]=psx_mod_alloc_gpu_dma_memory(HILT_QUADS*40,16); }
-    if(!buf[0] || !buf[1]) return;
-    uint32_t actor=0x800a9228+p*0x188c,m=actor+0x8f4+bone*68;
-    double r[9],s[HILT_POINTS][3];
-    for(unsigned i=0;i<9;i++) r[i]=(int16_t)psx_mod_read_half(m+i*2)/4096.0;
-    for(unsigned k=0;k<HILT_POINTS;k++) {
+enum { HILT_QUADS=14, HILT_POINTS=16, STICK_QUADS=18, STICK_POINTS=20, MESH_POINTS=96,
+       TAIL_SEGMENTS=4, TAIL_QUADS=80 };
+/* Points in a frame (rotation rows r, origin t, world units), opaque textured quads: the hilt,
+ * Mokujin's sword, Tetsujin's tail. */
+/* The colour T3 gives a body vertex of normal n (rows r: local to world), as the fighters' renderer
+ * (0x800361A8, NCCT with the stage's light): IR = max(0, light_matrix . n) (0x8009E5A0, world rows:
+ * the stage light, the hit light, the light from above), then the GTE's back colour plus its colour
+ * matrix times IR, times fighter_rgbc (0x800ADE1C). Back colour and colour matrix: the GTE's own, as
+ * the body was just drawn with them. */
+static uint32_t body_light(const uint32_t *ctrl,const double r[9],const int16_t n[3]) {
+    double w[3],ir[3];
+    for(unsigned i=0;i<3;i++) w[i]=(r[i*3]*n[0]+r[i*3+1]*n[1]+r[i*3+2]*n[2])/4096.0;
+    for(unsigned j=0;j<3;j++) {
+        double d=0;
+        for(unsigned k=0;k<3;k++) d+=(int16_t)psx_mod_read_half(0x8009e5a0u+(j*3+k)*2)*w[k];
+        ir[j]=d<0?0:d>32767?32767:d;
+    }
+    int16_t c[9]={(int16_t)ctrl[16],(int16_t)(ctrl[16]>>16),(int16_t)ctrl[17],(int16_t)(ctrl[17]>>16),
+                  (int16_t)ctrl[18],(int16_t)(ctrl[18]>>16),(int16_t)ctrl[19],(int16_t)(ctrl[19]>>16),(int16_t)ctrl[20]};
+    uint32_t rgbc=psx_mod_read_word(0x800ade1cu),out=0;
+    for(unsigned i=0;i<3;i++) {
+        double v=(int32_t)ctrl[13+i]+(c[i*3]*ir[0]+c[i*3+1]*ir[1]+c[i*3+2]*ir[2])/4096.0;
+        v=v<0?0:v>32767?32767:v;
+        double x=((rgbc>>(8*i))&255)*v/4096.0;
+        out|=(uint32_t)(x>255?255:x)<<(8*i);
+    }
+    return out;
+}
+/* `normal` given (4096 = 1, one per point): lit as the body, Gouraud quads 0x3C (52 bytes each);
+ * NULL: flat 0x2C at 0x808080 (40 bytes each). */
+static void draw_quad_mesh_at(const uint32_t *ctrl,uint32_t ot,unsigned p,const double r[9],const int32_t t[3],
+                              const int16_t (*point)[3],unsigned points,const unsigned char (*corner)[4],
+                              uint32_t (*words)[4],unsigned quads,uint32_t *buf,const int16_t (*normal)[3]) {
+    const unsigned size=normal?52:40;
+    if(!buf[0]) { buf[0]=psx_mod_alloc_gpu_dma_memory(quads*size,16); buf[1]=psx_mod_alloc_gpu_dma_memory(quads*size,16); }
+    if(!buf[0] || !buf[1] || points>MESH_POINTS) return;
+    uint32_t actor=0x800a9228+p*0x188c;
+    double s[MESH_POINTS][3]; uint32_t lit[MESH_POINTS];
+    for(unsigned k=0;k<points;k++) {
         const int16_t *l=point[k]; int32_t w[3];
         for(unsigned i=0;i<3;i++)
-            w[i]=(int32_t)psx_mod_read_word(m+0x14+i*4)+(int32_t)(r[i*3]*l[0]+r[i*3+1]*l[1]+r[i*3+2]*l[2]);
+            w[i]=t[i]+(int32_t)(r[i*3]*l[0]+r[i*3+1]*l[1]+r[i*3+2]*l[2]);
         project_beam(ctrl,actor,w,s[k]);
+        if(normal) lit[k]=body_light(ctrl,r,normal[k]);
     }
     uint32_t pkt=buf[(ot>>12)&1];
-    for(unsigned q=0;q<HILT_QUADS;q++,pkt+=40) {
+    for(unsigned q=0;q<quads;q++,pkt+=size) {
         const double *a=s[corner[q][0]],*b=s[corner[q][1]],*c=s[corner[q][2]],*d=s[corner[q][3]];
         if(a[2]<=0 || b[2]<=0 || c[2]<=0 || d[2]<=0) continue;
         int32_t x[4]={(int32_t)a[0],(int32_t)b[0],(int32_t)c[0],(int32_t)d[0]};
@@ -331,15 +360,121 @@ static void draw_hilt(const uint32_t *ctrl,uint32_t ot,unsigned p,unsigned moves
         /* le test de 0x801042B0 : (p2 - p0) x (p1 - p2) > 0 */
         if((int64_t)(x[2]-x[0])*(y[1]-y[2])-(int64_t)(y[2]-y[0])*(x[1]-x[2])<=0) continue;
         unsigned z=((((unsigned)a[2]>>5)+((unsigned)d[2]>>5))>>1)&0x3ff;
-        psx_mod_write_word(pkt+4,0x2C000000u|0x808080u);
-        for(unsigned k=0;k<4;k++) {
-            psx_mod_write_word(pkt+8+k*8,((uint32_t)y[k]&0xffff)<<16|((uint32_t)x[k]&0xffff));
-            psx_mod_write_word(pkt+12+k*8,words[q][k]);
+        if(normal) {
+            for(unsigned k=0;k<4;k++) {
+                psx_mod_write_word(pkt+4+k*12,(k?0:0x3C000000u)|lit[corner[q][k]]);
+                psx_mod_write_word(pkt+8+k*12,((uint32_t)y[k]&0xffff)<<16|((uint32_t)x[k]&0xffff));
+                psx_mod_write_word(pkt+12+k*12,words[q][k]);
+            }
+        } else {
+            psx_mod_write_word(pkt+4,0x2C000000u|0x808080u);
+            for(unsigned k=0;k<4;k++) {
+                psx_mod_write_word(pkt+8+k*8,((uint32_t)y[k]&0xffff)<<16|((uint32_t)x[k]&0xffff));
+                psx_mod_write_word(pkt+12+k*8,words[q][k]);
+            }
         }
         uint32_t slot=ot+z*4;
-        psx_mod_write_word(pkt,(psx_mod_read_word(slot)&0xffffffu)|(9u<<24));
+        psx_mod_write_word(pkt,(psx_mod_read_word(slot)&0xffffffu)|((normal?12u:9u)<<24));
         psx_mod_write_word(slot,pkt&0xffffffu);
     }
+}
+/* Points in a bone's frame. */
+static void draw_quad_mesh(const uint32_t *ctrl,uint32_t ot,unsigned p,unsigned bone,const int16_t (*point)[3],
+                           unsigned points,const unsigned char (*corner)[4],uint32_t (*words)[4],unsigned quads,
+                           uint32_t *buf) {
+    uint32_t m=0x800a9228+p*0x188c+0x8f4+bone*68;
+    double r[9]; int32_t t[3];
+    for(unsigned i=0;i<9;i++) r[i]=(int16_t)psx_mod_read_half(m+i*2)/4096.0;
+    for(unsigned i=0;i<3;i++) t[i]=(int32_t)psx_mod_read_word(m+0x14+i*4);
+    draw_quad_mesh_at(ctrl,ot,p,r,t,point,points,corner,words,quads,buf,NULL);
+}
+/* Tetsujin's and Kinjin's tail on Roger's and Alex's moves (tools/ttt1/tail.py): the mod moves the
+ * chain (one step per new frame: the order table's buffer alternates) and gives each segment's
+ * frame; drawn after the head like the weapons. */
+extern int tekken3_ttt1_tail(unsigned player,unsigned parity);
+extern int tekken3_ttt1_tail_segment(unsigned player,unsigned s,double r[9],int32_t at[3],unsigned *count,
+                                     const int16_t (**points)[3],const unsigned char (**corners)[4],uint32_t words[][4],
+                                     const int16_t (**normals)[3]);
+static void draw_tail(const uint32_t *ctrl,uint32_t ot,unsigned p) {
+    int n=tekken3_ttt1_tail(p,(ot>>12)&1);
+    static uint32_t bufs[2][TAIL_SEGMENTS][2];
+    static int flat=-1;    /* TEKKEN3_TAIL_FLAT=1: unlit at 0x808080, as before (benches: the before) */
+    if(flat<0) { const char *e=getenv("TEKKEN3_TAIL_FLAT"); flat=e && *e=='1'; }
+    for(int s=0;s<n && s<TAIL_SEGMENTS;s++) {
+        double r[9]; int32_t t[3]; unsigned count; const int16_t (*point)[3]; const unsigned char (*corner)[4];
+        const int16_t (*normal)[3];
+        uint32_t words[TAIL_QUADS][4];
+        int quads=tekken3_ttt1_tail_segment(p,(unsigned)s,r,t,&count,&point,&corner,words,&normal);
+        if(quads<=0 || quads>TAIL_QUADS) continue;
+        uint32_t *buf=bufs[p][s];
+        if(!buf[0]) { buf[0]=psx_mod_alloc_gpu_dma_memory(TAIL_QUADS*52,16); buf[1]=psx_mod_alloc_gpu_dma_memory(TAIL_QUADS*52,16); }
+        draw_quad_mesh_at(ctrl,ot,p,r,t,point,count,corner,words,(unsigned)quads,buf,flat?NULL:normal);
+    }
+}
+static void draw_hilt(const uint32_t *ctrl,uint32_t ot,unsigned p,unsigned moveset) {
+    unsigned bone; const int16_t (*point)[3]; const unsigned char (*corner)[4]; uint32_t words[HILT_QUADS][4];
+    if(tekken3_ttt1_hilt(p,moveset,&bone,&point,&corner,words)!=HILT_QUADS) return;
+    static uint32_t bufs[2][2];
+    draw_quad_mesh(ctrl,ot,p,bone,point,HILT_POINTS,corner,words,HILT_QUADS,bufs[p]);
+}
+/* Body 15's weapon, on its TTT1 model (tools/ttt1/stick.py): Mokujin's wooden sword on Yoshimitsu's
+ * moves (F32 E5), Tetsujin's and Kinjin's sword and dagger on Yoshimitsu's and Kunimitsu's (B177).
+ * TTT1 0x80193BC4 / 0x80193E3C as fighter_quad_strip_f0004_draw_maybe draws the sword, 0x80193C64 /
+ * 0x80193F14 as its f001a twin draws the dagger, the hilt's way. */
+extern int tekken3_ttt1_stick(unsigned player,unsigned *bone,unsigned *count,const int16_t (**points)[3],
+                              const unsigned char (**corners)[4],uint32_t words[][4]);
+static void draw_stick(const uint32_t *ctrl,uint32_t ot,unsigned p) {
+    unsigned bone,count; const int16_t (*point)[3]; const unsigned char (*corner)[4]; uint32_t words[STICK_QUADS][4];
+    int quads=tekken3_ttt1_stick(p,&bone,&count,&point,&corner,words);
+    if(quads<=0 || quads>STICK_QUADS || count>MESH_POINTS) return;
+    static uint32_t bufs[2][2];
+    draw_quad_mesh(ctrl,ot,p,bone,point,count,corner,words,(unsigned)quads,bufs[p]);
+}
+
+/* Unknown's own PS2 weapon under PS2 EFFECTS (TIPS.md section 228): the
+ * katana or the dagger of TTT PS2 in place of the energy blade and its hilt
+ * (src/tekken3_ttt1_ps2_weapons.c), points in the frame of the hand bone like
+ * the hilt's. Both faces drawn (the rebuilt rings have no outside), each
+ * polygon at the table entry of its corners' mean SZ >> 5, the hilt's rule;
+ * the additive pass (the purple glow, ABR 1) linked first, so that at one
+ * entry it is drawn after the opaque polygon under it. 0: not drawn. */
+static int draw_ps2_weapon(const uint32_t *ctrl,uint32_t ot,unsigned p,unsigned moveset) {
+    const Tekken3Ps2Weapon *wp;
+    uint32_t pkt;
+    if(!tekken3_ps2_effects_on() || !tekken3_ps2_weapon_frame(p,moveset,(ot>>12)&1,&wp,&pkt)) return 0;
+    uint32_t actor=0x800a9228+p*0x188c,m=actor+0x8f4+wp->bone*68;
+    double r[9],s[TEKKEN3_PS2_WEAPON_POINTS][3];
+    for(unsigned i=0;i<9;i++) r[i]=(int16_t)psx_mod_read_half(m+i*2)/4096.0;
+    for(unsigned k=0;k<wp->points;k++) {
+        const int16_t *l=wp->point[k]; int32_t w[3];
+        for(unsigned i=0;i<3;i++)
+            w[i]=(int32_t)psx_mod_read_word(m+0x14+i*4)+(int32_t)(r[i*3]*l[0]+r[i*3+1]*l[1]+r[i*3+2]*l[2]);
+        project_beam(ctrl,actor,w,s[k]);
+    }
+    uint32_t o=pkt;
+    for(unsigned pass=0;pass<2;pass++)
+        for(unsigned q=0;q<wp->polygons;q++) {
+            const Tekken3Ps2WeaponPolygon *g=&wp->polygon[q];
+            if(g->additive!=(pass==0)) continue;
+            unsigned n=g->corners,zsum=0; int behind=0;
+            for(unsigned k=0;k<n;k++) {
+                const double *c=s[g->point[k]];
+                if(c[2]<=0) behind=1; else zsum+=(unsigned)c[2]>>5;
+            }
+            if(behind) continue;
+            unsigned z=(zsum/n)&0x3ff;
+            psx_mod_write_word(o+4,(n==4?0x2C000000u:0x24000000u)|(g->additive?0x02000000u:0)|0x808080u);
+            for(unsigned k=0;k<n;k++) {
+                const double *c=s[g->point[k]];
+                psx_mod_write_word(o+8+k*8,((uint32_t)(int32_t)c[1]&0xffff)<<16|((uint32_t)(int32_t)c[0]&0xffff));
+                psx_mod_write_word(o+12+k*8,g->uv[k]);
+            }
+            uint32_t slot=ot+z*4,words=1+2*n;
+            psx_mod_write_word(o,(psx_mod_read_word(slot)&0xffffffu)|(words<<24));
+            psx_mod_write_word(slot,o&0xffffffu);
+            o+=40;
+        }
+    return 1;
 }
 
 static void draw_blade(const uint32_t *ctrl,uint32_t ot,unsigned p) {
@@ -347,6 +482,7 @@ static void draw_blade(const uint32_t *ctrl,uint32_t ot,unsigned p) {
     unsigned moveset=tekken3_guest_switches_on_button(p)?tekken3_guest_moveset(p):0;
     if(moveset!=last[p]) { last[p]=moveset; grow[p]=0; }
     if(moveset!=4 && moveset!=26) return;
+    if(draw_ps2_weapon(ctrl,ot,p,moveset)) return;
     draw_hilt(ctrl,ot,p,moveset);
     if(grow[p]<0x100) grow[p]+=0x20;
     int yoshimitsu=moveset==4;
@@ -425,8 +561,14 @@ void __wrap_func_80036CAC(CPUState *cpu) {
         for(unsigned p=0;p<2;p++) {
             uint32_t m=p?m2:m1;
             if(!m || in[0]!=m+16+19*56 || (who>=0?(unsigned)who!=p:(p && m2==m1))) continue;
-            draw_laser_beam(ctrl,in[2],p); draw_blade(ctrl,in[2],p);
+            draw_laser_beam(ctrl,in[2],p); draw_blade(ctrl,in[2],p); draw_stick(ctrl,in[2],p); draw_tail(ctrl,in[2],p);
         }
+        /* The Embu (state 6): 0x8009BD28 is 0, its active models at 0x800ADEC8 + 4 * side. */
+        if(psx_mod_read_word(0x800ae204)==6)
+            for(unsigned p=0;p<2;p++) {
+                uint32_t m=psx_mod_read_word(0x800adec8u+p*4);
+                if(m && in[0]==m+16+19*56 && (who<0 || (unsigned)who==p)) { draw_stick(ctrl,in[2],p); draw_tail(ctrl,in[2],p); }
+            }
         if(mine) { nlogged++; fprintf(stderr,"native log: sortie ligne %u pc=%08X\n",(in[0]-m1-16)/56,cpu->pc); fflush(stderr); }
         {
             static unsigned said;
