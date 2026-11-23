@@ -1,7 +1,7 @@
 // Main User Interface Controller for Tekken 3 Expanded Web Installer.
 // Handles Drag & Drop, file inspections, visual status badges, and Service Worker download coordination.
 
-import { t, formatSize } from './lib/i18n.js';
+import { t, formatSize } from './lib/i18n.js?v=1.5.1';
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -102,7 +102,7 @@ function checkBuildReadiness() {
 // Worker initialization
 function initWorker() {
   if (worker) return;
-  worker = new Worker('./worker.js', { type: 'module' });
+  worker = new Worker('./worker.js?v=1.5.1', { type: 'module' });
 
   worker.addEventListener('message', async (event) => {
     const data = event.data || {};
@@ -213,7 +213,7 @@ initWorker();
 
 // Optional background service worker for offline cache
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js?v=1.5.1').catch(() => {});
 }
 
 // Drag & Drop handlers

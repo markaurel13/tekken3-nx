@@ -1,10 +1,10 @@
 // Web Worker for off-thread file analysis, ROM verification, and package creation.
 
-import { identifyArcadeZip } from './lib/arcade.js';
-import { identifyTttPs2Disc } from './lib/ps2.js';
-import { identifyT5DrPspDisc } from './lib/psp.js';
-import { buildPackage } from './lib/installer.js';
-import { readZipEntries } from './lib/zip_reader.js';
+import { identifyArcadeZip } from './lib/arcade.js?v=1.5.1';
+import { identifyTttPs2Disc } from './lib/ps2.js?v=1.5.1';
+import { identifyT5DrPspDisc } from './lib/psp.js?v=1.5.1';
+import { buildPackage } from './lib/installer.js?v=1.5.1';
+import { readZipEntries } from './lib/zip_reader.js?v=1.5.1';
 
 const log = (text) => postMessage({ type: 'log', text });
 const progress = (fraction) => postMessage({ type: 'progress', fraction });
