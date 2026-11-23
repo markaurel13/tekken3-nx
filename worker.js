@@ -1,10 +1,10 @@
 // Web Worker for off-thread file analysis, ROM verification, and package creation.
 
-import { identifyArcadeZip } from './lib/arcade.js?v=1.5.2';
-import { identifyTttPs2Disc } from './lib/ps2.js?v=1.5.2';
-import { identifyT5DrPspDisc } from './lib/psp.js?v=1.5.2';
-import { buildPackage } from './lib/installer.js?v=1.5.2';
-import { readZipEntries } from './lib/zip_reader.js?v=1.5.2';
+import { identifyArcadeZip } from './lib/arcade.js?v=1.5.3';
+import { identifyTttPs2Disc } from './lib/ps2.js?v=1.5.3';
+import { identifyT5DrPspDisc } from './lib/psp.js?v=1.5.3';
+import { buildPackage } from './lib/installer.js?v=1.5.3';
+import { readZipEntries } from './lib/zip_reader.js?v=1.5.3';
 
 const log = (text) => postMessage({ type: 'log', text });
 const progress = (fraction) => postMessage({ type: 'progress', fraction });
@@ -105,6 +105,8 @@ self.addEventListener('message', async (event) => {
             inspectedFiles.t5DrDisc = file;
             log(`✓ ${pspCheck.edition} PSP ISO detected (${file.name})`);
             continue;
+          } else if (pspCheck.reason && pspCheck.reason.includes('PSP UMD detected')) {
+            log(`✗ ${pspCheck.reason} (${file.name})`);
           }
         } catch (e) {
           // not PSP
