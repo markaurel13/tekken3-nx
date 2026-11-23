@@ -1,7 +1,7 @@
 // Service Worker for streaming download and offline caching.
 // Adapted from nfsmw-nx-installer by StevensND (GPL-3.0) and defjam-sw-installer.
 
-const PAGE_CACHE = 'tekken3-expanded-page-v3';
+const PAGE_CACHE = 'tekken3-expanded-page-v4';
 
 const PAGE_FILES = [
   './',

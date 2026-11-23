@@ -1,14 +1,19 @@
 // Core Installer Package Builder for Tekken 3 Expanded.
 // Assembles all mod components, extracted PS2 audio, arcade stages and binaries into switch/tekken3/ on the SD card.
 
-import { ZipWriter, zipSize } from './zip.js';
-import { extractPs2Music } from './ps2.js';
-import { t, formatSize } from './i18n.js';
+import { ZipWriter, zipSize } from './zip.js?v=1.5.1';
+import { extractPs2Music } from './ps2.js?v=1.5.1';
+import { t, formatSize } from './i18n.js?v=1.5.1';
 
 export const SWITCH_ROOT = 'switch/tekken3';
+const CACHE_BUST = 'v=1.5.1';
+
+function withBust(url) {
+  return url.includes('?') ? `${url}&${CACHE_BUST}` : `${url}?${CACHE_BUST}`;
+}
 
 async function fetchBytes(url) {
-  const resp = await fetch(url);
+  const resp = await fetch(withBust(url), { cache: 'no-cache' });
   if (!resp.ok) {
     throw new Error(`Failed to load asset from ${url}: status ${resp.status}`);
   }
@@ -16,7 +21,7 @@ async function fetchBytes(url) {
 }
 
 async function fetchJson(url) {
-  const resp = await fetch(url);
+  const resp = await fetch(withBust(url), { cache: 'no-cache' });
   if (!resp.ok) {
     throw new Error(`Failed to load manifest from ${url}: status ${resp.status}`);
   }
