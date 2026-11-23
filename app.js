@@ -18,22 +18,55 @@ const resultCard = document.getElementById('resultCard');
 const badgeT3Arcade = document.getElementById('badgeT3Arcade');
 const badgeTttArcade = document.getElementById('badgeTttArcade');
 const badgeTttPs2 = document.getElementById('badgeTttPs2');
+const badgeT5Dr = document.getElementById('badgeT5Dr');
 
 let worker = null;
 let inspectedState = null;
 let lastBuiltBlob = null;
+let lastBlobUrl = null;
+let activeWritable = null;
+let activeSwPort = null;
+let savedFileName = '';
+let writeChain = Promise.resolve();
+let chunksQueued = 0;
+let chunksWritten = 0;
+let isFinalizingDisk = false;
 
 function triggerDownload(blob, filename = 'tekken3-expanded.zip') {
+  if (lastBlobUrl) {
+    try { URL.revokeObjectURL(lastBlobUrl); } catch (e) {}
+  }
   const url = URL.createObjectURL(blob);
+  lastBlobUrl = url;
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
-  setTimeout(() => {
-    try { document.body.removeChild(a); } catch (e) {}
-    URL.revokeObjectURL(url);
-  }, 60000);
+  try { document.body.removeChild(a); } catch (e) {}
+}
+
+async function startSwStreamDownload(filename = 'tekken3-expanded.zip') {
+  const sw = navigator.serviceWorker?.controller;
+  if (!sw) return null;
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const dataChannel = new MessageChannel();
+  const ackChannel = new MessageChannel();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('SW ack timeout')), 3000);
+    ackChannel.port2.onmessage = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    sw.postMessage({ type: 'download', id, filename }, [dataChannel.port1, ackChannel.port1]);
+  });
+  const a = document.createElement('a');
+  a.href = `./download/${id}/${filename}`;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  try { document.body.removeChild(a); } catch (e) {}
+  return dataChannel.port2;
 }
 
 function appendLog(text, isError = false) {
@@ -60,8 +93,9 @@ function checkBuildReadiness() {
     btnBuild.disabled = true;
     return;
   }
-  // All 3 files are strictly required to build the full expansion package
-  const canBuild = inspectedState.hasT3Arcade && inspectedState.hasTttArcade && inspectedState.hasPs2Disc;
+  // All 4 files are strictly required to build the full expansion package
+  const canBuild = inspectedState.hasT3Arcade && inspectedState.hasTttArcade &&
+                   inspectedState.hasPs2Disc && inspectedState.hasT5DrDisc;
   btnBuild.disabled = !canBuild;
 }
 
@@ -70,7 +104,7 @@ function initWorker() {
   if (worker) return;
   worker = new Worker('./worker.js', { type: 'module' });
 
-  worker.addEventListener('message', (event) => {
+  worker.addEventListener('message', async (event) => {
     const data = event.data || {};
     if (data.type === 'log') {
       appendLog(data.text);
@@ -83,20 +117,92 @@ function initWorker() {
       updateBadge(badgeT3Arcade, data.hasT3Arcade ? 'good' : 'bad', data.t3ArcadeName);
       updateBadge(badgeTttArcade, data.hasTttArcade ? 'good' : 'bad', data.tttArcadeName);
       updateBadge(badgeTttPs2, data.hasPs2Disc ? 'good' : 'bad', data.ps2DiscName);
+      updateBadge(badgeT5Dr, data.hasT5DrDisc ? 'good' : 'bad', data.t5DrDiscName);
       checkBuildReadiness();
       if (btnClear) {
-        btnClear.style.display = (data.hasT3Arcade || data.hasTttArcade || data.hasPs2Disc) ? 'inline-flex' : 'none';
+        btnClear.style.display = (data.hasT3Arcade || data.hasTttArcade || data.hasPs2Disc || data.hasT5DrDisc) ? 'inline-flex' : 'none';
+      }
+    } else if (data.type === 'chunk') {
+      if (activeWritable) {
+        const buf = data.buffer;
+        chunksQueued++;
+        writeChain = writeChain.then(async () => {
+          await activeWritable.write(new Uint8Array(buf));
+          chunksWritten++;
+          if (isFinalizingDisk && chunksQueued > 0) {
+            const pct = 90 + Math.round((chunksWritten / chunksQueued) * 9);
+            progressBar.style.width = `${pct}%`;
+            progressBar.textContent = `${pct}%`;
+          }
+        });
+      } else if (activeSwPort) {
+        activeSwPort.postMessage({ type: 'chunk', buffer: data.buffer }, [data.buffer]);
       }
     } else if (data.type === 'build-finished') {
-      btnBuild.disabled = false;
-      btnBuild.textContent = "⚡ Build Switch Package";
-      resultCard.hidden = false;
-      appendLog("✓ Build complete! Package ready for download.");
-      if (data.blob) {
-        lastBuiltBlob = data.blob;
-        triggerDownload(data.blob);
+      try {
+        const wasSavedDirectly = Boolean(activeWritable);
+        if (activeWritable) {
+          isFinalizingDisk = true;
+          appendLog(`Finalizing ZIP file on disk (${chunksWritten}/${chunksQueued} blocks)...`);
+          await writeChain;
+          progressBar.style.width = '99%';
+          progressBar.textContent = '99%';
+          await activeWritable.close();
+          activeWritable = null;
+          isFinalizingDisk = false;
+        }
+        if (activeSwPort) {
+          activeSwPort.postMessage({ type: 'end' });
+          activeSwPort = null;
+        }
+        progressBar.style.width = '100%';
+        progressBar.textContent = '100%';
+        resultCard.hidden = false;
+        const resultSummary = document.getElementById('resultSummary');
+        if (wasSavedDirectly) {
+          const fname = savedFileName || 'tekken3-expanded.zip';
+          appendLog(`✓ Build complete! Check "${fname}" in the folder where you saved it at the start.`);
+          if (resultSummary) {
+            resultSummary.textContent = '';
+            const strong = document.createElement('strong');
+            strong.textContent = fname;
+            resultSummary.append('Your file ', strong, ' has been saved directly to the folder you selected at the start. Check that folder, extract it, and copy the ');
+            const code1 = document.createElement('code');
+            code1.textContent = 'switch';
+            const code2 = document.createElement('code');
+            code2.textContent = 'sdmc:/';
+            resultSummary.append(code1, ' folder directly to the root of your microSD card (', code2, ').');
+          }
+        } else {
+          appendLog("✓ Build complete! Check your browser Downloads folder for tekken3-expanded.zip.");
+        }
+        if (data.blob) {
+          lastBuiltBlob = data.blob;
+          if (btnDownloadAgain) btnDownloadAgain.hidden = false;
+          triggerDownload(data.blob);
+        } else {
+          lastBuiltBlob = null;
+          if (btnDownloadAgain) btnDownloadAgain.hidden = true;
+        }
+      } catch (err) {
+        appendLog(`Error saving file: ${err.message}`, true);
+        if (activeWritable) {
+          try { await activeWritable.abort(); } catch (e) {}
+          activeWritable = null;
+        }
+      } finally {
+        btnBuild.disabled = false;
+        btnBuild.textContent = "⚡ Build Switch Package";
       }
     } else if (data.type === 'build-error') {
+      if (activeWritable) {
+        try { await activeWritable.abort(); } catch (e) {}
+        activeWritable = null;
+      }
+      if (activeSwPort) {
+        activeSwPort.postMessage({ type: 'error', message: data.message });
+        activeSwPort = null;
+      }
       btnBuild.disabled = false;
       btnBuild.textContent = "⚡ Build Switch Package";
       appendLog(data.message, true);
@@ -147,6 +253,7 @@ async function handleDroppedItems(items) {
     if (!inspectedState?.hasT3Arcade) updateBadge(badgeT3Arcade, 'checking');
     if (!inspectedState?.hasTttArcade) updateBadge(badgeTttArcade, 'checking');
     if (!inspectedState?.hasPs2Disc) updateBadge(badgeTttPs2, 'checking');
+    if (!inspectedState?.hasT5DrDisc) updateBadge(badgeT5Dr, 'checking');
     worker.postMessage({ type: 'inspect', files });
   }
 }
@@ -196,6 +303,37 @@ if (btnClear) {
 
 // Build button click
 btnBuild.addEventListener('click', async () => {
+  activeWritable = null;
+  activeSwPort = null;
+  savedFileName = '';
+  chunksQueued = 0;
+  chunksWritten = 0;
+  isFinalizingDisk = false;
+  writeChain = Promise.resolve();
+
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: 'tekken3-expanded.zip',
+        types: [{ description: 'ZIP Archive', accept: { 'application/zip': ['.zip'] } }],
+      });
+      savedFileName = handle.name || 'tekken3-expanded.zip';
+      activeWritable = await handle.createWritable();
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      activeWritable = null;
+      savedFileName = '';
+    }
+  }
+
+  if (!activeWritable) {
+    try {
+      activeSwPort = await startSwStreamDownload('tekken3-expanded.zip');
+    } catch (err) {
+      activeSwPort = null;
+    }
+  }
+
   btnBuild.disabled = true;
   btnBuild.textContent = "⏳ Building Package...";
   progressContainer.hidden = false;
@@ -210,6 +348,7 @@ btnBuild.addEventListener('click', async () => {
     includeStages: true,
     includeCinematics: true,
     includeOutfits: true,
+    streamChunks: Boolean(activeWritable || activeSwPort),
   };
 
   worker.postMessage({ type: 'start-build', options });

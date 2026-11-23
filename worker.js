@@ -2,6 +2,7 @@
 
 import { identifyArcadeZip } from './lib/arcade.js';
 import { identifyTttPs2Disc } from './lib/ps2.js';
+import { identifyT5DrPspDisc } from './lib/psp.js';
 import { buildPackage } from './lib/installer.js';
 import { readZipEntries } from './lib/zip_reader.js';
 
@@ -12,6 +13,7 @@ let inspectedFiles = {
   t3Arcade: null,
   tttArcade: null,
   ps2Disc: null,
+  t5DrDisc: null,
 };
 
 self.addEventListener('message', async (event) => {
@@ -22,6 +24,7 @@ self.addEventListener('message', async (event) => {
       t3Arcade: null,
       tttArcade: null,
       ps2Disc: null,
+      t5DrDisc: null,
     };
     log("Files cleared. Ready to accept new files.");
     postMessage({
@@ -29,9 +32,11 @@ self.addEventListener('message', async (event) => {
       hasT3Arcade: false,
       hasTttArcade: false,
       hasPs2Disc: false,
+      hasT5DrDisc: false,
       t3ArcadeName: '',
       tttArcadeName: '',
       ps2DiscName: '',
+      t5DrDiscName: '',
     });
     return;
   }
@@ -94,6 +99,16 @@ self.addEventListener('message', async (event) => {
         } catch (e) {
           // not PS2
         }
+        try {
+          const pspCheck = await identifyT5DrPspDisc(file);
+          if (pspCheck.valid) {
+            inspectedFiles.t5DrDisc = file;
+            log(`✓ ${pspCheck.edition} PSP ISO detected (${file.name})`);
+            continue;
+          }
+        } catch (e) {
+          // not PSP
+        }
       }
     }
 
@@ -102,23 +117,56 @@ self.addEventListener('message', async (event) => {
       hasT3Arcade: inspectedFiles.t3Arcade !== null,
       hasTttArcade: inspectedFiles.tttArcade !== null,
       hasPs2Disc: inspectedFiles.ps2Disc !== null,
+      hasT5DrDisc: inspectedFiles.t5DrDisc !== null,
       t3ArcadeName: inspectedFiles.t3Arcade?.name || 'tekken3.zip',
       tttArcadeName: inspectedFiles.tttArcade?.name || 'tektagt.zip',
       ps2DiscName: inspectedFiles.ps2Disc?.name || 'Tekken Tag (USA).iso',
+      t5DrDiscName: inspectedFiles.t5DrDisc?.name || 'Tekken 5 DR (PSP).iso',
     });
   }
 
   else if (data.type === 'start-build') {
     const options = data.options || {};
+    const streamChunks = Boolean(options.streamChunks);
+    const BATCH_BYTES = 4 * 1024 * 1024;
+    let batchParts = [];
+    let batchLen = 0;
 
-    const chunks = [];
+    function flushBatch() {
+      if (batchLen === 0) return;
+      const merged = new Uint8Array(batchLen);
+      let offset = 0;
+      for (const part of batchParts) {
+        merged.set(part, offset);
+        offset += part.length;
+      }
+      batchParts = [];
+      batchLen = 0;
+      postMessage({ type: 'chunk', buffer: merged.buffer }, [merged.buffer]);
+    }
+
+    const chunks = streamChunks ? null : [];
     const sink = {
       async write(bytes) {
-        chunks.push(bytes.slice());
+        const copy = bytes.slice();
+        if (streamChunks) {
+          batchParts.push(copy);
+          batchLen += copy.length;
+          if (batchLen >= BATCH_BYTES) {
+            flushBatch();
+          }
+        } else {
+          chunks.push(copy);
+        }
       },
       async close() {
-        const blob = new Blob(chunks, { type: 'application/zip' });
-        postMessage({ type: 'build-finished', blob });
+        if (streamChunks) {
+          flushBatch();
+          postMessage({ type: 'build-finished', streamed: true });
+        } else {
+          const blob = new Blob(chunks, { type: 'application/zip' });
+          postMessage({ type: 'build-finished', blob });
+        }
       }
     };
 
