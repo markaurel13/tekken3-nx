@@ -80,12 +80,15 @@ static inline void psx_check_interrupts_at_inline(struct CPUState* cpu, uint32_t
     }
 #endif
 
+    uint32_t sr = cpu->cop0[12];
     if (__builtin_expect(
-        ((i_stat & i_mask) != 0) ||
         ((++s_fast_maintenance & 0x3FFFu) == 0) ||
         (s_defer_switch_pending != 0) ||
-        (in_exception != 0) ||
-        ((cpu->cop0[13] & cpu->cop0[12] & 0x0300u) != 0),
+        ((sr & 0x01u) && (
+            (((i_stat & i_mask) != 0) && ((sr & 0x0400u) != 0)) ||
+            (in_exception != 0) ||
+            ((cpu->cop0[13] & sr & 0x0300u) != 0)
+        )),
         0)) {
         psx_check_interrupts_at_slow(cpu, resume_pc);
     }

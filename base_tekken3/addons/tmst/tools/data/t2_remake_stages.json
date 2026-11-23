@@ -1,0 +1,6282 @@
+{
+ "_comment": "tools/t2_remake_stage.py: the Remake's recipes, the old fork's tools/data/t2_stages.json (the stage-engine.zip export) as they were: \"arcade\" a stage's by its fighter's key, \"owners\" / \"fighters\" that key's Tekken 2 stage and fighter (BNS group), \"stages\" the names.",
+ "stages": [
+  "Grand Canyon",
+  "Szechwan Fields",
+  "Morning Fields",
+  "New York City",
+  "Church Sanctuary",
+  "Hong Kong Rooftop",
+  "Pagoda Temple",
+  "Serene Forest",
+  "Akihabara",
+  "The Great Wall",
+  "Cambodian Wetlands",
+  "Athens",
+  "Nowhere Desert",
+  "Launch Pad",
+  "Hills",
+  "Kyoto at Sunset",
+  "Taj Mahal",
+  "Beach",
+  "London Ruins",
+  "Arizona Desert",
+  "Korean Temple",
+  "Eternal Darkness",
+  "Mirror Darkness"
+ ],
+ "owners": {
+  "jack2": 8,
+  "michelle": 19,
+  "roger": 17,
+  "armorking": 4,
+  "bruce": 0,
+  "wang": 9,
+  "gunjack": 5,
+  "baek": 20,
+  "ganryu": 15,
+  "lee": 13,
+  "pjack": 18,
+  "devil": 22,
+  "jun": 2,
+  "bryan": 3,
+  "kuma": 6,
+  "mokujin": 7,
+  "panda": 1,
+  "anna": 16,
+  "kunimitsu": 10,
+  "tetsujin": 11,
+  "julia": 12,
+  "alex": 14,
+  "kazuya": 21
+ },
+ "fighters": {
+  "jack2": 3,
+  "michelle": 7,
+  "roger": 22,
+  "armorking": 5,
+  "bruce": 20,
+  "wang": 2,
+  "gunjack": 18,
+  "baek": 21,
+  "ganryu": 14,
+  "lee": 10,
+  "pjack": 11,
+  "devil": 17,
+  "jun": 19,
+  "bryan": 1,
+  "kuma": 9,
+  "mokujin": 6,
+  "panda": 8,
+  "anna": 13,
+  "kunimitsu": 16,
+  "tetsujin": 4,
+  "julia": 12,
+  "alex": 15,
+  "kazuya": 0
+ },
+ "_wolf_cut": "tools/t2_remake_stages.py cut_fitted(): these stages (\"arcade\" keys) lose top cell rows of their background (as few as fit) rather than put pictures on Unknown's wolf and leave room for the overlay's letters while Unknown fights (the user's, 2026-11-05: Szechwan, Hong Kong, Akihabara, Great Wall, Launch Pad, Kyoto; Arizona for the letters). A key taken out: that stage built as before, the wolf's area when it does not fit without it. Since 2026-11-08 (the user's) only in the pack drawn while Unknown fights (stageNNw.ast, wolf_name()); stageNN.ast keeps the whole background, the wolf's area too, the letters' room (FONT_ROOM) free (full_fitted()); Hong Kong's whole does not fit: its one pack cut.",
+ "wolf_cut": [
+  "panda",
+  "gunjack",
+  "jack2",
+  "wang",
+  "lee",
+  "ganryu",
+  "michelle",
+  "kazuya"
+ ],
+ "_own_frame": "tools/t2_remake_stages.py convert(): these stages (\"arcade\" keys, the old fork's last five, exported 2026-11-07) are built in their own frame, the recipe as the old fork's (no Classic frame, no \"frames\"; the user's, 2026-11-07); a \"wolf_cut\" one of them loses top cell rows of its picture as own_cutter() cuts them. Hills (alex) \"yoff\" 16, not the old fork's 6: its picture's foot (the meadow) down on the floor's far edge, no flat green of the bottom colour under it (the user's, 2026-11-08; measured headless: 14 the least with none).",
+ "own_frame": [
+  "kunimitsu",
+  "tetsujin",
+  "julia",
+  "alex",
+  "kazuya"
+ ],
+ "arcade": {
+  "jack2": {
+   "base": 0,
+   "panorama": "akihabara-panorama.png",
+   "crop": [
+    0,
+    214,
+    2000,
+    584
+   ],
+   "rows": 6,
+   "seam": 96,
+   "degrees": 45,
+   "floor_tint": [
+    0.58,
+    0.44,
+    0.52
+   ],
+   "borrow": {
+    "drum_high": {
+     "stage": 0,
+     "tpage": 2050,
+     "clut": 6509,
+     "uv": [
+      192,
+      128
+     ]
+    },
+    "drum_low": {
+     "stage": 0,
+     "tpage": 2050,
+     "clut": 6509,
+     "uv": [
+      192,
+      192
+     ]
+    }
+   },
+   "painted": [
+    "iron",
+    "rope",
+    "yellow",
+    "lid"
+   ],
+   "scenery": {
+    "tile_size": 800,
+    "seed": 8,
+    "light": {
+     "azimuth": 0,
+     "elevation": 5,
+     "ambient": [
+      0.82,
+      0.68,
+      0.88
+     ],
+     "sun": [
+      1.1,
+      0.45,
+      0.3
+     ],
+     "foot_dark": 0.1
+    },
+    "bollard": {
+     "height": 70,
+     "radius": 20
+    },
+    "drum": {
+     "height": 110,
+     "radius": 36
+    },
+    "railing": {
+     "height": 100,
+     "post": 220
+    },
+    "bollards": [
+     [
+      -33.1,
+      1373,
+      0
+     ],
+     [
+      7.4,
+      1160
+     ],
+     [
+      36.5,
+      1430,
+      0
+     ],
+     [
+      -104.6,
+      1188,
+      270
+     ],
+     [
+      -66.5,
+      1254
+     ],
+     [
+      -160.8,
+      1218,
+      180
+     ],
+     [
+      152.4,
+      1297
+     ]
+    ],
+    "drums": [
+     [
+      -23.3,
+      1187
+     ],
+     [
+      -19.0,
+      1180
+     ],
+     [
+      -23.3,
+      1187,
+      1
+     ],
+     [
+      -9.3,
+      1115
+     ],
+     [
+      115.5,
+      1208
+     ],
+     [
+      111.4,
+      1192
+     ],
+     [
+      115.5,
+      1208,
+      1
+     ],
+     [
+      93.1,
+      1102
+     ]
+    ],
+    "railings": [
+     [
+      -560,
+      1190,
+      -60,
+      1190
+     ],
+     [
+      1190,
+      -700,
+      1190,
+      200
+     ]
+    ]
+   },
+   "ship": {
+    "length": 5000,
+    "lane": 10000,
+    "from": -11000,
+    "to": 11000,
+    "speed": 32,
+    "wait": [
+     900,
+     2400
+    ],
+    "y": 220,
+    "rank": 1022,
+    "light": {
+     "azimuth": 0,
+     "elevation": 5,
+     "ambient": [
+      0.9,
+      0.84,
+      0.98
+     ],
+     "sun": [
+      0.35,
+      0.15,
+      0.1
+     ]
+    }
+   }
+  },
+  "michelle": {
+   "base": 0,
+   "panorama": "arizona-desert-panorama.png",
+   "crop": [
+    0,
+    150,
+    2000,
+    520
+   ],
+   "rows": 6,
+   "seam": 96,
+   "degrees": 45,
+   "floor_tufts": {
+    "count": 14,
+    "seed": 11
+   },
+   "dust": {
+    "colour": [
+     140,
+     86,
+     54
+    ]
+   },
+   "materials": {
+    "cliff": {
+     "box": [
+      380,
+      400,
+      500,
+      470
+     ],
+     "tiles": 3,
+     "lift": 0.25,
+     "soften": 0.3
+    },
+    "cliff_dark": {
+     "box": [
+      740,
+      440,
+      940,
+      485
+     ],
+     "tiles": 3,
+     "lift": 0.4,
+     "soften": 0.3
+    }
+   },
+   "scenery": {
+    "tile_size": 800,
+    "seed": 7,
+    "light": {
+     "azimuth": 210,
+     "elevation": 6,
+     "ambient": [
+      0.62,
+      0.5,
+      0.6
+     ],
+     "sun": [
+      0.85,
+      0.5,
+      0.22
+     ],
+     "foot_dark": 0.15,
+     "haze": {
+      "start": 3000,
+      "end": 7000,
+      "colour": [
+       1.12,
+       0.9,
+       0.9
+      ],
+      "amount": 0.8
+     }
+    },
+    "boulders": [
+     [
+      242,
+      1065,
+      50,
+      0.26
+     ],
+     [
+      240,
+      1142,
+      21,
+      0.3
+     ],
+     [
+      213,
+      1244,
+      75,
+      0.39
+     ],
+     [
+      212,
+      1181,
+      31,
+      0.3
+     ],
+     [
+      303,
+      1214,
+      90,
+      0.38
+     ],
+     [
+      238,
+      1248,
+      60,
+      0.37
+     ],
+     [
+      240,
+      1279,
+      33,
+      0.3
+     ],
+     [
+      245,
+      1013,
+      50,
+      0.34
+     ],
+     [
+      264,
+      1135,
+      30,
+      0.37
+     ],
+     [
+      84,
+      1037,
+      75,
+      0.26
+     ],
+     [
+      30,
+      1240,
+      50,
+      0.41
+     ],
+     [
+      29,
+      1199,
+      25,
+      0.3
+     ],
+     [
+      11,
+      1049,
+      75,
+      0.34
+     ],
+     [
+      154,
+      1120,
+      90,
+      0.42
+     ],
+     [
+      323,
+      1194,
+      50,
+      0.33
+     ],
+     [
+      246,
+      1011,
+      60,
+      0.37
+     ],
+     [
+      353,
+      982,
+      60,
+      0.42
+     ],
+     [
+      94,
+      979,
+      50,
+      0.4
+     ],
+     [
+      114,
+      1009,
+      75,
+      0.42
+     ],
+     [
+      21,
+      1119,
+      60,
+      0.44
+     ],
+     [
+      314,
+      1215,
+      75,
+      0.32
+     ],
+     [
+      314,
+      1244,
+      40,
+      0.3
+     ],
+     [
+      23,
+      1225,
+      40,
+      0.26
+     ],
+     [
+      171,
+      924,
+      50,
+      0.28
+     ],
+     [
+      175,
+      938,
+      20,
+      0.3
+     ],
+     [
+      31,
+      1094,
+      30,
+      0.33
+     ],
+     [
+      29,
+      1135,
+      10,
+      0.3
+     ],
+     [
+      291,
+      1220,
+      110,
+      0.27
+     ],
+     [
+      251,
+      920,
+      110,
+      0.28
+     ],
+     [
+      157,
+      1134,
+      75,
+      0.37
+     ],
+     [
+      161,
+      1197,
+      31,
+      0.3
+     ]
+    ]
+   },
+   "grass": {
+    "period": 550,
+    "count": 32,
+    "size": 45,
+    "rank": 980,
+    "seed": 21,
+    "colour": [
+     1.05,
+     0.8,
+     0.6
+    ]
+   },
+   "grade": {
+    "horizon_row": 0.76,
+    "top": [
+     0.78,
+     0.62,
+     0.8
+    ],
+    "horizon": [
+     1.1,
+     0.86,
+     0.68
+    ],
+    "ground": [
+     1.0,
+     0.76,
+     0.6
+    ],
+    "glow": [
+     60,
+     22,
+     0
+    ],
+    "glow_width": 0.1,
+    "floor": [
+     1.02,
+     0.8,
+     0.64
+    ]
+   }
+  },
+  "roger": {
+   "base": 0,
+   "panorama": "beach-panorama.png",
+   "crop": [
+    0,
+    84,
+    2000,
+    686
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 96,
+   "roll": -450,
+   "degrees": 60,
+   "yoff": -70,
+   "floor_recolour": {
+    "colour": [
+     250,
+     234,
+     196
+    ],
+    "contrast": 0.7
+   },
+   "dust": {
+    "colour": [
+     214,
+     196,
+     158
+    ]
+   },
+   "sea": {
+    "row": 4,
+    "frames": 8,
+    "period": 10,
+    "wash": 4,
+    "reach": 10,
+    "foam_from": 30,
+    "water_to": 40,
+    "glitter": 0.0015
+   },
+   "painted": [
+    "wood",
+    "bamboo",
+    "rope",
+    "thatch",
+    "fringe",
+    "plank",
+    "driftwood",
+    "coconut",
+    "board",
+    "ring_red",
+    "ring_white",
+    "flag",
+    "shells"
+   ],
+   "scenery": {
+    "tile_size": 800,
+    "seed": 17,
+    "light": {
+     "azimuth": 200,
+     "elevation": 55,
+     "ambient": [
+      0.78,
+      0.8,
+      0.88
+     ],
+     "sun": [
+      0.5,
+      0.46,
+      0.38
+     ],
+     "foot_dark": 0
+    },
+    "lifeguard": {
+     "at": [
+      35,
+      1120
+     ],
+     "yaw": 0,
+     "height": 200,
+     "roof": 150
+    },
+    "tiki": {
+     "height": 175
+    },
+    "tikis": [
+     [
+      -25,
+      1000
+     ],
+     [
+      60,
+      1000
+     ],
+     [
+      150,
+      1010
+     ],
+     [
+      210,
+      1010
+     ],
+     [
+      290,
+      1000
+     ]
+    ],
+    "coconuts": [
+     [
+      28,
+      1010
+     ],
+     [
+      31,
+      1020
+     ],
+     [
+      300,
+      1060
+     ],
+     [
+      302,
+      1072
+     ],
+     [
+      180,
+      1150
+     ]
+    ],
+    "driftwood": [
+     [
+      120,
+      1060,
+      260,
+      30
+     ],
+     [
+      240,
+      1180,
+      200,
+      -40
+     ]
+    ],
+    "surfboard": {
+     "at": [
+      -45,
+      1060
+     ],
+     "yaw": 20,
+     "lean": 14
+    },
+    "life_ring": {
+     "at": [
+      90,
+      1160
+     ],
+     "yaw": 0,
+     "height": 160
+    },
+    "bits": {
+     "count": 30,
+     "near": 900,
+     "far": 1250,
+     "size": 24,
+     "seed": 9
+    }
+   },
+   "gulls": {
+    "count": 3,
+    "radius": [
+     1800,
+     2600
+    ],
+    "height": [
+     -900,
+     -600
+    ],
+    "speed": 40,
+    "centre": [
+     2500,
+     800
+    ],
+    "scale": 1.3,
+    "rank": 1009,
+    "beak": [
+     226,
+     118,
+     48
+    ],
+    "crabs": {
+     "count": 3,
+     "near": 880,
+     "far": 1100,
+     "scale": 1.6,
+     "rank": 980
+    }
+   }
+  },
+  "armorking": {
+   "stage": 4,
+   "source": 5,
+   "base": 0,
+   "panorama": "church-sanctuary-panorama.png",
+   "crop": [
+    0,
+    40,
+    2000,
+    623
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 0,
+   "degrees": 60,
+   "yoff": -80,
+   "fixed": 25000,
+   "walls": {
+    "radius": 30
+   },
+   "floor_base": 8,
+   "floor_tint": [
+    0.42,
+    0.38,
+    0.4
+   ],
+   "dust": {
+    "colour": [
+     110,
+     40,
+     40
+    ]
+   },
+   "fighter_light": 0.62,
+   "candles": {
+    "frames": 16,
+    "period": 4
+   },
+   "painted": [
+    "pew",
+    "pew_end",
+    "marble_dark",
+    "frontal",
+    "linen",
+    "wax",
+    "chain",
+    "carpet",
+    "brass",
+    "slab",
+    "wood"
+   ],
+   "scenery": {
+    "tile_size": 200,
+    "seed": 4,
+    "light": {
+     "azimuth": 0,
+     "elevation": 60,
+     "ambient": [
+      0.34,
+      0.3,
+      0.3
+     ],
+     "sun": [
+      0.12,
+      0.12,
+      0.16
+     ],
+     "foot_dark": 0,
+     "candle": [
+      0.85,
+      0.5,
+      0.2
+     ],
+     "reach": 380
+    },
+    "altar": {
+     "at": [
+      0,
+      1130
+     ],
+     "pool": 560,
+     "level": 88
+    },
+    "candelabrum": {
+     "height": 150,
+     "pool": 460,
+     "level": 96
+    },
+    "candelabras": [
+     [
+      -17,
+      1010
+     ],
+     [
+      17,
+      1010
+     ],
+     [
+      57.6,
+      971
+     ],
+     [
+      -57.6,
+      971
+     ],
+     [
+      122.4,
+      971
+     ],
+     [
+      -122.4,
+      971
+     ]
+    ],
+    "pew": {
+     "height": 96
+    },
+    "pew_blocks": [
+     [
+      880,
+      1280,
+      -450,
+      450,
+      6
+     ],
+     [
+      -1280,
+      -880,
+      -450,
+      450,
+      6
+     ]
+    ],
+    "pillar": {
+     "radius": 42,
+     "height": 2600,
+     "band": 360
+    },
+    "pillars": [
+     [
+      45,
+      1250
+     ],
+     [
+      -45,
+      1250
+     ],
+     [
+      135,
+      1250
+     ],
+     [
+      -135,
+      1250
+     ]
+    ],
+    "votive": {
+     "at": [
+      180,
+      1060
+     ],
+     "width": 168,
+     "tiers": 3,
+     "pool": 420,
+     "level": 88
+    },
+    "thurible": {
+     "at": [
+      -30,
+      1000
+     ],
+     "height": 170,
+     "smoke": 150,
+     "level": 128
+    },
+    "chandelier": {
+     "radius": 80,
+     "candles": 8,
+     "pool": 620,
+     "level": 44
+    },
+    "chandeliers": [
+     [
+      0,
+      0,
+      370
+     ],
+     [
+      90,
+      650,
+      330
+     ],
+     [
+      270,
+      650,
+      330
+     ]
+    ],
+    "glass": {
+     "level": 128,
+     "shaft": {
+      "height": 1800,
+      "out": 900,
+      "level": 100
+     }
+    },
+    "glass_patches": [
+     [
+      45,
+      680,
+      220,
+      420
+     ],
+     [
+      135,
+      680,
+      220,
+      420
+     ],
+     [
+      225,
+      680,
+      220,
+      420
+     ],
+     [
+      315,
+      680,
+      220,
+      420
+     ]
+    ]
+   },
+   "fireflies": {
+    "count": 24,
+    "near": 300,
+    "far": 2600,
+    "height": [
+     -2400,
+     -500
+    ],
+    "size": 26,
+    "colour": [
+     110,
+     96,
+     70
+    ]
+   },
+   "lightning": {
+    "like": "workspace/ttt1-import/stages/arcade-baek.ast",
+    "windows": {
+     "from": 300,
+     "glow": 16,
+     "spill": 0.7
+    },
+    "levels": [
+     0.45,
+     0.75,
+     1.0
+    ],
+    "variants": [
+     0,
+     0,
+     1,
+     2,
+     2,
+     2
+    ],
+    "flash": [
+     0.3,
+     [
+      0.85,
+      0.9,
+      1.15
+     ]
+    ]
+   }
+  },
+  "bruce": {
+   "base": 0,
+   "panorama": "grand-canyon-panorama.png",
+   "rows": 6,
+   "seam": 96,
+   "degrees": 40,
+   "dust": {
+    "colour": [
+     126,
+     82,
+     44
+    ]
+   },
+   "eagle": {
+    "radius": 3200,
+    "height": -2200,
+    "scale": 1.4
+   },
+   "materials": {
+    "cliff": {
+     "box": [
+      600,
+      262,
+      1056,
+      336
+     ],
+     "tiles": 6,
+     "lift": 0.3,
+     "soften": 0.35
+    },
+    "cliff_dark": {
+     "box": [
+      1080,
+      262,
+      1380,
+      336
+     ],
+     "tiles": 4,
+     "lift": 0.45,
+     "soften": 0.35
+    },
+    "mesa": {
+     "box": [
+      600,
+      204,
+      1000,
+      247
+     ],
+     "tiles": 6,
+     "lift": 0.25,
+     "soften": 0.25
+    }
+   },
+   "scenery": {
+    "tile_size": 800,
+    "seed": 5,
+    "light": {
+     "azimuth": 300,
+     "elevation": 12,
+     "ambient": [
+      0.74,
+      0.68,
+      0.78
+     ],
+     "sun": [
+      0.55,
+      0.4,
+      0.24
+     ],
+     "foot_dark": 0.15
+    },
+    "rim": {
+     "off": true,
+     "radius": 1150,
+     "height": [
+      20,
+      90
+     ],
+     "segments": 72,
+     "piece": 200,
+     "drop": 150,
+     "faces": [
+      "sand",
+      "cliff",
+      "sand",
+      "cliff_dark"
+     ]
+    },
+    "buttes": [
+     {
+      "at": [
+       20,
+       4500,
+       900,
+       1300
+      ],
+      "bands": [
+       "cliff_dark",
+       "cliff",
+       "mesa",
+       "cliff",
+       "mesa"
+      ]
+     },
+     {
+      "at": [
+       95,
+       4700,
+       1100,
+       1450
+      ],
+      "bands": [
+       "cliff_dark",
+       "cliff",
+       "mesa",
+       "cliff",
+       "mesa"
+      ]
+     },
+     {
+      "at": [
+       170,
+       4600,
+       700,
+       1200
+      ],
+      "bands": [
+       "cliff_dark",
+       "cliff",
+       "mesa",
+       "cliff",
+       "mesa"
+      ]
+     },
+     {
+      "at": [
+       240,
+       4600,
+       1000,
+       1400
+      ],
+      "bands": [
+       "cliff_dark",
+       "cliff",
+       "mesa",
+       "cliff",
+       "mesa"
+      ]
+     },
+     {
+      "at": [
+       315,
+       4600,
+       800,
+       1250
+      ],
+      "bands": [
+       "cliff_dark",
+       "cliff",
+       "mesa",
+       "cliff",
+       "mesa"
+      ]
+     }
+    ],
+    "tree": {
+     "at": [
+      30,
+      950
+     ],
+     "height": 230,
+     "branches": 4,
+     "reach": 85,
+     "seed": 4
+    },
+    "boulders": [
+     [
+      30,
+      1000,
+      70
+     ],
+     [
+      75,
+      1050,
+      110
+     ],
+     [
+      140,
+      980,
+      60
+     ],
+     [
+      205,
+      1040,
+      90
+     ],
+     [
+      260,
+      1000,
+      50
+     ],
+     [
+      330,
+      1060,
+      120
+     ]
+    ]
+   }
+  },
+  "wang": {
+   "stage": 9,
+   "source": 2,
+   "base": 0,
+   "panorama": "great-wall-panorama.png",
+   "squeeze": [
+    120,
+    300,
+    230
+   ],
+   "crop": [
+    0,
+    215,
+    1640,
+    488
+   ],
+   "rows": 5,
+   "columns": 30,
+   "seam": 96,
+   "degrees": 48,
+   "yoff": 3,
+   "grade": {
+    "horizon_row": 0.3,
+    "top": [
+     0.95,
+     0.93,
+     1.0
+    ],
+    "horizon": [
+     1.1,
+     0.98,
+     0.84
+    ],
+    "ground": [
+     1.04,
+     0.93,
+     0.78
+    ],
+    "glow": [
+     26,
+     14,
+     0
+    ],
+    "glow_width": 0.06,
+    "floor": [
+     1.06,
+     0.93,
+     0.76
+    ]
+   },
+   "fighter_light": 1.0,
+   "fighter_tint": [
+    1.14,
+    0.98,
+    0.8
+   ],
+   "dust": {
+    "colour": [
+     130,
+     120,
+     100
+    ]
+   },
+   "clouds": {
+    "row": 0,
+    "frames": 6,
+    "period": 12,
+    "billow": 1.4,
+    "wave": 110,
+    "picture": "great-wall"
+   },
+   "painted": [
+    "wall_brick",
+    "torii_black",
+    "granite",
+    "slab"
+   ],
+   "scenery": {
+    "tile_size": 300,
+    "seed": 9,
+    "light": {
+     "azimuth": 240,
+     "elevation": 20,
+     "ambient": [
+      0.62,
+      0.58,
+      0.6
+     ],
+     "sun": [
+      0.6,
+      0.5,
+      0.34
+     ],
+     "foot_dark": 0
+    },
+    "battlement": {
+     "height": 120,
+     "thick": 55,
+     "merlon": 46,
+     "gap": 34,
+     "merlon_height": 38,
+     "ruin": 0.35
+    },
+    "battlements": [
+     [
+      55,
+      100,
+      1200
+     ],
+     [
+      235,
+      282,
+      1200
+     ],
+     [
+      148,
+      160,
+      1150
+     ],
+     [
+      330,
+      340,
+      1150
+     ]
+    ],
+    "rubble_bricks": [
+     [
+      60,
+      1110,
+      26
+     ],
+     [
+      66,
+      1130,
+      20
+     ],
+     [
+      92,
+      1105,
+      24
+     ],
+     [
+      240,
+      1110,
+      22
+     ],
+     [
+      276,
+      1120,
+      26
+     ],
+     [
+      152,
+      1080,
+      20
+     ],
+     [
+      335,
+      1080,
+      22
+     ],
+     [
+      12,
+      1000,
+      18
+     ],
+     [
+      195,
+      1020,
+      18
+     ]
+    ],
+    "beacon_tower": {
+     "width": 330,
+     "top": 280,
+     "height": 300,
+     "fire": [
+      200,
+      240
+     ],
+     "smoke": [
+      340,
+      700
+     ],
+     "level": 128,
+     "smoke_level": 64
+    },
+    "beacon_towers": [
+     [
+      125,
+      1450
+     ],
+     [
+      305,
+      1450
+     ]
+    ],
+    "war_banner": {
+     "height": 430,
+     "width": 70,
+     "length": 170
+    },
+    "war_banners": [
+     [
+      -28,
+      1100,
+      0
+     ],
+     [
+      28,
+      1100,
+      1
+     ],
+     [
+      152,
+      1100,
+      2
+     ],
+     [
+      208,
+      1100,
+      3
+     ],
+     [
+      110,
+      1100,
+      4
+     ],
+     [
+      290,
+      1100,
+      0
+     ]
+    ]
+   },
+   "crows": {
+    "count": 7,
+    "flock": 190,
+    "radius": [
+     3000,
+     3000
+    ],
+    "height": [
+     -1400,
+     -1400
+    ],
+    "speed": 40,
+    "centre": [
+     3200,
+     200
+    ],
+    "scale": 1.4,
+    "rank": 1009
+   },
+   "fireflies": {
+    "kind": "dragonfly",
+    "count": 5,
+    "near": 500,
+    "far": 2600,
+    "height": [
+     -1300,
+     -500
+    ],
+    "size": 140,
+    "colour": [
+     96,
+     168,
+     220
+    ]
+   },
+   "feathers": {
+    "shape": "dust",
+    "count": 10,
+    "near": 300,
+    "far": 2600,
+    "height": 500,
+    "length": 520,
+    "fall": 0,
+    "colour": [
+     52,
+     46,
+     34
+    ]
+   }
+  },
+  "gunjack": {
+   "stage": 5,
+   "source": 18,
+   "base": 0,
+   "panorama": "hong-kong-rooftop-panorama.png",
+   "crop": [
+    0,
+    -164,
+    2000,
+    336
+   ],
+   "sky": [
+    2,
+    6,
+    18
+   ],
+   "rows": 6,
+   "columns": 24,
+   "seam": 96,
+   "degrees": 60,
+   "yoff": -48,
+   "floor_tint": [
+    0.85,
+    0.85,
+    0.95
+   ],
+   "dust": {
+    "colour": [
+     90,
+     90,
+     100
+    ]
+   },
+   "helicopter": true,
+   "lights": {
+    "seed": 51,
+    "windows": {
+     "rows": [
+      2,
+      6
+     ],
+     "bright": 115,
+     "size": 40,
+     "share": 0.25,
+     "groups": 3,
+     "frames": 16,
+     "period": 120,
+     "least": 6
+    },
+    "beacons": {
+     "below": 285,
+     "size": 40,
+     "every": 8,
+     "on": 2
+    },
+    "fast_frames": 32,
+    "fast_period": 8,
+    "neon": [
+     [
+      528,
+      284,
+      26,
+      44
+     ],
+     [
+      410,
+      308,
+      64,
+      22
+     ],
+     [
+      548,
+      355,
+      24,
+      29
+     ],
+     [
+      628,
+      334,
+      48,
+      12
+     ],
+     [
+      740,
+      330,
+      62,
+      24
+     ],
+     [
+      556,
+      336,
+      12,
+      12
+     ],
+     [
+      1165,
+      356,
+      70,
+      28
+     ]
+    ]
+   },
+   "floor_chase": {
+    "cluts": [
+     31490,
+     31491
+    ],
+    "dots": [
+     10,
+     11,
+     12,
+     13
+    ],
+    "period": 16384,
+    "add": 1706
+   },
+   "floor_blend": {
+    "clut": 31492,
+    "to": 31497,
+    "first": 0,
+    "last": 15,
+    "add": 17
+   },
+   "floor_puddles": {
+    "count": 8,
+    "seed": 13,
+    "not": [
+     31493,
+     31494
+    ]
+   },
+   "banners": {
+    "frames": 8,
+    "period": 6
+   },
+   "painted": [
+    "concrete",
+    "steel",
+    "slab"
+   ],
+   "scenery": {
+    "tile_size": 300,
+    "seed": 5,
+    "light": {
+     "azimuth": 150,
+     "elevation": 40,
+     "ambient": [
+      0.42,
+      0.42,
+      0.52
+     ],
+     "sun": [
+      0.2,
+      0.22,
+      0.3
+     ],
+     "foot_dark": 0
+    },
+    "promenade": {
+     "wall": 40,
+     "rail": 0,
+     "step": 6,
+     "tex": [
+      "concrete",
+      "slab"
+     ]
+    },
+    "promenades": [
+     [
+      -180,
+      180,
+      1190
+     ]
+    ],
+    "banner": {
+     "wall": 40,
+     "height": 300,
+     "width": 70,
+     "length": 220
+    },
+    "banner_poles": [
+     [
+      -30,
+      1190,
+      0
+     ],
+     [
+      30,
+      1190,
+      1
+     ],
+     [
+      90,
+      1190,
+      2
+     ],
+     [
+      150,
+      1190,
+      0
+     ],
+     [
+      -150,
+      1190,
+      1
+     ],
+     [
+      -90,
+      1190,
+      2
+     ]
+    ],
+    "neon_sign": {
+     "at": [
+      180,
+      1320
+     ],
+     "text": "hong-kong-neon-text.png",
+     "width": 380,
+     "height": 190,
+     "lift": 160,
+     "pool": 620,
+     "level": 128,
+     "glow_at": 280
+    }
+   }
+  },
+  "baek": {
+   "stage": 20,
+   "source": 21,
+   "base": 0,
+   "panorama": "korean-temple-panorama.png",
+   "crop": [
+    0,
+    115,
+    2000,
+    668
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 96,
+   "roll": -620,
+   "degrees": 60,
+   "yoff": 0,
+   "floor_tint": [
+    1.0,
+    0.97,
+    0.92
+   ],
+   "dust": {
+    "colour": [
+     160,
+     150,
+     130
+    ]
+   },
+   "painted": [
+    "granite",
+    "wood",
+    "rope",
+    "torii_black",
+    "lotus",
+    "jangseung_m",
+    "jangseung_f",
+    "jangseung_body",
+    "onggi"
+   ],
+   "tuft_blades": "green",
+   "scenery": {
+    "tile_size": 500,
+    "seed": 20,
+    "light": {
+     "azimuth": 200,
+     "elevation": 45,
+     "ambient": [
+      0.74,
+      0.76,
+      0.82
+     ],
+     "sun": [
+      0.55,
+      0.5,
+      0.42
+     ],
+     "foot_dark": 0
+    },
+    "seokdeung": {
+     "height": 230,
+     "pool": 300,
+     "level": 40
+    },
+    "seokdeungs": [
+     [
+      -10,
+      1000
+     ],
+     [
+      10,
+      1000
+     ],
+     [
+      170,
+      1000
+     ],
+     [
+      190,
+      1000
+     ]
+    ],
+    "jangseung": {
+     "height": 250
+    },
+    "jangseungs": [
+     [
+      -24,
+      1060,
+      "m"
+     ],
+     [
+      24,
+      1060,
+      "f"
+     ],
+     [
+      156,
+      1060,
+      "m"
+     ],
+     [
+      204,
+      1060,
+      "f"
+     ]
+    ],
+    "lotus_line": {
+     "height": 300,
+     "sag": 50,
+     "size": 44,
+     "drop": 16
+    },
+    "lotus_lines": [
+     [
+      40,
+      75,
+      1150,
+      4,
+      0
+     ],
+     [
+      105,
+      140,
+      1150,
+      4,
+      2
+     ],
+     [
+      220,
+      255,
+      1150,
+      4,
+      1
+     ],
+     [
+      285,
+      320,
+      1150,
+      4,
+      3
+     ]
+    ],
+    "cairns": [
+     [
+      60,
+      960,
+      30,
+      5
+     ],
+     [
+      122,
+      980,
+      26,
+      4
+     ],
+     [
+      240,
+      960,
+      28,
+      5
+     ],
+     [
+      326,
+      940,
+      24,
+      4
+     ]
+    ],
+    "seoktap": {
+     "at": [
+      90,
+      1180
+     ],
+     "height": 210
+    },
+    "tufts": {
+     "count": 170,
+     "near": 870,
+     "far": 1500,
+     "size": 110,
+     "colour": [
+      1.1,
+      1.1,
+      1.05
+     ],
+     "on_grass": true
+    },
+    "onggis": [
+     [
+      264,
+      1020,
+      70
+     ],
+     [
+      270,
+      1030,
+      56
+     ],
+     [
+      267,
+      1075,
+      48
+     ]
+    ]
+   },
+   "magpies": {
+    "count": 4,
+    "radius": [
+     1800,
+     2600
+    ],
+    "height": [
+     -900,
+     -600
+    ],
+    "speed": 44,
+    "centre": [
+     2500,
+     800
+    ],
+    "scale": 1.2,
+    "rank": 1009
+   }
+  },
+  "ganryu": {
+   "base": 0,
+   "floor_base": 8,
+   "panorama": "kyoto-sunset-panorama.png",
+   "crop": [
+    0,
+    30,
+    2000,
+    613
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 96,
+   "roll": -550,
+   "degrees": 60,
+   "yoff": -70,
+   "floor_tint": [
+    0.9,
+    0.76,
+    0.7
+   ],
+   "dust": {
+    "colour": [
+     150,
+     96,
+     62
+    ]
+   },
+   "painted": [
+    "granite",
+    "slab",
+    "torii",
+    "torii_black",
+    "bamboo",
+    "wood",
+    "rope"
+   ],
+   "scenery": {
+    "tile_size": 800,
+    "seed": 15,
+    "light": {
+     "azimuth": 30,
+     "elevation": 8,
+     "ambient": [
+      0.6,
+      0.46,
+      0.5
+     ],
+     "sun": [
+      0.85,
+      0.48,
+      0.25
+     ],
+     "foot_dark": 0.1
+    },
+    "toro": {
+     "height": 200,
+     "pool": 520
+    },
+    "toros": [
+     [
+      -14,
+      980
+     ],
+     [
+      14,
+      980
+     ],
+     [
+      100,
+      1050
+     ],
+     [
+      180,
+      1100
+     ],
+     [
+      260,
+      1050
+     ]
+    ],
+    "steps": {
+     "at": [
+      0,
+      1000
+     ],
+     "count": 3,
+     "rise": 13,
+     "tread": 45,
+     "width": 380,
+     "top": 120
+    },
+    "torii": {
+     "at": [
+      0,
+      1170
+     ],
+     "height": 380,
+     "width": 300,
+     "lift": 39
+    },
+    "fence": {
+     "height": 105,
+     "post": 180
+    },
+    "fences": [
+     [
+      40,
+      85,
+      1150
+     ],
+     [
+      275,
+      320,
+      1150
+     ]
+    ],
+    "lantern_line": {
+     "height": 300,
+     "sag": 60,
+     "size": 48,
+     "drop": 20
+    },
+    "lantern_lines": [
+     [
+      125,
+      158,
+      1180,
+      3
+     ],
+     [
+      202,
+      235,
+      1180,
+      3
+     ]
+    ],
+    "flat_stones": [
+     [
+      70,
+      980,
+      60,
+      22
+     ],
+     [
+      150,
+      1000,
+      45,
+      18
+     ],
+     [
+      215,
+      1030,
+      55,
+      20
+     ],
+     [
+      300,
+      990,
+      50,
+      16
+     ],
+     [
+      330,
+      1120,
+      40,
+      14
+     ]
+    ]
+   },
+   "feathers": {
+    "shape": "petal",
+    "count": 40,
+    "near": 500,
+    "far": 4000,
+    "height": 3600,
+    "length": 80,
+    "fall": 150,
+    "colour": [
+     255,
+     168,
+     196
+    ]
+   },
+   "crows": {
+    "count": 7,
+    "flock": 190,
+    "radius": [
+     2600,
+     2600
+    ],
+    "height": [
+     -1000,
+     -1000
+    ],
+    "speed": 44,
+    "centre": [
+     3000,
+     200
+    ],
+    "scale": 1.5,
+    "rank": 1009
+   }
+  },
+  "lee": {
+   "base": 0,
+   "floor_base": 8,
+   "panorama": "launch-pad-panorama-v2.png",
+   "crop": [
+    0,
+    96,
+    2000,
+    640
+   ],
+   "rows": 8,
+   "columns": 30,
+   "seam": 96,
+   "roll": -815,
+   "degrees": 48,
+   "yoff": -70,
+   "floor_recolour": {
+    "colour": [
+     54,
+     58,
+     68
+    ],
+    "contrast": 0.9,
+    "floor": 0.4,
+    "keep_paint": 0.7
+   },
+   "dust": {
+    "colour": [
+     128,
+     134,
+     146
+    ]
+   },
+   "painted": [
+    "crate",
+    "crate_top",
+    "container",
+    "barrel_blue",
+    "barrel_red",
+    "barrel_lid",
+    "spool",
+    "spool_rim",
+    "cable",
+    "cone",
+    "pole"
+   ],
+   "scenery": {
+    "tile_size": 800,
+    "seed": 13,
+    "light": {
+     "azimuth": 210,
+     "elevation": 50,
+     "ambient": [
+      0.5,
+      0.55,
+      0.66
+     ],
+     "sun": [
+      0.75,
+      0.75,
+      0.8
+     ],
+     "foot_dark": 0.1
+    },
+    "crates": [
+     [
+      15,
+      1080,
+      110,
+      90,
+      90,
+      12
+     ],
+     [
+      22,
+      1110,
+      100,
+      90,
+      90,
+      -8
+     ],
+     [
+      18.5,
+      1095,
+      90,
+      80,
+      80,
+      30,
+      "crate",
+      90
+     ],
+     [
+      100,
+      1150,
+      300,
+      150,
+      160,
+      80,
+      "container"
+     ],
+     [
+      -70,
+      1200,
+      280,
+      150,
+      150,
+      -15,
+      "container"
+     ],
+     [
+      -120,
+      1000,
+      90,
+      90,
+      80,
+      40
+     ],
+     [
+      -115,
+      1040,
+      70,
+      70,
+      60,
+      5
+     ],
+     [
+      160,
+      1050,
+      100,
+      80,
+      85,
+      20
+     ]
+    ],
+    "barrel": {
+     "height": 88,
+     "radius": 29
+    },
+    "barrels": [
+     [
+      55,
+      1000,
+      "blue"
+     ],
+     [
+      58,
+      1035,
+      "blue"
+     ],
+     [
+      52,
+      1040,
+      "red"
+     ],
+     [
+      -150,
+      1100,
+      "red"
+     ],
+     [
+      -153,
+      1135,
+      "red"
+     ],
+     [
+      -147,
+      1140,
+      "blue"
+     ],
+     [
+      135,
+      1180,
+      "blue"
+     ]
+    ],
+    "spools": [
+     {
+      "at": [
+       -30,
+       1100
+      ],
+      "radius": 70,
+      "lean": 0,
+      "yaw": 60
+     },
+     {
+      "at": [
+       170,
+       1180
+      ],
+      "radius": 55,
+      "lean": 90,
+      "yaw": 0
+     },
+     {
+      "at": [
+       80,
+       1230
+      ],
+      "radius": 45,
+      "lean": 0,
+      "yaw": -20
+     }
+    ],
+    "cones": [
+     [
+      -10,
+      930
+     ],
+     [
+      -2,
+      925
+     ],
+     [
+      6,
+      930
+     ],
+     [
+      120,
+      940
+     ],
+     [
+      128,
+      950
+     ],
+     [
+      -95,
+      940
+     ],
+     [
+      -85,
+      945
+     ],
+     [
+      190,
+      960
+     ]
+    ],
+    "beacon": {
+     "height": 230
+    },
+    "beacons": [
+     [
+      40,
+      1180
+     ],
+     [
+      -100,
+      1230
+     ],
+     [
+      145,
+      1000
+     ]
+    ],
+    "steam": {
+     "width": 280,
+     "height": 270,
+     "level": 112
+    },
+    "steams": [
+     [
+      70,
+      1080
+     ],
+     [
+      -40,
+      1250
+     ],
+     [
+      200,
+      1120
+     ]
+    ]
+   },
+   "drones": {
+    "count": 2,
+    "radius": [
+     700,
+     1400
+    ],
+    "height": [
+     -550,
+     -300
+    ],
+    "speed": 30,
+    "centre": [
+     1800,
+     600
+    ],
+    "scale": 1.7,
+    "rank": 1009
+   }
+  },
+  "pjack": {
+   "base": 0,
+   "panorama": "london-ruins-panorama.png",
+   "sea": {
+    "row": 5,
+    "frames": 8,
+    "period": 10,
+    "wash": 4,
+    "reach": 10,
+    "foam_from": 0,
+    "water_to": 0,
+    "glitter": 0
+   },
+   "crop": [
+    0,
+    150,
+    2000,
+    520
+   ],
+   "rows": 6,
+   "seam": 96,
+   "degrees": 45,
+   "floor_recolour": {
+    "colour": [
+     164,
+     140,
+     112
+    ],
+    "contrast": 0.5,
+    "floor": 0.8
+   },
+   "dust": {
+    "colour": [
+     150,
+     128,
+     100
+    ]
+   },
+   "painted": [
+    "stone",
+    "carved",
+    "rust",
+    "iron",
+    "phone",
+    "phone_roof"
+   ],
+   "materials": {
+    "cliff": {
+     "box": [
+      930,
+      350,
+      1130,
+      420
+     ],
+     "tiles": 3,
+     "lift": 0.3,
+     "soften": 0.3
+    },
+    "cliff_dark": {
+     "box": [
+      1200,
+      370,
+      1550,
+      410
+     ],
+     "tiles": 3,
+     "lift": 0.4,
+     "soften": 0.3
+    }
+   },
+   "scenery": {
+    "tile_size": 800,
+    "seed": 18,
+    "light": {
+     "azimuth": 60,
+     "elevation": 30,
+     "ambient": [
+      0.72,
+      0.72,
+      0.78
+     ],
+     "sun": [
+      0.5,
+      0.46,
+      0.38
+     ],
+     "foot_dark": 0.1
+    },
+    "blocks": {
+     "count": 18,
+     "seed": 3,
+     "near": 920,
+     "far": 1240,
+     "size": [
+      30,
+      85
+     ],
+     "keep_out": [
+      [
+       30,
+       1100,
+       260
+      ],
+      [
+       150,
+       1060,
+       260
+      ],
+      [
+       250,
+       1150,
+       200
+      ]
+     ]
+    },
+    "rubble": {
+     "count": 9,
+     "seed": 4,
+     "near": 950,
+     "far": 1240,
+     "size": [
+      25,
+      70
+     ],
+     "keep_out": [
+      [
+       30,
+       1100,
+       260
+      ],
+      [
+       150,
+       1060,
+       260
+      ],
+      [
+       250,
+       1150,
+       200
+      ]
+     ]
+    },
+    "gears": [
+     {
+      "at": [
+       150,
+       1060
+      ],
+      "radius": 95,
+      "teeth": 14,
+      "lean": 62,
+      "yaw": 20,
+      "sink": 0.3
+     },
+     {
+      "at": [
+       250,
+       1150
+      ],
+      "radius": 55,
+      "teeth": 10,
+      "lean": 84,
+      "yaw": 0,
+      "sink": 0.05
+     }
+    ],
+    "phone_box": {
+     "at": [
+      30,
+      1100
+     ],
+     "lean": 17,
+     "yaw": 25,
+     "sink": 45
+    }
+   },
+   "gulls": {
+    "count": 4,
+    "radius": [
+     900,
+     2000
+    ],
+    "height": [
+     -750,
+     -350
+    ],
+    "speed": 36,
+    "centre": [
+     2600,
+     900
+    ],
+    "scale": 1.5,
+    "rank": 1009
+   }
+  },
+  "devil": {
+   "base": 0,
+   "floor_base": 6,
+   "night": true,
+   "scenery": {
+    "tile_size": 800,
+    "seed": 22,
+    "light": {
+     "azimuth": 0,
+     "elevation": 90,
+     "ambient": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "sun": [
+      0,
+      0,
+      0
+     ]
+    },
+    "fog": {
+     "width": 980,
+     "height": 170,
+     "level": 80,
+     "colour": [
+      92,
+      80,
+      132
+     ],
+     "period": 14
+    },
+    "fogs": [
+     [
+      0,
+      1180
+     ],
+     [
+      24,
+      1180
+     ],
+     [
+      48,
+      1180
+     ],
+     [
+      72,
+      1180
+     ],
+     [
+      96,
+      1180
+     ],
+     [
+      120,
+      1180
+     ],
+     [
+      144,
+      1180
+     ],
+     [
+      168,
+      1180
+     ],
+     [
+      192,
+      1180
+     ],
+     [
+      216,
+      1180
+     ],
+     [
+      240,
+      1180
+     ],
+     [
+      264,
+      1180
+     ],
+     [
+      288,
+      1180
+     ],
+     [
+      312,
+      1180
+     ],
+     [
+      336,
+      1180
+     ]
+    ]
+   },
+   "mirror": {
+    "slats": 13,
+    "radius": 6400,
+    "angle": 5,
+    "width": 2700,
+    "top": -1260,
+    "bottom": 400,
+    "post": 30,
+    "rail": 40,
+    "hi": [
+     96,
+     80,
+     56
+    ],
+    "lo": [
+     22,
+     18,
+     16
+    ],
+    "glow_height": 360,
+    "glow_period": 240,
+    "glow": [
+     64,
+     26,
+     104
+    ]
+   },
+   "feathers": {
+    "count": 12,
+    "near": 600,
+    "far": 4500,
+    "height": 3800,
+    "length": 190,
+    "fall": 90,
+    "colour": [
+     236,
+     236,
+     244
+    ]
+   }
+  },
+  "jun": {
+   "base": 0,
+   "panorama": "morning-fields-panorama.png",
+   "crop": [
+    0,
+    -40,
+    2000,
+    543
+   ],
+   "sky": [
+    18,
+    80,
+    214
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 96,
+   "roll": -1132,
+   "degrees": 60,
+   "yoff": -70,
+   "grade": {
+    "horizon_row": 0.7,
+    "top": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "horizon": [
+     1.03,
+     1.01,
+     0.97
+    ],
+    "ground": [
+     1.0,
+     1.0,
+     0.97
+    ],
+    "glow": [
+     22,
+     20,
+     16
+    ],
+    "glow_width": 0.04,
+    "floor": [
+     1.03,
+     1.0,
+     0.93
+    ]
+   },
+   "grass": {
+    "period": 450,
+    "count": 28,
+    "size": 42,
+    "rank": 980,
+    "seed": 22,
+    "colour": [
+     1.0,
+     1.0,
+     0.96
+    ],
+    "tex": [
+     "poppies",
+     "cornflowers",
+     "daisies",
+     "lavender",
+     "tuft",
+     "tuft",
+     "tuft"
+    ]
+   },
+   "dust": {
+    "colour": [
+     130,
+     110,
+     80
+    ]
+   },
+   "clouds": {
+    "row": 4,
+    "frames": 6,
+    "period": 12,
+    "billow": 1.4,
+    "wave": 110
+   },
+   "painted": [
+    "hay",
+    "hay_end",
+    "drystone",
+    "burlap",
+    "shirt",
+    "skep",
+    "wheel",
+    "poppies",
+    "cornflowers",
+    "lavender",
+    "daisies",
+    "sunflower",
+    "leaf_green",
+    "wood",
+    "plank",
+    "granite"
+   ],
+   "tuft_blades": "green",
+   "scenery": {
+    "tile_size": 300,
+    "seed": 2,
+    "light": {
+     "azimuth": 120,
+     "elevation": 28,
+     "ambient": [
+      0.68,
+      0.7,
+      0.78
+     ],
+     "sun": [
+      0.62,
+      0.52,
+      0.36
+     ],
+     "foot_dark": 0
+    },
+    "cross": {
+     "at": [
+      15,
+      1080
+     ],
+     "height": 230
+    },
+    "bales": [
+     [
+      38,
+      1080,
+      62,
+      10
+     ],
+     [
+      44,
+      1112,
+      62,
+      -5
+     ],
+     [
+      41,
+      1096,
+      58,
+      5,
+      112
+     ],
+     [
+      228,
+      1060,
+      60,
+      20
+     ],
+     [
+      234,
+      1100,
+      64,
+      -15
+     ]
+    ],
+    "wall": {
+     "height": 85,
+     "width": 55
+    },
+    "walls": [
+     [
+      58,
+      95,
+      1230
+     ],
+     [
+      255,
+      300,
+      1230
+     ]
+    ],
+    "sunflowers": [
+     [
+      112,
+      1060,
+      5
+     ],
+     [
+      340,
+      1080,
+      4
+     ]
+    ],
+    "rail_fence": {
+     "height": 115,
+     "post": 210
+    },
+    "rail_fences": [
+     [
+      128,
+      162,
+      1180,
+      35
+     ]
+    ],
+    "skeps": {
+     "at": [
+      150,
+      1010
+     ],
+     "size": 46
+    },
+    "cart": {
+     "at": [
+      198,
+      1130
+     ],
+     "yaw": 90
+    },
+    "scarecrow": {
+     "at": [
+      312,
+      1150
+     ]
+    },
+    "tufts": {
+     "count": 150,
+     "near": 870,
+     "far": 1500,
+     "size": 110,
+     "colour": [
+      1.05,
+      1.1,
+      1.0
+     ],
+     "on_grass": true
+    },
+    "flowers": {
+     "count": 70,
+     "near": 880,
+     "far": 1400,
+     "size": 70,
+     "colour": [
+      1.0,
+      1.0,
+      0.96
+     ],
+     "on_grass": true,
+     "tex": [
+      "poppies",
+      "poppies",
+      "cornflowers",
+      "lavender",
+      "daisies",
+      "daisies"
+     ]
+    }
+   },
+   "doves": {
+    "count": 4,
+    "flock": 100,
+    "radius": [
+     1100,
+     1100
+    ],
+    "height": [
+     -560,
+     -560
+    ],
+    "speed": 56,
+    "centre": [
+     1500,
+     400
+    ],
+    "scale": 0.8,
+    "rank": 1009,
+    "rabbits": {
+     "count": 3,
+     "near": 520,
+     "far": 980,
+     "scale": 1.3,
+     "rank": 980
+    }
+   },
+   "fireflies": {
+    "kind": "butterfly",
+    "count": 10,
+    "near": 2500,
+    "far": 9000,
+    "height": [
+     -1500,
+     -400
+    ],
+    "size": 90,
+    "colour": [
+     124,
+     116,
+     56
+    ]
+   },
+   "feathers": {
+    "shape": "petal",
+    "count": 30,
+    "near": 400,
+    "far": 3500,
+    "height": 3000,
+    "length": 45,
+    "fall": 60,
+    "colour": [
+     244,
+     244,
+     238
+    ]
+   }
+  },
+  "bryan": {
+   "stage": 3,
+   "source": 1,
+   "base": 0,
+   "panorama": "new-york-city-panorama.png",
+   "crop": [
+    0,
+    -70,
+    2000,
+    513
+   ],
+   "sky": [
+    96,
+    132,
+    196
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 96,
+   "roll": 0,
+   "degrees": 60,
+   "yoff": -100,
+   "dust": {
+    "colour": [
+     120,
+     116,
+     110
+    ]
+   },
+   "water": {
+    "row": 6,
+    "frames": 6,
+    "period": 10,
+    "from": 14,
+    "ripple": 1.2,
+    "wave": 40,
+    "glitter": 0.05
+   },
+   "windows": {
+    "rows": [
+     4,
+     6
+    ],
+    "columns": [
+     1,
+     11
+    ],
+    "sky_cols": [
+     780,
+     840
+    ],
+    "water": 388,
+    "rough": 0,
+    "sky_sides": [
+     58,
+     760
+    ],
+    "edge": 60,
+    "share": 0.4,
+    "frames": 16,
+    "period": 110,
+    "beacon": [
+     294,
+     262
+    ],
+    "blink_period": 18
+   },
+   "painted": [
+    "granite",
+    "slab",
+    "iron",
+    "rope",
+    "pole",
+    "brass",
+    "wood",
+    "ring_red",
+    "ring_white",
+    "balusters",
+    "slat",
+    "hydrant",
+    "steel",
+    "cart_side",
+    "canvas_blue",
+    "canvas_yellow",
+    "tyre",
+    "usps",
+    "usps_side",
+    "usps_top",
+    "wire",
+    "manhole"
+   ],
+   "scenery": {
+    "tile_size": 300,
+    "seed": 3,
+    "light": {
+     "azimuth": 90,
+     "elevation": 14,
+     "ambient": [
+      0.6,
+      0.52,
+      0.56
+     ],
+     "sun": [
+      0.75,
+      0.5,
+      0.32
+     ],
+     "foot_dark": 0
+    },
+    "promenade": {
+     "wall": 40,
+     "rail": 62,
+     "step": 6
+    },
+    "promenades": [
+     [
+      -180,
+      180,
+      1190
+     ]
+    ],
+    "lamp": {
+     "height": 330,
+     "pool": 520,
+     "level": 96
+    },
+    "lamps": [
+     [
+      -120,
+      1110
+     ],
+     [
+      -60,
+      1110
+     ],
+     [
+      60,
+      1110
+     ],
+     [
+      120,
+      1110
+     ]
+    ],
+    "flagpole": {
+     "at": [
+      205,
+      1150
+     ],
+     "height": 560,
+     "flag": 170
+    },
+    "benches": [
+     [
+      -90,
+      1110,
+      0
+     ],
+     [
+      90,
+      1110,
+      0
+     ]
+    ],
+    "hot_dog": {
+     "at": [
+      172,
+      1000
+     ],
+     "yaw": 90
+    },
+    "mailbox": {
+     "at": [
+      235,
+      1060
+     ]
+    },
+    "hydrants": [
+     [
+      -35,
+      1030
+     ]
+    ],
+    "trash_cans": [
+     [
+      -76,
+      1100
+     ],
+     [
+      76,
+      1100
+     ],
+     [
+      150,
+      1060
+     ]
+    ],
+    "bollard": {
+     "height": 65,
+     "radius": 20
+    },
+    "bollards": [
+     [
+      -15,
+      1150,
+      0
+     ],
+     [
+      15,
+      1150,
+      0
+     ]
+    ],
+    "life_ring": {
+     "at": [
+      -152,
+      1160
+     ],
+     "yaw": 0,
+     "height": 160
+    },
+    "manholes": [
+     [
+      250,
+      800,
+      150,
+      260
+     ]
+    ]
+   },
+   "gulls": {
+    "count": 3,
+    "radius": [
+     1800,
+     2600
+    ],
+    "height": [
+     -900,
+     -600
+    ],
+    "speed": 40,
+    "centre": [
+     2500,
+     800
+    ],
+    "scale": 1.3,
+    "rank": 1009,
+    "pigeons": {
+     "count": 4,
+     "near": 450,
+     "far": 950,
+     "scale": 1.0,
+     "rank": 980
+    }
+   },
+   "feathers": {
+    "shape": "newspaper",
+    "count": 2,
+    "near": 600,
+    "far": 3500,
+    "height": 2000,
+    "length": 560,
+    "fall": 0,
+    "colour": [
+     220,
+     214,
+     198
+    ]
+   }
+  },
+  "kuma": {
+   "stage": 6,
+   "source": 9,
+   "base": 0,
+   "panorama": "pagoda-temple-panorama.png",
+   "crop": [
+    0,
+    63,
+    2000,
+    480
+   ],
+   "rows": 5,
+   "columns": 24,
+   "seam": 96,
+   "degrees": 60,
+   "dust": {
+    "colour": [
+     120,
+     110,
+     100
+    ]
+   },
+   "flicker": {
+    "frames": 48,
+    "period": 3,
+    "reach": 70,
+    "depth": 0.16,
+    "eyes": {
+     "at": [
+      [
+       595,
+       324
+      ],
+      [
+       867,
+       327
+      ],
+      [
+       1138,
+       326
+      ],
+      [
+       1398,
+       317
+      ]
+     ],
+     "apart": 4,
+     "glow": 3,
+     "frames": 64,
+     "period": 30,
+     "glows": [
+      [
+       0,
+       6
+      ],
+      [
+       2,
+       22
+      ],
+      [
+       1,
+       38
+      ],
+      [
+       3,
+       54
+      ]
+     ]
+    }
+   },
+   "floor_roll": [
+    0,
+    3
+   ],
+   "floor_base": 8,
+   "floor_tint": [
+    0.46,
+    0.41,
+    0.4
+   ],
+   "fighter_light": 0.8,
+   "fighter_tint": [
+    1.12,
+    0.9,
+    0.68
+   ],
+   "fighter_flicker": 0.12,
+   "painted": [
+    "wood"
+   ],
+   "scenery": {
+    "tile_size": 300,
+    "seed": 6,
+    "light": {
+     "azimuth": 334,
+     "elevation": 20,
+     "ambient": [
+      0.4,
+      0.32,
+      0.26
+     ],
+     "sun": [
+      0.3,
+      0.3,
+      0.28
+     ],
+     "foot_dark": 0
+    },
+    "shimenawa": {
+     "height": 190,
+     "sag": 40,
+     "thick": 7,
+     "shide": 4,
+     "tassels": 3,
+     "paper": 22,
+     "paper_length": 52
+    },
+    "shimenawas": [
+     [
+      20,
+      50,
+      1150
+     ],
+     [
+      100,
+      130,
+      1150
+     ],
+     [
+      200,
+      230,
+      1150
+     ],
+     [
+      280,
+      310,
+      1150
+     ]
+    ],
+    "gong": {
+     "at": [
+      75,
+      1180
+     ],
+     "size": 110,
+     "height": 240
+    },
+    "ema_rack": {
+     "width": 170,
+     "height": 190,
+     "rows": 2,
+     "per": 9
+    },
+    "ema_racks": [
+     [
+      185,
+      1160
+     ],
+     [
+      5,
+      1160
+     ]
+    ],
+    "offering": {
+     "height": 50
+    },
+    "offerings": [
+     [
+      250,
+      1060
+     ],
+     [
+      160,
+      1080
+     ]
+    ],
+    "door": {
+     "level": 128,
+     "shaft": {
+      "height": 750,
+      "out": 1300,
+      "level": 80
+     }
+    },
+    "door_patches": [
+     [
+      334,
+      800,
+      220,
+      420
+     ],
+     [
+      154,
+      800,
+      220,
+      420
+     ]
+    ]
+   },
+   "fireflies": {
+    "count": 30,
+    "near": 200,
+    "far": 1600,
+    "height": [
+     -2000,
+     -300
+    ],
+    "size": 22,
+    "colour": [
+     120,
+     100,
+     70
+    ]
+   }
+  },
+  "mokujin": {
+   "base": 0,
+   "panorama": "serene-forest-panorama.png",
+   "crop": [
+    0,
+    150,
+    2000,
+    667
+   ],
+   "rows": 6,
+   "columns": 24,
+   "seam": 96,
+   "degrees": 60,
+   "floor_base": 8,
+   "floor_tint": [
+    0.62,
+    0.52,
+    0.24
+   ],
+   "fighter_light": 0.8,
+   "fighter_tint": [
+    0.96,
+    1.06,
+    0.86
+   ],
+   "fighter_flicker": 0.08,
+   "dust": {
+    "colour": [
+     90,
+     100,
+     70
+    ]
+   },
+   "forest": {
+    "frames": 48,
+    "period": 8,
+    "low": 0.4
+   },
+   "grass": {
+    "period": 450,
+    "count": 16,
+    "size": 46,
+    "rank": 980,
+    "seed": 23,
+    "colour": [
+     0.8,
+     0.9,
+     0.75
+    ],
+    "tex": [
+     "tuft",
+     "tuft",
+     "fern",
+     "toadstools"
+    ]
+   },
+   "tuft_blades": "green",
+   "painted": [],
+   "scenery": {
+    "tile_size": 300,
+    "seed": 7,
+    "light": {
+     "azimuth": 200,
+     "elevation": 35,
+     "ambient": [
+      0.38,
+      0.42,
+      0.34
+     ],
+     "sun": [
+      0.32,
+      0.3,
+      0.22
+     ],
+     "foot_dark": 0
+    }
+   },
+   "fireflies": {
+    "kind": "bugs",
+    "count": 28,
+    "near": 300,
+    "far": 2600,
+    "height": [
+     -2200,
+     -300
+    ],
+    "size": 30,
+    "colour": [
+     120,
+     190,
+     60
+    ]
+   },
+   "feathers": {
+    "shape": "leaves",
+    "count": 80,
+    "near": 300,
+    "far": 3800,
+    "height": 3500,
+    "length": 90,
+    "fall": 30,
+    "colour": [
+     226,
+     176,
+     40
+    ]
+   },
+   "foot": {
+    "height": 160,
+    "colour": [
+     4,
+     4,
+     3
+    ]
+   },
+   "grade": {
+    "top": [
+     0.8,
+     0.8,
+     0.78
+    ],
+    "horizon": [
+     0.7,
+     0.68,
+     0.62
+    ],
+    "ground": [
+     0.55,
+     0.52,
+     0.45
+    ],
+    "horizon_row": 0.6
+   },
+   "seam_repeat": true,
+   "floor_grains": {
+    "count": 110,
+    "specks": 50,
+    "colours": [
+     [
+      78,
+      104,
+      34
+     ],
+     [
+      100,
+      120,
+      40
+     ],
+     [
+      62,
+      82,
+      26
+     ],
+     [
+      118,
+      126,
+      50
+     ]
+    ]
+   }
+  },
+  "panda": {
+   "base": 0,
+   "panorama": "szechwan-fields-panorama.png",
+   "crop": [
+    0,
+    -232,
+    2000,
+    351
+   ],
+   "sky": [
+    78,
+    128,
+    196
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 96,
+   "roll": -600,
+   "degrees": 60,
+   "yoff": -60,
+   "dust": {
+    "colour": [
+     130,
+     110,
+     80
+    ]
+   },
+   "clouds": {
+    "row": 3,
+    "frames": 6,
+    "period": 12,
+    "billow": 1.6,
+    "wave": 110
+   },
+   "painted": [
+    "granite",
+    "torii",
+    "torii_black",
+    "wood",
+    "rope",
+    "bamboo",
+    "bamboo_green",
+    "bamboo_leaves",
+    "tea",
+    "tile_green",
+    "plaque",
+    "xuanzi",
+    "bronze",
+    "wine_jar",
+    "sheaf",
+    "wicker",
+    "mossy"
+   ],
+   "tuft_blades": "green",
+   "scenery": {
+    "tile_size": 300,
+    "seed": 1,
+    "light": {
+     "azimuth": 200,
+     "elevation": 45,
+     "ambient": [
+      0.74,
+      0.78,
+      0.8
+     ],
+     "sun": [
+      0.55,
+      0.5,
+      0.42
+     ],
+     "foot_dark": 0
+    },
+    "pailou": {
+     "at": [
+      0,
+      1180
+     ],
+     "height": 400,
+     "width": 340
+    },
+    "censer": {
+     "at": [
+      0,
+      1010
+     ],
+     "height": 170,
+     "width": 70,
+     "level": 112
+    },
+    "flag_line": {
+     "height": 290,
+     "sag": 55,
+     "size": 30
+    },
+    "flag_lines": [
+     [
+      32,
+      58,
+      1080,
+      14
+     ],
+     [
+      122,
+      148,
+      1080,
+      14
+     ],
+     [
+      212,
+      238,
+      1080,
+      14
+     ],
+     [
+      302,
+      328,
+      1080,
+      14
+     ]
+    ],
+    "bamboo": {
+     "height": 560,
+     "culms": 5,
+     "sprays": 4,
+     "leaf": 140
+    },
+    "bamboos": [
+     [
+      -22,
+      1150
+     ],
+     [
+      22,
+      1170
+     ],
+     [
+      75,
+      1180
+     ],
+     [
+      105,
+      1150
+     ],
+     [
+      170,
+      1170
+     ],
+     [
+      190,
+      1150
+     ],
+     [
+      255,
+      1180
+     ],
+     [
+      285,
+      1160
+     ]
+    ],
+    "tea": {
+     "width": 90,
+     "height": 70
+    },
+    "tea_rows": [
+     [
+      48,
+      88,
+      1220
+     ],
+     [
+      228,
+      268,
+      1220
+     ]
+    ],
+    "wine_jars": [
+     [
+      232,
+      950,
+      50
+     ],
+     [
+      236,
+      975,
+      42
+     ],
+     [
+      229,
+      975,
+      46
+     ]
+    ],
+    "sheaves": [
+     [
+      95,
+      990,
+      70
+     ],
+     [
+      98,
+      1012,
+      64
+     ],
+     [
+      101,
+      995,
+      72
+     ],
+     [
+      275,
+      1000,
+      70
+     ],
+     [
+      278,
+      1020,
+      66
+     ]
+    ],
+    "baskets": {
+     "at": [
+      150,
+      1000
+     ],
+     "size": 50
+    },
+    "mossy_stones": [
+     [
+      60,
+      960,
+      50,
+      20
+     ],
+     [
+      140,
+      1050,
+      40,
+      16
+     ],
+     [
+      200,
+      980,
+      55,
+      22
+     ],
+     [
+      320,
+      1000,
+      45,
+      18
+     ]
+    ],
+    "tufts": {
+     "count": 170,
+     "near": 870,
+     "far": 1500,
+     "size": 110,
+     "colour": [
+      1.05,
+      1.1,
+      1.0
+     ],
+     "on_grass": true
+    }
+   },
+   "cranes": {
+    "count": 3,
+    "flock": 230,
+    "radius": [
+     3200,
+     3200
+    ],
+    "height": [
+     -1200,
+     -1200
+    ],
+    "speed": 30,
+    "centre": [
+     3500,
+     300
+    ],
+    "scale": 1.0,
+    "rank": 1009
+   },
+   "fireflies": {
+    "kind": "butterfly",
+    "count": 10,
+    "near": 2500,
+    "far": 9000,
+    "height": [
+     -1500,
+     -400
+    ],
+    "size": 90,
+    "colour": [
+     124,
+     116,
+     56
+    ]
+   }
+  },
+  "anna": {
+   "base": 0,
+   "panorama": "taj-mahal-panorama.png",
+   "crop": [
+    0,
+    -40,
+    2000,
+    543
+   ],
+   "rows": 7,
+   "columns": 24,
+   "seam": 0,
+   "roll": -635,
+   "degrees": 60,
+   "yoff": -85,
+   "floor_tint": [
+    0.42,
+    0.44,
+    0.56
+   ],
+   "fighter_light": 0.62,
+   "grade": {
+    "top": [
+     0.8,
+     0.8,
+     0.86
+    ],
+    "horizon": [
+     0.62,
+     0.62,
+     0.7
+    ],
+    "ground": [
+     0.55,
+     0.55,
+     0.62
+    ],
+    "horizon_row": 0.75,
+    "floor": [
+     0.42,
+     0.44,
+     0.56
+    ]
+   },
+   "dust": {
+    "colour": [
+     150,
+     150,
+     160
+    ]
+   },
+   "pool": {
+    "row": 6,
+    "frames": 8,
+    "period": 8,
+    "water_from": 13,
+    "ripple": 2.0,
+    "glitter": 0.004,
+    "spray": true,
+    "rain_rings": 5
+   },
+   "lightning": {
+    "like": "workspace/ttt1-import/stages/arcade-baek.ast",
+    "bolts": [
+     [
+      700,
+      300
+     ],
+     [
+      1100,
+      285
+     ],
+     [
+      1400,
+      305
+     ]
+    ],
+    "variants": [
+     0,
+     1,
+     2,
+     0,
+     1,
+     2
+    ],
+    "horizon": 330,
+    "lit": [
+     2.1,
+     1.35
+    ]
+   },
+   "rain": {
+    "count": 110,
+    "fall": 150,
+    "length": 170,
+    "drift": [
+     20,
+     -8
+    ],
+    "distance": [
+     1200,
+     7000
+    ],
+    "colour": [
+     96,
+     104,
+     128
+    ]
+   },
+   "painted": [
+    "marble",
+    "brass",
+    "clay",
+    "cypress",
+    "jali",
+    "marigold"
+   ],
+   "scenery": {
+    "tile_size": 400,
+    "seed": 16,
+    "light": {
+     "azimuth": 150,
+     "elevation": 35,
+     "ambient": [
+      0.24,
+      0.26,
+      0.36
+     ],
+     "sun": [
+      0.16,
+      0.18,
+      0.24
+     ],
+     "foot_dark": 0
+    },
+    "mughal_lamp": {
+     "height": 270,
+     "pool": 460,
+     "level": 110
+    },
+    "mughal_lamps": [
+     [
+      -14,
+      1000
+     ],
+     [
+      14,
+      1000
+     ],
+     [
+      166,
+      1000
+     ],
+     [
+      194,
+      1000
+     ]
+    ],
+    "kalashas": [
+     [
+      -28,
+      1020,
+      70
+     ],
+     [
+      28,
+      1020,
+      70
+     ],
+     [
+      152,
+      1020,
+      70
+     ],
+     [
+      208,
+      1020,
+      70
+     ]
+    ],
+    "cypress": {
+     "height": 360
+    },
+    "cypresses": [
+     [
+      -42,
+      1080
+     ],
+     [
+      42,
+      1080
+     ],
+     [
+      138,
+      1080
+     ],
+     [
+      222,
+      1080
+     ]
+    ],
+    "jali": {
+     "height": 110,
+     "panel": 130
+    },
+    "jalis": [
+     [
+      55,
+      78,
+      1150
+     ],
+     [
+      102,
+      125,
+      1150
+     ],
+     [
+      235,
+      258,
+      1150
+     ],
+     [
+      282,
+      305,
+      1150
+     ]
+    ],
+    "diya": {
+     "size": 22,
+     "out": [
+      10,
+      75
+     ],
+     "pool": 170,
+     "level": 96
+    },
+    "diya_lines": [
+     [
+      55,
+      78,
+      1090,
+      5
+     ],
+     [
+      102,
+      125,
+      1090,
+      5
+     ],
+     [
+      235,
+      258,
+      1090,
+      5
+     ],
+     [
+      282,
+      305,
+      1090,
+      5
+     ]
+    ],
+    "fountain": {
+     "size": 90,
+     "spray": 130,
+     "level": 72
+    },
+    "fountains": [
+     [
+      90,
+      1000
+     ],
+     [
+      270,
+      1000
+     ]
+    ]
+   },
+   "feathers": {
+    "shape": "strewn",
+    "count": 90,
+    "near": 300,
+    "far": 3800,
+    "height": 3600,
+    "length": 120,
+    "fall": 60,
+    "colour": [
+     215,
+     62,
+     84
+    ]
+   },
+   "fireflies": {
+    "count": 28,
+    "near": 5000,
+    "far": 12000,
+    "height": [
+     -1400,
+     -200
+    ],
+    "size": 150,
+    "colour": [
+     150,
+     196,
+     60
+    ]
+   },
+   "bats": {
+    "count": 3,
+    "radius": [
+     1800,
+     2600
+    ],
+    "height": [
+     -1000,
+     -700
+    ],
+    "speed": 60,
+    "centre": [
+     2500,
+     800
+    ],
+    "scale": 0.8,
+    "rank": 1009,
+    "flutter": 120
+   }
+  },
+  "kunimitsu": {
+   "stage": 10,
+   "source": 16,
+   "base": 0,
+   "panorama": "cambodian-panorama.png",
+   "crop": [
+    0,
+    -16,
+    2000,
+    352
+   ],
+   "sky": [
+    1,
+    50,
+    136
+   ],
+   "rows": 4,
+   "columns": 24,
+   "seam": 96,
+   "degrees": 60,
+   "dust": {
+    "colour": [
+     110,
+     104,
+     80
+    ]
+   },
+   "clouds": {
+    "row": 2,
+    "frames": 4,
+    "period": 14,
+    "billow": 1.4,
+    "wave": 110,
+    "foot": 46,
+    "picture": "cambodia",
+    "bounce": true,
+    "water": {
+     "row": 3,
+     "from": 20,
+     "ripple": 1.3,
+     "wave": 40,
+     "glitter": 0.04,
+     "to": 56
+    }
+   },
+   "yoff": 20,
+   "bank": {
+    "height": 5,
+    "colour": [
+     46,
+     104,
+     34
+    ]
+   },
+   "painted": [
+    "sandstone",
+    "naga",
+    "laterite",
+    "apsara",
+    "fig_root",
+    "palm_trunk",
+    "matting",
+    "boat",
+    "fig_leaves",
+    "net",
+    "reeds",
+    "wood",
+    "plank",
+    "thatch",
+    "bamboo",
+    "iron",
+    "torii_black"
+   ],
+   "tuft_blades": "green",
+   "scenery": {
+    "tile_size": 300,
+    "seed": 10,
+    "light": {
+     "azimuth": 200,
+     "elevation": 50,
+     "ambient": [
+      0.72,
+      0.74,
+      0.76
+     ],
+     "sun": [
+      0.55,
+      0.52,
+      0.45
+     ],
+     "foot_dark": 0
+    },
+    "ruin_walls": [
+     {
+      "at": [
+       0,
+       1250
+      ],
+      "width": 360,
+      "height": 230,
+      "thick": 60,
+      "relief": true
+     },
+     {
+      "at": [
+       270,
+       1300
+      ],
+      "yaw": 15,
+      "width": 260,
+      "height": 190,
+      "thick": 60
+     }
+    ],
+    "naga": {
+     "height": 60,
+     "body": 14
+    },
+    "nagas": [
+     [
+      -40,
+      -12,
+      1150
+     ],
+     [
+      40,
+      12,
+      1150
+     ]
+    ],
+    "khmer_blocks": [
+     [
+      -50,
+      1080,
+      30
+     ],
+     [
+      55,
+      1100,
+      26,
+      "laterite"
+     ],
+     [
+      80,
+      1060,
+      34
+     ],
+     [
+      105,
+      1120,
+      24,
+      "laterite"
+     ],
+     [
+      255,
+      1120,
+      32
+     ],
+     [
+      285,
+      1080,
+      26
+     ],
+     [
+      262,
+      1180,
+      22,
+      "laterite"
+     ],
+     [
+      120,
+      1200,
+      28
+     ]
+    ],
+    "terraces": [
+     {
+      "at": [
+       65,
+       1180
+      ],
+      "count": 3,
+      "rise": 22,
+      "tread": 40,
+      "width": 260,
+      "top": 80
+     }
+    ],
+    "fig": {
+     "at": [
+      100,
+      1450
+     ],
+     "height": 640,
+     "roots": 9,
+     "reach": 320,
+     "crown": 230,
+     "leaves": 30
+    },
+    "palm": {
+     "fronds": 18,
+     "frond": 190
+    },
+    "palms": [
+     [
+      35,
+      1550,
+      760
+     ],
+     [
+      58,
+      1650,
+      680
+     ],
+     [
+      128,
+      1600,
+      800
+     ],
+     [
+      148,
+      1700,
+      700
+     ],
+     [
+      232,
+      1550,
+      740
+     ],
+     [
+      300,
+      1550,
+      800
+     ],
+     [
+      322,
+      1700,
+      660
+     ],
+     [
+      345,
+      1700,
+      720
+     ]
+    ],
+    "stilt_house": {
+     "at": [
+      180,
+      1500
+     ],
+     "yaw": 0,
+     "width": 380,
+     "depth": 280,
+     "floor": 210,
+     "walls": 190,
+     "roof": 170
+    },
+    "boat": {
+     "at": [
+      208,
+      1220
+     ],
+     "yaw": 35,
+     "length": 560,
+     "width": 96,
+     "depth": 46
+    },
+    "net": {
+     "height": 250,
+     "drop": 170
+    },
+    "nets": [
+     [
+      148,
+      162,
+      1280
+     ]
+    ],
+    "lotus_ponds": [
+     [
+      160,
+      1060,
+      320,
+      160,
+      5
+     ],
+     [
+      222,
+      1020,
+      260,
+      140,
+      4
+     ],
+     [
+      250,
+      1060,
+      240,
+      130,
+      4
+     ]
+    ],
+    "tufts": {
+     "count": 70,
+     "near": 1150,
+     "far": 1600,
+     "size": 85,
+     "colour": [
+      1.0,
+      1.0,
+      0.95
+     ],
+     "tex": "reeds"
+    }
+   },
+   "grass": {
+    "period": 450,
+    "count": 24,
+    "size": 40,
+    "rank": 980,
+    "seed": 10,
+    "colour": [
+     1.0,
+     1.0,
+     0.96
+    ],
+    "tex": [
+     "tuft"
+    ]
+   },
+   "egrets": {
+    "count": 5,
+    "flock": 200,
+    "radius": [
+     3000,
+     3000
+    ],
+    "height": [
+     -1100,
+     -1100
+    ],
+    "speed": 34,
+    "centre": [
+     3200,
+     300
+    ],
+    "scale": 1.0,
+    "rank": 1009
+   }
+  },
+  "tetsujin": {
+   "stage": 11,
+   "source": 4,
+   "base": 0,
+   "panorama": "athens-panorama.png",
+   "crop": [
+    0,
+    -67,
+    2000,
+    333
+   ],
+   "sky": [
+    22,
+    72,
+    156
+   ],
+   "rows": 4,
+   "columns": 24,
+   "seam": 96,
+   "degrees": 60,
+   "yoff": 36,
+   "dust": {
+    "colour": [
+     150,
+     130,
+     105
+    ]
+   },
+   "clouds": {
+    "row": 2,
+    "frames": 4,
+    "period": 14,
+    "billow": 1.4,
+    "wave": 110,
+    "foot": 54,
+    "picture": "athens",
+    "bounce": true
+   },
+   "painted": [
+    "pentelic",
+    "flute",
+    "doric_frieze",
+    "ionic",
+    "architrave",
+    "caryatid",
+    "inscription",
+    "odeon",
+    "olive_bark",
+    "cypress",
+    "pole",
+    "brass",
+    "poppies",
+    "lavender"
+   ],
+   "tuft_blades": "green",
+   "scenery": {
+    "tile_size": 300,
+    "seed": 11,
+    "light": {
+     "azimuth": 220,
+     "elevation": 45,
+     "ambient": [
+      0.74,
+      0.74,
+      0.78
+     ],
+     "sun": [
+      0.6,
+      0.54,
+      0.42
+     ],
+     "foot_dark": 0
+    },
+    "colonnades": [
+     {
+      "at": [
+       0,
+       1100
+      ],
+      "yaw": 0,
+      "columns": 6,
+      "spacing": 180,
+      "radius": 38,
+      "height": 480,
+      "broken": [
+       1,
+       1,
+       1,
+       0.55,
+       1,
+       0.3
+      ],
+      "entablature": [
+       0,
+       2
+      ]
+     }
+    ],
+    "column_drums": [
+     [
+      25,
+      1000,
+      36,
+      60,
+      1
+     ],
+     [
+      -32,
+      1050,
+      36,
+      55,
+      1
+     ],
+     [
+      17,
+      1110,
+      36,
+      70,
+      0
+     ],
+     [
+      200,
+      1000,
+      34,
+      60,
+      1
+     ],
+     [
+      150,
+      1050,
+      36,
+      80,
+      0
+     ],
+     [
+      330,
+      980,
+      34,
+      50,
+      1
+     ]
+    ],
+    "marble_blocks": [
+     [
+      40,
+      1050,
+      28
+     ],
+     [
+      -50,
+      1000,
+      24
+     ],
+     [
+      110,
+      1000,
+      30
+     ],
+     [
+      250,
+      1060,
+      26
+     ],
+     [
+      285,
+      1020,
+      22
+     ],
+     [
+      175,
+      1100,
+      28
+     ]
+    ],
+    "ionic_capitals": [
+     [
+      60,
+      980,
+      44
+     ]
+    ],
+    "architraves": [
+     [
+      300,
+      1000,
+      300
+     ],
+     [
+      120,
+      1080,
+      260
+     ]
+    ],
+    "caryatid_porch": {
+     "at": [
+      300,
+      1250
+     ],
+     "yaw": 0,
+     "width": 380,
+     "depth": 240,
+     "podium": 140,
+     "figure": 210
+    },
+    "steles": [
+     [
+      335,
+      950
+     ],
+     [
+      95,
+      960
+     ]
+    ],
+    "odeon": {
+     "from": 150,
+     "to": 210,
+     "distance": 1120,
+     "height": 360,
+     "thick": 70
+    },
+    "flagpole": {
+     "at": [
+      45,
+      1150
+     ],
+     "height": 470,
+     "flag": 150,
+     "picture": "greek",
+     "plinth": "pentelic",
+     "flies": 90
+    },
+    "olive": {
+     "crown": 220,
+     "clumps": 6
+    },
+    "olives": [
+     [
+      70,
+      1150,
+      360
+     ],
+     [
+      125,
+      1250,
+      340
+     ],
+     [
+      232,
+      1300,
+      380
+     ],
+     [
+      262,
+      1150,
+      340
+     ],
+     [
+      100,
+      1200,
+      400
+     ],
+     [
+      338,
+      1150,
+      350
+     ]
+    ],
+    "cypress": {
+     "pot": false
+    },
+    "cypresses": [
+     [
+      30,
+      1350,
+      700
+     ],
+     [
+      140,
+      1500,
+      650
+     ],
+     [
+      218,
+      1450,
+      720
+     ],
+     [
+      235,
+      1450,
+      680
+     ],
+     [
+      322,
+      1500,
+      640
+     ],
+     [
+      50,
+      1500,
+      700
+     ]
+    ],
+    "tufts": {
+     "count": 60,
+     "near": 1100,
+     "far": 1600,
+     "size": 70,
+     "colour": [
+      1.0,
+      1.0,
+      0.95
+     ],
+     "tex": [
+      "tuft",
+      "tuft",
+      "lavender",
+      "poppies"
+     ]
+    }
+   },
+   "grass": {
+    "period": 450,
+    "count": 24,
+    "size": 40,
+    "rank": 980,
+    "seed": 11,
+    "colour": [
+     1.0,
+     1.0,
+     0.96
+    ],
+    "tex": [
+     "tuft",
+     "tuft",
+     "lavender",
+     "poppies"
+    ]
+   },
+   "doves": {
+    "count": 5,
+    "flock": 120,
+    "radius": [
+     2500,
+     2500
+    ],
+    "height": [
+     -900,
+     -900
+    ],
+    "speed": 40,
+    "centre": [
+     3000,
+     300
+    ],
+    "scale": 0.9,
+    "rank": 1009
+   }
+  },
+  "julia": {
+   "stage": 12,
+   "source": 12,
+   "base": 0,
+   "panorama": "nowhere-desert-night-panorama.png",
+   "crop": [
+    0,
+    -67,
+    2000,
+    333
+   ],
+   "sky": [
+    4,
+    12,
+    34
+   ],
+   "rows": 4,
+   "columns": 24,
+   "seam": 96,
+   "twice": true,
+   "degrees": 60,
+   "yoff": 24,
+   "moon": {
+    "x": 420,
+    "y": 84,
+    "radius": 10,
+    "halo": 40,
+    "colour": [
+     236,
+     234,
+     220
+    ],
+    "halo_colour": [
+     34,
+     40,
+     62
+    ],
+    "lining": [
+     80,
+     86,
+     104
+    ],
+    "breath": 0.12,
+    "breath_rows": [
+     64,
+     128
+    ],
+    "sky": 20,
+    "thick": 40
+   },
+   "floor_tint": [
+    0.46,
+    0.52,
+    0.8
+   ],
+   "fighter_light": 0.74,
+   "fighter_tint": [
+    0.92,
+    0.93,
+    1.03
+   ],
+   "dust": {
+    "colour": [
+     42,
+     38,
+     42
+    ]
+   },
+   "clouds": {
+    "row": 1,
+    "frames": 4,
+    "period": 16,
+    "billow": 1.5,
+    "wave": 120,
+    "picture": "desert",
+    "bounce": true
+   },
+   "painted": [
+    "redrock",
+    "redrock_dark",
+    "redrock_top",
+    "petroglyph",
+    "bone",
+    "cholla",
+    "pear_pad",
+    "barbwire",
+    "skull",
+    "driftwood"
+   ],
+   "alias": {
+    "cliff": "redrock",
+    "cliff_dark": "redrock_dark"
+   },
+   "scenery": {
+    "tile_size": 300,
+    "seed": 12,
+    "light": {
+     "azimuth": 15,
+     "elevation": 30,
+     "ambient": [
+      0.3,
+      0.34,
+      0.52
+     ],
+     "sun": [
+      0.26,
+      0.28,
+      0.36
+     ],
+     "foot_dark": 0
+    },
+    "petroglyphs": [
+     {
+      "at": [
+       335,
+       1040
+      ],
+      "width": 230,
+      "height": 165,
+      "depth": 90,
+      "lean": 8
+     }
+    ],
+    "boulders": [
+     [
+      318,
+      1100,
+      55,
+      0.3
+     ],
+     [
+      350,
+      1010,
+      40,
+      0.3
+     ],
+     [
+      272,
+      960,
+      45,
+      0.35
+     ],
+     [
+      140,
+      1000,
+      35,
+      0.3
+     ],
+     [
+      30,
+      990,
+      40,
+      0.3
+     ],
+     [
+      240,
+      1050,
+      30,
+      0.3
+     ]
+    ],
+    "skulls": [
+     [
+      268,
+      930,
+      70,
+      0
+     ]
+    ],
+    "juniper": {
+     "branches": 4,
+     "reach": 70
+    },
+    "junipers": [
+     [
+      70,
+      1150,
+      200,
+      4
+     ],
+     [
+      255,
+      1100,
+      230,
+      7
+     ],
+     [
+      165,
+      1000,
+      170,
+      9
+     ]
+    ],
+    "prickly_pears": [
+     [
+      40,
+      1250,
+      34
+     ],
+     [
+      100,
+      950,
+      30
+     ],
+     [
+      285,
+      1000,
+      32
+     ],
+     [
+      235,
+      1350,
+      36
+     ],
+     [
+      355,
+      1080,
+      30
+     ]
+    ],
+    "chollas": [
+     [
+      150,
+      1250,
+      140
+     ],
+     [
+      300,
+      1150,
+      120
+     ],
+     [
+      5,
+      1150,
+      110
+     ]
+    ],
+    "barb_fences": [
+     {
+      "from": [
+       160,
+       1150
+      ],
+      "to": [
+       200,
+       1180
+      ],
+      "posts": 5,
+      "height": 120,
+      "broken": [
+       2
+      ],
+      "lean": 10
+     }
+    ]
+   },
+   "feathers": {
+    "shape": "tumbleweed",
+    "count": 3,
+    "near": 1500,
+    "far": 4500,
+    "height": 3200,
+    "length": 520,
+    "fall": 600,
+    "colour": [
+     86,
+     80,
+     84
+    ],
+    "devil_colour": [
+     24,
+     22,
+     22
+    ],
+    "devils": 1
+   },
+   "vultures": {
+    "count": 3,
+    "radius": [
+     1800,
+     2800
+    ],
+    "height": [
+     -1700,
+     -1200
+    ],
+    "speed": 34,
+    "centre": [
+     2500,
+     800
+    ],
+    "scale": 0.85,
+    "rank": 1009,
+    "tint": [
+     0.5,
+     0.56,
+     0.78
+    ],
+    "lizards": {
+     "count": 2,
+     "near": 450,
+     "far": 950,
+     "scale": 1.2,
+     "rank": 980
+    }
+   }
+  },
+  "alex": {
+   "stage": 14,
+   "base": 0,
+   "panorama": "hills-panorama.png",
+   "crop": [
+    0,
+    -73,
+    2000,
+    327
+   ],
+   "sky": [
+    40,
+    86,
+    160
+   ],
+   "rows": 4,
+   "columns": 24,
+   "seam": 96,
+   "degrees": 60,
+   "yoff": 16,
+   "dust": {
+    "colour": [
+     120,
+     118,
+     84
+    ]
+   },
+   "clouds": {
+    "row": 1,
+    "frames": 4,
+    "period": 16,
+    "billow": 1.4,
+    "wave": 110,
+    "picture": "hills",
+    "bounce": true,
+    "water": {
+     "kind": "meadow",
+     "row": 3,
+     "from": 22,
+     "ripple": 1.6,
+     "wave": 46,
+     "gust": 300,
+     "sheen": 0.1
+    }
+   },
+   "painted": [
+    "fossil",
+    "tooth",
+    "raptor",
+    "ammonite",
+    "dandelion"
+   ],
+   "materials": {
+    "cliff": {
+     "box": [
+      585,
+      205,
+      715,
+      245
+     ],
+     "tiles": 3,
+     "lift": 0.3,
+     "soften": 0.3
+    },
+    "cliff_dark": {
+     "box": [
+      560,
+      238,
+      700,
+      262
+     ],
+     "tiles": 3,
+     "lift": 0.4,
+     "soften": 0.3
+    }
+   },
+   "tuft_blades": "green",
+   "scenery": {
+    "tile_size": 200,
+    "seed": 14,
+    "light": {
+     "azimuth": 220,
+     "elevation": 45,
+     "ambient": [
+      0.72,
+      0.74,
+      0.78
+     ],
+     "sun": [
+      0.55,
+      0.52,
+      0.42
+     ],
+     "foot_dark": 0
+    },
+    "trex": {
+     "at": [
+      0,
+      1130
+     ],
+     "turn": 20,
+     "length": 440,
+     "gape": 22,
+     "sink": 8
+    },
+    "rib_cages": [
+     {
+      "at": [
+       300,
+       990
+      ],
+      "turn": 60,
+      "ribs": 11,
+      "height": 230,
+      "width": 110,
+      "spacing": 48
+     }
+    ],
+    "skeletons": [
+     {
+      "at": [
+       140,
+       1020
+      ],
+      "turn": 20,
+      "length": 440,
+      "skull": 130
+     }
+    ],
+    "bones": [
+     [
+      30,
+      960,
+      "femur",
+      150,
+      20
+     ],
+     [
+      215,
+      940,
+      "femur",
+      120,
+      110
+     ],
+     [
+      345,
+      930,
+      "claw",
+      50
+     ],
+     [
+      95,
+      990,
+      "claw",
+      44
+     ],
+     [
+      12,
+      960,
+      "tooth",
+      40
+     ],
+     [
+      250,
+      960,
+      "tooth",
+      36
+     ],
+     [
+      275,
+      1000,
+      "vertebra",
+      50
+     ],
+     [
+      60,
+      1010,
+      "vertebra",
+      44
+     ]
+    ],
+    "ammonites": [
+     [
+      60,
+      960,
+      80,
+      30
+     ],
+     [
+      160,
+      940,
+      65,
+      35
+     ],
+     [
+      235,
+      1060,
+      95,
+      30
+     ],
+     [
+      320,
+      960,
+      70,
+      35
+     ],
+     [
+      95,
+      1150,
+      100,
+      25
+     ]
+    ],
+    "boulders": [
+     [
+      40,
+      1160,
+      45,
+      0.35
+     ],
+     [
+      75,
+      1060,
+      28,
+      0.3
+     ],
+     [
+      200,
+      1180,
+      55,
+      0.35
+     ],
+     [
+      250,
+      1020,
+      32,
+      0.3
+     ],
+     [
+      330,
+      1190,
+      40,
+      0.3
+     ],
+     [
+      170,
+      1150,
+      30,
+      0.3
+     ]
+    ],
+    "tufts": {
+     "count": 140,
+     "near": 880,
+     "far": 1500,
+     "size": 100,
+     "colour": [
+      1.0,
+      1.04,
+      0.96
+     ],
+     "tex": [
+      "tuft",
+      "dandelion"
+     ],
+     "keep_out": [
+      [
+       0,
+       1130,
+       300
+      ],
+      [
+       300,
+       990,
+       300
+      ],
+      [
+       140,
+       1020,
+       260
+      ]
+     ]
+    }
+   },
+   "grass": {
+    "period": 450,
+    "count": 24,
+    "size": 44,
+    "rank": 980,
+    "seed": 14,
+    "colour": [
+     1.0,
+     1.02,
+     0.95
+    ],
+    "tex": [
+     "tuft",
+     "dandelion"
+    ]
+   },
+   "feathers": {
+    "shape": "fluff",
+    "count": 24,
+    "near": 300,
+    "far": 2200,
+    "height": 2200,
+    "length": 70,
+    "fall": 10,
+    "colour": [
+     255,
+     255,
+     250
+    ]
+   }
+  },
+  "kazuya": {
+   "stage": 21,
+   "source": 0,
+   "base": 0,
+   "panorama": "eternal-darkness-panorama.png",
+   "crop": [
+    0,
+    40,
+    2000,
+    623
+   ],
+   "rows": 6,
+   "columns": 20,
+   "seam": 48,
+   "degrees": 72,
+   "yoff": -40,
+   "floor_base": 8,
+   "floor_tint": [
+    0.3,
+    0.27,
+    0.3
+   ],
+   "fighter_light": 0.58,
+   "fighter_tint": [
+    1.12,
+    0.86,
+    0.66
+   ],
+   "fighter_flicker": 0.14,
+   "flicker": {
+    "frames": 24,
+    "period": 3,
+    "reach": 24,
+    "depth": 0.18,
+    "bright": 170,
+    "fires": [
+     [
+      1265,
+      575,
+      0.4
+     ]
+    ],
+    "rain": {
+     "windows": [
+      [
+       235,
+       210,
+       325,
+       360
+      ],
+      [
+       745,
+       165,
+       875,
+       395
+      ],
+      [
+       1655,
+       70,
+       1720,
+       150
+      ],
+      [
+       1625,
+       290,
+       1785,
+       525
+      ]
+     ],
+     "slant": 0.12,
+     "density": 0.22,
+     "dash": 4,
+     "colour": [
+      56,
+      64,
+      86
+     ]
+    }
+   },
+   "lightning": {
+    "like": "workspace/ttt1-import/stages/arcade-baek.ast",
+    "windows": {
+     "rects": [
+      [
+       235,
+       210,
+       325,
+       360
+      ],
+      [
+       745,
+       165,
+       875,
+       395
+      ],
+      [
+       1655,
+       70,
+       1720,
+       150
+      ],
+      [
+       1625,
+       290,
+       1785,
+       525
+      ]
+     ],
+     "glow": 8,
+     "spill": 0.5
+    },
+    "levels": [
+     0.6,
+     1.0
+    ],
+    "variants": [
+     0,
+     1,
+     1
+    ],
+    "flash": [
+     0.35,
+     [
+      0.85,
+      0.9,
+      1.15
+     ]
+    ]
+   },
+   "webs": {
+    "at": [
+     [
+      985,
+      300,
+      60,
+      "tr"
+     ],
+     [
+      1610,
+      300,
+      70,
+      "tl"
+     ],
+     [
+      70,
+      300,
+      55,
+      "tl"
+     ],
+     [
+      612,
+      455,
+      45,
+      "tl"
+     ],
+     [
+      998,
+      455,
+      45,
+      "tr"
+     ],
+     [
+      1795,
+      300,
+      55,
+      "tr"
+     ]
+    ],
+    "colour": [
+     150,
+     150,
+     160
+    ],
+    "alpha": 0.4
+   },
+   "weave": {
+    "cell": [
+     2,
+     15
+    ],
+    "radius": 26,
+    "centre": [
+     32,
+     30
+    ],
+    "steps": 18,
+    "hold": 30,
+    "gone": 12,
+    "period": 30,
+    "colour": [
+     160,
+     160,
+     172
+    ],
+    "alpha": 0.55
+   },
+   "scenery": {
+    "tile_size": 800,
+    "seed": 21,
+    "light": {
+     "azimuth": 0,
+     "elevation": 90,
+     "ambient": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "sun": [
+      0,
+      0,
+      0
+     ]
+    },
+    "flash": {
+     "level": 128,
+     "colour": [
+      150,
+      164,
+      210
+     ]
+    },
+    "flash_patches": [
+     [
+      20,
+      380,
+      170,
+      330
+     ],
+     [
+      335,
+      420,
+      170,
+      330
+     ]
+    ]
+   },
+   "bats": {
+    "count": 3,
+    "radius": [
+     700,
+     1300
+    ],
+    "height": [
+     -600,
+     -300
+    ],
+    "speed": 50,
+    "centre": [
+     900,
+     400
+    ],
+    "scale": 0.6,
+    "rank": 1009,
+    "flutter": 110,
+    "spiders": {
+     "count": 3,
+     "near": 250,
+     "far": 700,
+     "scale": 1.5,
+     "rank": 980,
+     "hang": 2,
+     "low": -110
+    }
+   }
+  }
+ },
+ "_frames": "tools/t2_remake_stage.py classic_cfg(): the old in-game panorama (from the user's picture, measured once, 2026-11-04) against the Classic frame's (Tekken 2's panorama, its rows twice): its x times new width / old width after the turn \"shift\", its y to a * y + b (\"y\"); \"old\" its size, \"hd\" the user's picture's (the recipes' \"crop\" is in it); \"lift\" texels the picture higher in the frame, its foot out of the floor (London's buses, the user's, 2026-11-08)",
+ "frames": {
+  "jack2": {
+   "shift": 0,
+   "y": [
+    1.31,
+    76
+   ],
+   "old": [
+    2048,
+    384
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "michelle": {
+   "shift": 1530,
+   "y": [
+    1.39,
+    -18
+   ],
+   "old": [
+    2048,
+    384
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "roger": {
+   "shift": 350,
+   "y": [
+    1.4,
+    0
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "armorking": {
+   "shift": 750,
+   "y": [
+    1.94,
+    86
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "bruce": {
+   "shift": 1534,
+   "y": [
+    1.235,
+    32
+   ],
+   "old": [
+    2304,
+    384
+   ],
+   "hd": [
+    2000,
+    338
+   ]
+  },
+  "wang": {
+   "shift": 1340,
+   "y": [
+    1.23,
+    156
+   ],
+   "old": [
+    1920,
+    320
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "gunjack": {
+   "shift": 0,
+   "y": [
+    1.92,
+    -224
+   ],
+   "old": [
+    1536,
+    384
+   ],
+   "hd": [
+    2000,
+    336
+   ]
+  },
+  "baek": {
+   "shift": 494,
+   "y": [
+    1.715,
+    -20
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    668
+   ]
+  },
+  "ganryu": {
+   "shift": 424,
+   "y": [
+    1.63,
+    -118
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "lee": {
+   "shift": 1168,
+   "y": [
+    1.47,
+    144
+   ],
+   "old": [
+    1920,
+    512
+   ],
+   "hd": [
+    2000,
+    668
+   ]
+  },
+  "pjack": {
+   "shift": 1502,
+   "lift": 50,
+   "y": [
+    1.455,
+    48
+   ],
+   "old": [
+    2048,
+    384
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "jun": {
+   "shift": 870,
+   "y": [
+    1.72,
+    -184
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "bryan": {
+   "shift": 0,
+   "y": [
+    1.885,
+    -328
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "kuma": {
+   "shift": 1534,
+   "y": [
+    1.71,
+    12
+   ],
+   "old": [
+    1536,
+    320
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "mokujin": {
+   "shift": 754,
+   "y": [
+    2.31,
+    234
+   ],
+   "old": [
+    1536,
+    384
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  },
+  "panda": {
+   "shift": 456,
+   "y": [
+    1.825,
+    -288
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    351
+   ]
+  },
+  "anna": {
+   "shift": 488,
+   "y": [
+    1.565,
+    -176
+   ],
+   "old": [
+    1536,
+    448
+   ],
+   "hd": [
+    2000,
+    667
+   ]
+  }
+ }
+}

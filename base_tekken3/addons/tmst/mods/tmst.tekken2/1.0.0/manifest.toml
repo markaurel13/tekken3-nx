@@ -1,0 +1,74 @@
+format_version = 5
+id = "tmst.tekken2"
+version = "1.0.0"
+name = "Tekken 2 Content"
+author = "TMST"
+description = "What the add-on takes from your own Tekken 2 PlayStation disc (Setup TMST.cmd), in one package: Tekken 2 Content switches it all on or off, and under it, in the TMST / Tekken 2 Content group, each part on its own. Music: Tekken 2's and the Tekken 1 stage themes it plays again, as the Jukebox's TEKKEN 1 and TEKKEN 2 categories (Console and Arcade). Stages: Tekken 2's 23 stages, drawn by the game's stage engine, picked as TEKKEN 2 on the STAGE line of VS and Practice. Wireframe Mode: Tekken 2's hidden mode, your fighter in green lines, the camera behind its head, switched on in GAME OPTION. Restart after toggling this package."
+license = "PolyForm-Noncommercial-1.0.0"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLUS-00402"
+exe_sha256 = "fbda8b68e5799dbef4af39a161783bc670c15b0aa0e87dce65e210717da19b8c"
+
+# The package's switch: off, none of its parts runs (each requires it); on,
+# each part is switched on its own (the parts' group, the next one down).
+[[feature]]
+id = "tekken2"
+name = "Tekken 2 Content"
+description = "Everything taken from your Tekken 2 disc (given to Setup TMST.cmd): off, none of it; on, switch its parts on one by one in the TMST / Tekken 2 Content group below (switching a part on switches this on too). Restart after changing."
+group = "TMST"
+default_enabled = false
+
+[[plugin]]
+feature = "tekken2"
+id = "tmst.tekken2"
+
+[[feature]]
+id = "music"
+name = "Music"
+description = "The Tekken 1 and Tekken 2 music (Console and Arcade) in the Jukebox (switch the Jukebox on too), made by Setup TMST.cmd from your Tekken 2 disc: Tekken 2's and the ten Tekken 1 stage themes it plays again. The Tekken 2 stages and Tournament Mode play their pieces with the Jukebox off too. Off: those categories are hidden, and a fighter given such music plays the game's own until it is on again. Needs Tekken 2 Content. Restart after changing."
+group = "TMST / Tekken 2 Content"
+default_enabled = false
+
+[[plugin]]
+feature = "music"
+id = "tmst.tekken2.music"
+
+[[constraint]]
+feature = "music"
+kind = "requires_feature"
+requires_feature = "tekken2"
+
+[[feature]]
+id = "stages"
+name = "Stages"
+description = "Tekken 2's 23 stages (Classic: its panorama and floor), made by Setup TMST.cmd from your Tekken 2 disc and drawn by the game's stage engine as Tekken 3 arcade's are (keep the Arcade Stages feature on; tekken3.zip is not needed for the Classic). Remake: all 23 remade, with scenery, animations, new painted backgrounds, falling petals and leaves, insects, rain, grass, birds and other animals, lightning (built with the Expanded setup's tekken3.zip). Pick them as TEKKEN 2 on the STAGE line of VS and Practice (Stage Select on); GAME OPTION's TEKKEN 2 STAGES row picks the version. Needs Tekken 2 Content. Restart after changing."
+group = "TMST / Tekken 2 Content"
+default_enabled = false
+
+[[plugin]]
+feature = "stages"
+id = "tmst.tekken2.stages"
+
+[[constraint]]
+feature = "stages"
+kind = "requires_feature"
+requires_feature = "tekken2"
+
+[[feature]]
+id = "wireframe"
+name = "Wireframe Mode"
+description = "Tekken 2's hidden Wireframe Mode: your fighter drawn in glowing green lines, no fill, and the camera just behind its head, looking the way the body faces. Not a button at the selector as in Tekken 2: GAME OPTION's TEKKEN 2 WIREFRAME MODE row, OFF or ON. Arcade, Team Battle, Tournament, Time Attack, Survival and Practice, with one human player (a challenger's fight, or a Team Battle of two players, keeps the game's own look); throws keep the game's camera. Needs Tekken 2 Content. Restart after changing."
+group = "TMST / Tekken 2 Content"
+default_enabled = false
+
+[[plugin]]
+feature = "wireframe"
+id = "tmst.tekken2.wireframe"
+
+[[constraint]]
+feature = "wireframe"
+kind = "requires_feature"
+requires_feature = "tekken2"

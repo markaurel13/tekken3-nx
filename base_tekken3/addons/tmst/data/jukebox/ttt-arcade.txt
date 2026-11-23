@@ -1,0 +1,17 @@
+# Jukebox titles, ttt-arcade: one line per music file, "file = title".
+# Write the title you want after the "="; the setup only adds lines for new files.
+# "--disable" after the "=" (with or without a title) leaves that music out of the list.
+arcade-eddy.bgm = Eddy Gordo (TTT1 Arcade)
+arcade-law.bgm = Forest Law (TTT1 Arcade)
+arcade-heihachi.bgm = Heihachi Mishima (TTT1 Arcade)
+arcade-hwoarang.bgm = Hwoarang (TTT1 Arcade)
+arcade-jin.bgm = Jin Kazama (TTT1 Arcade)
+arcade-king.bgm = King II (TTT1 Arcade)
+arcade-lei.bgm = Lei Wulong (TTT1 Arcade)
+arcade-xiaoyu.bgm = Ling Xiaoyu (TTT1 Arcade)
+arcade-nina.bgm = Nina Williams (TTT1 Arcade)
+arcade-ogre.bgm = Ogre (TTT1 Arcade)
+arcade-paul.bgm = Paul Phoenix (TTT1 Arcade)
+arcade-school.bgm = School (TTT1 Arcade)
+arcade-unknown.bgm = Unknown (TTT1 Arcade)
+arcade-yoshimitsu.bgm = Yoshimitsu (TTT1 Arcade)

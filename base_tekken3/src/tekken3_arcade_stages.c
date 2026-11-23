@@ -794,14 +794,30 @@ static int stage_supported(int arena) { return arena >= 0 && arena <= 12; }
 /* A format 3 (T3) or 4 (TTT) pack's file, checked; NULL otherwise. */
 static uint8_t *pack_read(int source, int stage, long *out_size, char *path, size_t path_size) {
     snprintf(path, path_size, "%s/stage%02d.ast", pack_dir_of(source), stage);
+    extern int tmst_tekken2_stage_fopen_needed(int source, int stage) __attribute__((weak));
     extern const unsigned char *switch_cached_file_get(const char *path, size_t *out_size);
     size_t sz = 0;
-    const unsigned char *cached = switch_cached_file_get(path, &sz);
-    if (!cached || sz <= 64) return NULL;
+    uint8_t *b = NULL;
+    int ok = 0;
+    if (tmst_tekken2_stage_fopen_needed && tmst_tekken2_stage_fopen_needed(source, stage)) {
+        FILE *f = fopen(path, "rb");
+        if (!f) return NULL;
+        fseek(f, 0, SEEK_END);
+        long fsz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (fsz <= 64) { fclose(f); return NULL; }
+        sz = (size_t)fsz;
+        b = malloc(sz);
+        ok = b && fread(b, 1, sz, f) == sz;
+        fclose(f);
+    } else {
+        const unsigned char *cached = switch_cached_file_get(path, &sz);
+        if (!cached || sz <= 64) return NULL;
+        b = malloc(sz);
+        ok = b != NULL;
+        if (ok) memcpy(b, cached, sz);
+    }
     long size = (long)sz;
-    uint8_t *b = malloc((size_t)size);
-    int ok = b != NULL;
-    if (ok) memcpy(b, cached, (size_t)size);
     uint16_t version = 0, number = 0; uint32_t total = 0;
     if (ok) { memcpy(&version, b + 4, 2); memcpy(&number, b + 6, 2); memcpy(&total, b + 12, 4); }
     int ttt = source == TEKKEN3_STAGE_TTT;
@@ -1138,7 +1154,9 @@ void tekken3_arcade_stages_preload(int source, int stage) {
             s_tried = -1;
         }
     } else if (source == TEKKEN3_STAGE_T3 && stage >= 0 && stage_supported(stage)) {
-        if (s_pack.source != TEKKEN3_STAGE_T3 || s_pack.stage != stage) {
+        extern int tmst_tekken2_stage_fopen_needed(int source, int stage) __attribute__((weak));
+        int t2_override = (tmst_tekken2_stage_fopen_needed && tmst_tekken2_stage_fopen_needed(source, stage));
+        if (s_pack.source != TEKKEN3_STAGE_T3 || s_pack.stage != stage || t2_override) {
             pack_load(stage);
             s_tried = stage;
             s_tried_ttt = -1;

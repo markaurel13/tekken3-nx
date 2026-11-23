@@ -2077,8 +2077,9 @@ int psx_ws_prim_in_backdrop(void) {
 }
 
 int psx_ws_prim_is_tagged(void) {
-    if (!ws_engaged() || gp0_cmd_source_addr == 0xFFFFFFFFu) return 0;
+    if (!ws_last_tag_stamp || gp0_cmd_source_addr == 0xFFFFFFFFu) return 0;
     uint32_t now = (uint32_t)s_frame_count;
+    if (now - ws_last_tag_stamp > 2 || !ws_engaged()) return 0;
     for (int variant = 0; variant < 2; variant++) {
         uint32_t key = (gp0_cmd_source_addr - (variant ? 0u : 4u)) & 0x1FFFFCu;
         uint32_t idx = (key >> 2) & (WS_TAG_BUCKETS - 1);
@@ -2202,7 +2203,8 @@ static int ws_axis_aligned_quad(const int32_t vx[4], const int32_t vy[4]) {
 }
 
 static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
-    if (psx_ws_prim_is_tagged() || !ws_axis_aligned_quad(vx, vy))
+    if (!ws_auto_ui_squash || ws_ui_prepass_count == 0 ||
+        psx_ws_prim_is_tagged() || !ws_axis_aligned_quad(vx, vy))
         return 0;
 
     int32_t min_x = vx[0], max_x = vx[0], min_y = vy[0], max_y = vy[0];
@@ -2226,7 +2228,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
 }
 
 static int ws_auto_ui_transform_rect(int32_t *x, int32_t y, int *w, int h) {
-    if (!x || !w || *w <= 0 || psx_ws_prim_is_tagged())
+    if (!ws_auto_ui_squash || ws_ui_prepass_count == 0 ||
+        !x || !w || *w <= 0 || psx_ws_prim_is_tagged())
         return 0;
     int32_t W = ws_disp_w(), H = ws_disp_h();
     if ((*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) ||
@@ -5747,6 +5750,12 @@ static uint64_t gp0_ring_seq    = 0;      /* total commands recorded */
 static uint32_t gp0_ring_head   = 0;      /* next write slot */
 
 static void gp0_ring_record(const uint32_t *words, int n) {
+    static int s_ring_enabled = -1;
+    if (s_ring_enabled < 0) {
+        const char *e = getenv("PSX_GP0_RING");
+        s_ring_enabled = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (!s_ring_enabled) return;
     if (!gp0_ring) {
         gp0_ring = (GpuGp0RingEntry *)calloc(GP0_RING_CAP, sizeof(*gp0_ring));
         if (!gp0_ring) return;  /* OOM — capture disabled, no other effect */
@@ -6372,11 +6381,29 @@ static void gp0_execute_command_now(void) {
             }
         }
 
-        gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
-        gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
-        gr_wide_set_primitive_suppressed(suppress_sidecar);
-        gr_wide_set_primitive_unclipped(unclipped_sidecar);
-        gr_wide_set_primitive_expanded(expand_sidecar);
+        static int s_init = 0;
+        static int s_ldx = 0, s_ldy = 0, s_lclip = -1, s_lsupp = 0, s_lunclip = 0, s_lexp = 0;
+        if (!s_init || sidecar_dx != s_ldx || sidecar_dy != s_ldy) {
+            gr_wide_set_primitive_delta(sidecar_dx, sidecar_dy);
+            s_ldx = sidecar_dx; s_ldy = sidecar_dy;
+        }
+        if (!s_init || sidecar_clip_bottom != s_lclip) {
+            gr_wide_set_primitive_clip_bottom(sidecar_clip_bottom);
+            s_lclip = sidecar_clip_bottom;
+        }
+        if (!s_init || suppress_sidecar != s_lsupp) {
+            gr_wide_set_primitive_suppressed(suppress_sidecar);
+            s_lsupp = suppress_sidecar;
+        }
+        if (!s_init || unclipped_sidecar != s_lunclip) {
+            gr_wide_set_primitive_unclipped(unclipped_sidecar);
+            s_lunclip = unclipped_sidecar;
+        }
+        if (!s_init || expand_sidecar != s_lexp) {
+            gr_wide_set_primitive_expanded(expand_sidecar);
+            s_lexp = expand_sidecar;
+        }
+        s_init = 1;
         t3_selector_sidecar_unclipped = unclipped_sidecar;
     }
     gp0_opcode_count[opcode]++;
@@ -6386,9 +6413,11 @@ static void gp0_execute_command_now(void) {
 
     /* Draw-census: capture every drawing primitive's first vertex + camera. */
     if (opcode >= 0x20 && opcode <= 0x7F) {
-        int32_t cvx, cvy;
-        parse_vertex(gp0_cmd_buf[1], &cvx, &cvy);
-        ws_census_record(opcode, cvx, cvy);
+        if (ws_census_on) {
+            int32_t cvx, cvy;
+            parse_vertex(gp0_cmd_buf[1], &cvx, &cvy);
+            ws_census_record(opcode, cvx, cvy);
+        }
         ws_note_overhang(opcode);   /* 2D-only-scene classifier world signal */
     }
 

@@ -1,0 +1,24 @@
+format_version = 5
+id = "tmst.photo-mode"
+version = "1.0.0"
+name = "Photo Mode"
+author = "TMST"
+description = "A free camera in any paused fight: PHOTO in the pause menu (in Practice, SELECT while paused) stops the fight and lets you move the camera, hide the HUD, add a filter, a frame and depth blur, and save the picture as a PNG in the add-on's screenshots folder. Restart after toggling this package."
+license = "PolyForm-Noncommercial-1.0.0"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLUS-00402"
+exe_sha256 = "fbda8b68e5799dbef4af39a161783bc670c15b0aa0e87dce65e210717da19b8c"
+
+[[feature]]
+id = "photo-mode"
+name = "Photo Mode"
+description = "PHOTO in a fight's pause menu (Practice: SELECT while paused). D-pad move, L1/R1 down/up, SQUARE+D-pad turn, L2/R2 zoom, SELECT reset the camera, START the settings panel, CROSS take a photo, TRIANGLE hide the HUD, CIRCLE back to the pause menu. Restart after toggling this package."
+group = "TMST"
+default_enabled = false
+
+[[plugin]]
+feature = "photo-mode"
+id = "tmst.photo-mode"

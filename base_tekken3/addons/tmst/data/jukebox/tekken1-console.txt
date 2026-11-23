@@ -1,0 +1,13 @@
+# Jukebox titles, t1-console: one line per music file, "file = title".
+# Write the title you want after the "="; the setup only adds lines for new files.
+# "--disable" after the "=" (with or without a title) leaves that music out of the list.
+t2-anna.bgm = King George Island, Antarcticca (T1 Console)
+t2-armor-king.bgm = Monument Valley, USA (T1 Console)
+bruce.bgm = Marine Stadium, Japan (T1 Console)
+t2-ganryu.bgm = Kyoto, Japan (T1 Console)
+t2-kunimitsu.bgm = Angkor Wat, Cambodia (T1 Console)
+lee.bgm = Chicago, USA (T1 Console)
+pjack.bgm = Windermere, UK (T1 Console)
+t2-roger.bgm = Fiji (T1 Console)
+t2-wang.bgm = Sichuan, China (T1 Console)
+t2-kuma.bgm = Acropolis, Greece (T1 Console)

@@ -1,0 +1,24 @@
+format_version = 5
+id = "tmst.vs-plus"
+version = "1.0.0"
+name = "VS Mode+"
+author = "TMST"
+description = "VS MODE PLUS in the main menu instead of VS MODE, open with any number of pads: PLAYER VS CPU, PLAYER VS PLAYER (with a second pad) or CPU VS CPU, one pad choosing both fighters. Restart after toggling this package."
+license = "PolyForm-Noncommercial-1.0.0"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLUS-00402"
+exe_sha256 = "fbda8b68e5799dbef4af39a161783bc670c15b0aa0e87dce65e210717da19b8c"
+
+[[feature]]
+id = "vs-plus"
+name = "VS Mode+"
+description = "VS MODE PLUS in the main menu, open with any number of pads. Its band asks PLAYER VS CPU, PLAYER VS PLAYER (only with a second pad) or CPU VS CPU (left and right, cross to take). Your pad picks your fighter, then the CPU's (green cursor); the CPU fights at GAME OPTION's DIFFICULTY LEVEL. START + SELECT at the select screen: back to the menu. Restart after toggling this package."
+group = "TMST"
+default_enabled = false
+
+[[plugin]]
+feature = "vs-plus"
+id = "tmst.vs-plus"

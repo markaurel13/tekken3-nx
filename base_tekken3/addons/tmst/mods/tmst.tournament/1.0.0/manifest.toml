@@ -1,0 +1,24 @@
+format_version = 5
+id = "tmst.tournament"
+version = "1.0.0"
+name = "Tournament Mode"
+author = "TMST"
+description = "The King of Iron Fist Tournament: TOURNAMENT MODE under TEKKEN FORCE MODE in the main menu. Five tournaments (Tekken 1, Tekken 2, Tekken 3, Tekken Tag, Free), each 16 fighters in single elimination and a final boss waiting in the Grand Final (Kazuya then Devil, Ogre then True Ogre); winning one opens the next. Restart after toggling this package."
+license = "PolyForm-Noncommercial-1.0.0"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLUS-00402"
+exe_sha256 = "fbda8b68e5799dbef4af39a161783bc670c15b0aa0e87dce65e210717da19b8c"
+
+[[feature]]
+id = "tournament"
+name = "Tournament Mode"
+description = "TOURNAMENT MODE in the main menu: choose a tournament, then your fighter on the Team Battle grid (only the highlighted fighters take part; L2/R2 switch the character panel). Win five matches in a row, two rounds each, the Grand Final against the tournament's boss included, to become its champion and open the next tournament. Restart after toggling this package."
+group = "TMST"
+default_enabled = false
+
+[[plugin]]
+feature = "tournament"
+id = "tmst.tournament"

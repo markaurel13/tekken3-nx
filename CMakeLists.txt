@@ -168,6 +168,52 @@ set(TEKKEN3_EXPANDED_SOURCES
     "${TTT1_PUSH_HOOKS}"
 )
 
+# Add-on TMST (Jukebox, Photo Mode, Tournament Mode, VS Mode+, Tekken 2 Content)
+set(TMST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/base_tekken3/addons/tmst")
+set(TMST_SOURCES
+    ${TMST_DIR}/src/core/tmst_core.c
+    ${TMST_DIR}/src/core/tmst_ui_font.c
+    ${TMST_DIR}/src/core/tmst_ui_font_data.c
+    ${TMST_DIR}/src/core/tmst_overlay.c
+    ${TMST_DIR}/src/core/tmst_audio.c
+    ${TMST_DIR}/src/core/tmst_music.c
+    ${TMST_DIR}/src/core/tmst_menu.c
+    ${TMST_DIR}/src/core/tmst_input.c
+    ${TMST_DIR}/src/core/tmst_spu.c
+    ${TMST_DIR}/src/core/tmst_pause.c
+    ${TMST_DIR}/src/core/tmst_camera.c
+    ${TMST_DIR}/src/core/tmst_png.c
+    ${TMST_DIR}/src/core/tmst_files.c
+    ${TMST_DIR}/src/compat/tmst_compat.c
+    ${TMST_DIR}/src/jukebox/tmst_jukebox.c
+    ${TMST_DIR}/src/jukebox/tmst_adpcm.c
+    ${TMST_DIR}/src/photo/tmst_photo.c
+    ${TMST_DIR}/src/photo/tmst_photo_fx.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_pools.c
+    ${TMST_DIR}/src/tournament/tmst_bracket.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_progress.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_stages.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_cine.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_art.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_screens.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_story.c
+    ${TMST_DIR}/src/tournament/tmst_tournament_options.c
+    ${TMST_DIR}/src/tournament/tmst_tournament.c
+    ${TMST_DIR}/src/vsplus/tmst_vsplus.c
+    ${TMST_DIR}/src/vsplus/tmst_vsplus_options.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2_stages.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2_mirror.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2_extras.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2_trace.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2_anchor.c
+    ${TMST_DIR}/src/tekken2/tmst_tekken2_wireframe.c
+)
+set_source_files_properties(${TMST_SOURCES} PROPERTIES
+    INCLUDE_DIRECTORIES "${TMST_DIR}/src/core;${TMST_DIR}/src/compat;${TMST_DIR}/src/tournament"
+    COMPILE_DEFINITIONS "TMST_VERSION=\"1.0.0\";TMST_UPSTREAM_REV=\"v1.5.1\";TMST_TESTED_WITH=\"v1.4.1 v1.5.0 v1.5.1\";TMST_HAS_ACTIVATION_PLUGIN=1;TMST_HAS_VBLANK_PLUGIN=1;TMST_HAS_GUEST_MEMORY=1;TMST_HAS_HIGH_VRAM_UPLOAD=1;TMST_HAS_VRAM_WRITE_OBSERVER=1;TMST_HAS_GAME_OPTIONS=1;TMST_HAS_BGM_SELECT=1;TMST_HAS_STAGE_ENGINE=1;TMST_HAS_STAGE_OPTION=1;TMST_HAS_UNKNOWN_WOLF=1;TMST_BRIDGE_fopen=1;TMST_BRIDGE_func_800780BC=1;TMST_BRIDGE_func_8004A6BC=1;TMST_BRIDGE_func_8003A818=1;TMST_BRIDGE_func_800826E8=1"
+)
+
 # Fuentes del Runtime de psxrecomp
 set(PSX_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
@@ -251,6 +297,7 @@ add_executable(tekken3_nx
     base_tekken3/generated/overlays_static.c
     ${TEKKEN3_SHARDS}
     ${TEKKEN3_EXPANDED_SOURCES}
+    ${TMST_SOURCES}
     ${PSX_RUNTIME_SOURCES}
 )
 
@@ -404,16 +451,65 @@ set(TEKKEN3_WRAP_SYMBOLS
     func_80071110
     func_80076884
     func_80076C28
+    # TMST add-on wraps
+    gpu_ws_prepass_linked_list
+    psx_mod_gpu_high_vram_upload
+    tekken3_ttt1_wolf_after_actor
+    tekken3_ttt1_wolf_high_vram_used
+    tekken3_stage_source
+    tekken3_stage_ttt_stage
+    tekken3_stage_select_fight
+    tekken3_stage_select_input
+    tekken3_stage_select_line
+    tekken3_stage_select_arena
+    tekken3_stage_select_music
+    tekken3_stage_select_choice
+    tekken3_game_options_add
+    tekken3_game_options_value
+    tekken3_stage_source_decide
+    tekken3_stage_source_load_arena
+    tekken3_arcade_stages_thunder_mix
+    tekken3_arcade_stages_thunder_stop
+    # TMST add-on bridged chains (not previously wrapped on Switch)
+    fopen
+    func_800780BC
+    func_8004A6BC
+    func_8003A818
+    func_800826E8
 )
 foreach(_sym IN LISTS TEKKEN3_WRAP_SYMBOLS)
     target_link_options(tekken3_nx PRIVATE "-Wl,--wrap=${_sym}")
 endforeach()
 
+# Encadenar wrappers de TMST delante de los wrappers existentes de Tekken 3 Expanded
+add_custom_command(TARGET tekken3_nx PRE_LINK
+    COMMAND "${Python3_EXECUTABLE}" "${TMST_DIR}/dev/tmst_chain.py"
+        --objcopy "${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-objcopy"
+        --nm "${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-nm"
+        --objdir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/tekken3_nx.dir"
+        --state "${CMAKE_CURRENT_BINARY_DIR}/tmst_chain_state.json"
+        func_8006AE14
+        func_80028CD4
+        tekken3_outfits_input
+        spu_render
+        spu_set_host_mix_volume
+        func_80048240
+        func_8004F0E4
+        func_8004439C
+        func_80050450
+        func_8006D014
+        func_80049848
+        func_80036CAC
+        func_80064E10
+    COMMENT "Encadenando wrappers TMST con objcopy..."
+    VERBATIM
+)
+
 # Generar metadata NACP para Horizon OS
 nx_generate_nacp(tekken3_nx.nacp
     NAME "Tekken 3: Definitive Edition"
     AUTHOR "markaurel13"
-    VERSION "1.0.0"
+    VERSION "1.5.1"
 )
 
 # Empaquetar el ELF final en formato Homebrew .NRO con RomFS e icono

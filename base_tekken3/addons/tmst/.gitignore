@@ -1,0 +1,22 @@
+﻿# out-of-tree developer builds (dev shim)
+/dev/build/
+# the release export (platform ZIPs): the developer's own tool, stays local
+/dev/export.py
+/docs/INVENTORY.md
+/docs/API_GAPS.md
+/docs/cutscene_recipe.md
+# the add-on's data made on the player's machine (setup): never committed
+/workspace/
+# handoffs and their test scripts stay local
+/docs/handoffs/
+# Photo Mode's pictures, made on the player's machine: never committed
+/screenshots/
+# Python's caches (tools/, tests/)
+__pycache__/
+*.py[cod]
+# Claude Code's local settings
+/.claude/settings.local.json
+# the system's own files
+Thumbs.db
+desktop.ini
+.DS_Store

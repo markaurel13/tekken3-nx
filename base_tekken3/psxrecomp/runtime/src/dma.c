@@ -842,7 +842,6 @@ static uint32_t execute_ch2_gpu(void) {
                 is_wolf = (a >= g_wolf_dma_start && a < g_wolf_dma_end);
             }
             if (emit && num_words > 0) {
-                gpu_set_gp0_linked_list_node(addr, num_words);
                 actual_words += 1u;
                 if (fast_words) {
                     gpu_write_gp0_fast_packet(word_addr, fast_words, num_words);

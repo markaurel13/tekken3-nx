@@ -1,0 +1,24 @@
+format_version = 5
+id = "tmst.jukebox"
+version = "1.0.0"
+name = "Jukebox"
+author = "TMST"
+description = "Each fighter's music, chosen from all the music this install has: a JUKEBOX row at the end of the main menu opens the Team Battle grid, where every fighter gets a piece from the Tekken 3 disc (Console and Arcade) and, with Tekken 2 Content's Music on, Tekken 1 and Tekken 2 music. Restart after toggling this package."
+license = "PolyForm-Noncommercial-1.0.0"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLUS-00402"
+exe_sha256 = "fbda8b68e5799dbef4af39a161783bc670c15b0aa0e87dce65e210717da19b8c"
+
+[[feature]]
+id = "jukebox"
+name = "Jukebox"
+description = "JUKEBOX at the end of the main menu: pick each fighter's music (L2/R2 category, TRIANGLE preview, CROSS assign, SQUARE default, CIRCLE back; on leaving, SAVE?). A fighter with a choice plays it in its fights."
+group = "TMST"
+default_enabled = false
+
+[[plugin]]
+feature = "jukebox"
+id = "tmst.jukebox"

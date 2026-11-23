@@ -287,7 +287,7 @@ static uint16_t turn_keys(unsigned p,uint16_t buttons,uint16_t edges) {
     uint16_t pressed=(uint16_t)~buttons;
     taken[p]&=pressed;
     uint16_t press=edges&(PAD_TRIANGLE|THIRD_COSTUME_KEYS)&(uint16_t)~taken[p];
-    if(press && active() && selector_open() && !tekken3_stage_select_open() && tekken3_outfits_menu_player()!=(int)p) {
+    if(press && active() && selector_open() && !tekken3_stage_select_open() && !tekken3_outfits_captures_input((int)p)) {
         unsigned slot=driven_by(p),under=cursor_character(slot);
         if(!card[slot] && inject[slot]<=0 && !confirmed(slot) && under<NATIVES &&
            (psx_mod_read_word(0x80097ef4)>>under&1) && tekken3_ttt1_native_rp_model(under)) {

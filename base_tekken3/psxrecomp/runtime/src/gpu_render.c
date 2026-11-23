@@ -191,10 +191,16 @@ void gr_set_texture_window(uint32_t raw)             { if (g_b->set_texture_wind
 void gr_set_color_modulation(int r, int g, int b, int raw) { if (g_b->set_color_modulation) g_b->set_color_modulation(r, g, b, raw); }
 void gr_set_precise_triangle(int enabled, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
                              int32_t x2, int32_t y2) {
+    static int s_last_precise = -1;
+    if (!enabled && s_last_precise == 0) return;
+    s_last_precise = enabled ? 1 : 0;
     if (g_b->set_precise_triangle)
         g_b->set_precise_triangle(enabled, x0, y0, x1, y1, x2, y2);
 }
 void gr_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
+    static int s_last_persp = -1;
+    if (!enabled && s_last_persp == 0) return;
+    s_last_persp = enabled ? 1 : 0;
     if (g_b->set_perspective_triangle)
         g_b->set_perspective_triangle(enabled, q0, q1, q2);
 }

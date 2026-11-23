@@ -1,0 +1,48 @@
+# Checks that need no disc: the game itself cannot be built here (its code is
+# generated from the player's Tekken 3 disc), so the full build and the smoke
+# test run on the developer's machine (check_upstream.cmd).
+name: checks
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 5 * * *'
+jobs:
+  repo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: numpy, Pillow (the setup's python_packages; the Expanded's pins for 3.12)
+        run: python -m pip install --disable-pip-version-check numpy==2.3.5 pillow==12.0.0
+      - name: Manifests, sources, no game data
+        run: python tools/check_repo.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+  expanded:
+    # The Expanded's latest release and main: our shim still finds what it needs.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ref: [latest-release, main]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: addon
+      - uses: actions/checkout@v4
+        with:
+          repository: omarma/tekken3-expanded
+          path: expanded
+          fetch-depth: 0
+      - name: Select the Expanded's ref
+        run: |
+          cd expanded
+          if [ "${{ matrix.ref }}" = latest-release ]; then git checkout "$(git describe --tags --abbrev=0 origin/main)"; fi
+          git log -1 --oneline
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Surfaces the add-on relies on
+        run: python addon/tools/check_expanded.py expanded
