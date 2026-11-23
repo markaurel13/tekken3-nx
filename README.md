@@ -67,15 +67,15 @@ sdmc:/
 
 ---
 
-## 🥊 2. Installing Tekken 3 Expanded (v1.4.1)
+## 🥊 2. Installing Tekken 3 Expanded (v1.5.1)
 
 **Tekken 3 Expanded** upgrades your game into the ultimate fighting experience:
-- **18 Additional Fighters from TTT1:** Kazuya, Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more.
-- **28 Arcade & TTT 3D Stages:** Full 3D geometry stages from the arcade versions of Tekken 3 (13 stages) and Tekken Tag Tournament (15 stages).
-- **Remastered PS2 Stage BGM:** High-fidelity remastered stage music from the PS2 release (`ps2-music.ttp`).
-- **TTT Ending Cinematics & Embu:** Fully authentic in-engine endings and cinematics.
-- **Alternate Costume Selector & Standalone Outfits:** 7 extra character outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate outfit selection with PC HD textures.
-- **New Stage selector on VS MODE:** You can now choose which specific stage you would like to fight on in VS MODE.
+- **18 Additional Fighters from TTT1 + Classic Arcade Models:** Kazuya, Jun Kazama, Devil, Angel, Kunimitsu, Michelle, Baek, Bruce, Wang, Roger, Alex, Armor King, Tetsujin, Unknown, and more — plus TTT1 arcade models and **Tekken 5: Dark Resurrection** costumes for Jin.
+- **51 Playable 3D Stages:** 13 Tekken 3 Arcade stages, 15 Tekken Tag Arcade stages, and **23 Tekken 2 Classic & Remake stages** (with Classic/Remake mode, reflections, dynamic lighting, and environmental effects).
+- **Tournament Mode, Photo Mode & Jukebox:** Full 8-player Tournament Mode, in-game Photo Mode (free camera, filters, blur & screenshots), and Jukebox featuring Tekken 1, 2, 3, TTT1, and **Tekken 5: Dark Resurrection** soundtracks.
+- **Remastered PS2 Stage BGM & Cinematics:** High-fidelity PS2 stage music (`ps2-music.ttp`), authentic TTT endings/embu, and PS2 Devil/Angel laser effects.
+- **Outfit Menu & Bonus Costumes:** 7 standalone outfits (Anna Jessica Rabbit, Eddy Monochrome, Heihachi Tiger Coat, Julia Blue, Kuma Polar Bear, Nina White Satin, Xiaoyu Cherry Blossom) plus full alternate costume selection with HD portraits.
+- **Stage Selector & VS Plus:** Direct stage selection in VS & Practice modes, plus expanded VS Plus modes.
 
 To install Tekken 3 Expanded easily, use the official **Web Installer**:
 
@@ -83,12 +83,13 @@ To install Tekken 3 Expanded easily, use the official **Web Installer**:
 
 ### How to use the Web Installer:
 1. Open the Web Installer in your browser: [https://markaurel13.github.io/tekken3-nx/](https://markaurel13.github.io/tekken3-nx/)
-2. Drag and drop your legal ROM/disc files:
+2. Drag and drop all 4 required legal ROM/disc files:
    - 🕹️ **Tekken 3 Arcade ROM** (`tekken3.zip` — Namco System 12 MAME set)
    - 🕹️ **Tekken Tag Tournament Arcade ROM** (`tektagt.zip` — Namco System 12 MAME set)
    - 💿 **Tekken Tag Tournament PS2 Disc** (`SLUS-20001` — `.iso` or `.bin` USA v1.00 or v2.00)
-3. Click **⚡ Build Switch Package**. The installer will extract the remastered PS2 music and integrate all 16 mod packages right inside your browser.
-4. When finished, extract the generated zip and copy the `switch` folder onto the root of your Switch microSD card (`sdmc:/`).
+   - 📀 **Tekken 5: Dark Resurrection (PSP)** (UMD `.iso` — USA / EUR / JPN)
+3. Click **⚡ Build Switch Package**. In supported desktop browsers (Chrome / Edge / Brave), choose where to save `tekken3-expanded.zip` — it streams directly to disk with all 22 mod folders and TMST addons.
+4. When finished, extract `tekken3-expanded.zip` and copy the `switch` folder onto the root of your Switch microSD card (`sdmc:/`), then place the latest `tekken3_nx.nro` from GitHub Releases into `sdmc:/switch/tekken3/`.
 
 Your directory structure with Tekken 3 Expanded will look like this:
 
@@ -96,27 +97,42 @@ Your directory structure with Tekken 3 Expanded will look like this:
 sdmc:/
 └── switch/
     └── tekken3/
-        ├── tekken3_nx.nro              # From GitHub Releases
-        ├── config.txt                  # Configuration file
+        ├── tekken3_nx.nro               # From GitHub Releases
+        ├── config.txt                   # Auto-created on first boot
         ├── disc/
         │   └── Tekken 3 (USA).cue / .bin
+        ├── saves/                       # Auto-created for Memory Cards & saves
+        ├── addons/
+        │   └── tmst/
+        │       └── workspace/
+        │           ├── boss-intro/      # Boss intro assets
+        │           ├── t2-music/        # Tekken 2 Jukebox BGM
+        │           ├── t5dr-music/      # Tekken 5 DR Jukebox BGM
+        │           ├── tournament/      # Tournament portraits & assets
+        │           └── ttt-music/       # Tekken Tag Jukebox BGM
         └── mods/
-            ├── anna-jessica-rabbit/    # Anna Jessica Rabbit red dress costume
-            ├── arcade-stages/          # 13 Tekken 3 Arcade 3D stages (.ast)
-            ├── difficulty/             # Authentic arcade difficulty tables
-            ├── eddy-monochrome/        # Eddy monochrome outfit
-            ├── heihachi-tiger-coat/    # Heihachi tiger fur coat costume
-            ├── julia-blue/             # Julia blue denim costume
-            ├── kuma-polar-bear/        # Kuma polar bear costume
-            ├── nina-white-satin/       # Nina white satin dress costume
-            ├── outfit-menu/            # Alternate costume selector & HD portraits
-            ├── ttt1/                   # 18 TTT1 roster fighters, movesets & assets
-            ├── ttt-cinematics/         # Full TTT Endings and Embu (.cine)
-            ├── ttt-music/              # Arcade BGM (music.ttm)
-            ├── ttt-ps2-laser/          # Devil & Angel PS2 lasers and hitsparks
-            ├── ttt-ps2-music/          # 14 Remastered PS2 audio tracks (ps2-music.ttp)
-            ├── ttt-stages/             # 15 Tekken Tag Arcade 3D stages (.ast)
-            └── xiaoyu-cherry-blossom/  # Xiaoyu cherry blossom qipao costume
+            ├── anna-jessica-rabbit/     # Anna Jessica Rabbit red dress costume
+            ├── arcade-stages/           # 13 Tekken 3 Arcade 3D stages (.ast)
+            ├── difficulty/              # Authentic arcade difficulty tables
+            ├── eddy-monochrome/         # Eddy monochrome outfit
+            ├── examples/                # Example mod manifest
+            ├── heihachi-tiger-coat/     # Heihachi tiger fur coat costume
+            ├── julia-blue/              # Julia blue denim costume
+            ├── kuma-polar-bear/         # Kuma polar bear costume
+            ├── local-packages/          # Local mod package manifests
+            ├── nina-white-satin/        # Nina white satin dress costume
+            ├── outfit-menu/             # Alternate costume selector & HD portraits
+            ├── preloaded/               # Preloaded mod manifests
+            ├── t2-stages/               # 23 Tekken 2 Classic & Remake stages
+            ├── test-packages/           # Diagnostic test manifests
+            ├── tmst-data/               # Tournament Mode, Photo Mode, Jukebox
+            ├── ttt1/                    # 18 TTT1 & T5DR fighters, movesets & assets
+            ├── ttt-cinematics/          # Full TTT Endings and Embu (.cine)
+            ├── ttt-music/               # Arcade BGM (music.ttm)
+            ├── ttt-ps2-laser/           # Devil & Angel PS2 lasers and hitsparks
+            ├── ttt-ps2-music/           # 14 Remastered PS2 audio tracks (ps2-music.ttp)
+            ├── ttt-stages/              # 15 Tekken Tag Arcade 3D stages (.ast)
+            └── xiaoyu-cherry-blossom/   # Xiaoyu cherry blossom qipao costume
 ```
 
 ---

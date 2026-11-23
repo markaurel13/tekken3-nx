@@ -14,3 +14,9 @@
 
 ## 3. Monitoreo Activo de Compilaciones
 - **Monitoreo Periódico Cada 15 Minutos**: En cualquier compilación en segundo plano que no finalice inmediatamente, se debe verificar activamente el progreso de los procesos de compilación (`cc1`, `ninja`) cada 15 minutos mediante temporizadores (`schedule`), informando el estado y consumo de recursos para garantizar transparencia y evitar la sensación de congelamiento.
+
+## 4. Gestión Dinámica de Recursos al Compilar (Anti-Congelamiento del Host)
+- **Inspección Previa Obligatoria**: Antes de lanzar cualquier compilación (`ninja`, `make`, `cmake --build`), es obligatorio revisar la carga actual del sistema (`nproc`, `uptime` / load average, `free -h` para RAM/swap disponible y procesos activos como `cc1`, `cc1plus`, `clang`, `ninja`, `make`, `ld`, `rustc`).
+- **Ajuste Dinámico de Hilos (`-j`)**:
+  - **PC libre (sin otras compilaciones activas y RAM suficiente)**: Usar casi toda la capacidad disponible (por ejemplo, `nproc - 1` o `nproc - 2` hilos para dejar margen al sistema/IDE).
+  - **Compilación concurrente o carga/RAM ajustada**: Reducir drásticamente el paralelismo (por ejemplo, `-j1`, `-j2` o como máximo el 25%–50% de los núcleos libres según la RAM disponible) y usar `nice -n 10` / `ionice -c2 -n7` si hace falta, evitando saturar CPU, memoria o swap y previniendo que el equipo se cuelgue.

@@ -70,6 +70,9 @@ export async function buildPackage(inputs, options = {}, sink, log = () => {}, p
     { name: 'ttt1-part3', path: './release/mods/ttt1-part3.zip', target: 'mods/ttt1' },
     { name: 'ttt1-part4', path: './release/mods/ttt1-part4.zip', target: 'mods/ttt1' },
     { name: 'ttt1-part5', path: './release/mods/ttt1-part5.zip', target: 'mods/ttt1' },
+    { name: 'ttt1-part6', path: './release/mods/ttt1-part6.zip', target: 'mods/ttt1' },
+    { name: 't2-stages', path: './release/mods/t2-stages.zip', target: 'mods/t2-stages' },
+    { name: 'tmst-data', path: './release/mods/tmst-data.zip', target: 'mods/tmst-data' },
     { name: 'outfit-menu', path: './release/mods/outfit-menu.zip', target: 'mods/outfit-menu' },
     { name: 'anna-jessica-rabbit', path: './release/mods/anna-jessica-rabbit.zip', target: 'mods/anna-jessica-rabbit' },
     { name: 'eddy-monochrome', path: './release/mods/eddy-monochrome.zip', target: 'mods/eddy-monochrome' },
@@ -77,7 +80,23 @@ export async function buildPackage(inputs, options = {}, sink, log = () => {}, p
     { name: 'julia-blue', path: './release/mods/julia-blue.zip', target: 'mods/julia-blue' },
     { name: 'kuma-polar-bear', path: './release/mods/kuma-polar-bear.zip', target: 'mods/kuma-polar-bear' },
     { name: 'nina-white-satin', path: './release/mods/nina-white-satin.zip', target: 'mods/nina-white-satin' },
-    { name: 'xiaoyu-cherry-blossom', path: './release/mods/xiaoyu-cherry-blossom.zip', target: 'mods/xiaoyu-cherry-blossom' }
+    { name: 'xiaoyu-cherry-blossom', path: './release/mods/xiaoyu-cherry-blossom.zip', target: 'mods/xiaoyu-cherry-blossom' },
+    { name: 'preloaded', path: './release/mods/preloaded.zip', target: 'mods/preloaded' },
+    { name: 'local-packages', path: './release/mods/local-packages.zip', target: 'mods/local-packages' },
+    { name: 'examples', path: './release/mods/examples.zip', target: 'mods/examples' },
+    { name: 'test-packages', path: './release/mods/test-packages.zip', target: 'mods/test-packages' },
+    { name: 'tmst-workspace-part1', path: './release/addons/tmst-workspace-part1.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part2', path: './release/addons/tmst-workspace-part2.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part3', path: './release/addons/tmst-workspace-part3.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part4', path: './release/addons/tmst-workspace-part4.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part5', path: './release/addons/tmst-workspace-part5.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part6', path: './release/addons/tmst-workspace-part6.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part7', path: './release/addons/tmst-workspace-part7.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part8', path: './release/addons/tmst-workspace-part8.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part9', path: './release/addons/tmst-workspace-part9.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part10', path: './release/addons/tmst-workspace-part10.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part11', path: './release/addons/tmst-workspace-part11.zip', target: 'addons/tmst/workspace' },
+    { name: 'tmst-workspace-part12', path: './release/addons/tmst-workspace-part12.zip', target: 'addons/tmst/workspace' }
   ];
 
   log("Downloading and integrating complete mod bundles...");
@@ -129,10 +148,9 @@ export async function buildPackage(inputs, options = {}, sink, log = () => {}, p
       await zip.add(entry.path, entry.file);
       bytesDone += entry.size;
     }
-    progress(0.80 + (bytesDone / totalCalculated) * 0.19);
+    progress(0.80 + (bytesDone / totalCalculated) * 0.10);
   }
 
   await zip.finish();
-  progress(1.0);
-  log("✓ Switch package created successfully! Download ready.");
+  progress(0.90);
 }

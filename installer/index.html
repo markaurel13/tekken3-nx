@@ -542,7 +542,7 @@
         <div class="drop-icon-symbol">📦</div>
       </div>
       <div class="drop-title">Drag & Drop Your Files Here</div>
-      <div class="drop-sub">Drop <strong>tekken3.zip</strong>, <strong>tektagt.zip</strong> and your <strong>Tekken Tag PS2 ISO</strong> (or a single .zip / .7z archive containing them)</div>
+      <div class="drop-sub">Drop <strong>tekken3.zip</strong>, <strong>tektagt.zip</strong>, your <strong>Tekken Tag PS2 ISO</strong>, and your <strong>Tekken 5: Dark Resurrection PSP ISO</strong></div>
       
       <div class="browse-actions">
         <label class="btn-secondary">
@@ -590,6 +590,14 @@
         </div>
         <div class="status-badge bad" id="badgeTttPs2">✗ Not detected</div>
       </div>
+
+      <div class="checklist-item">
+        <div class="item-info">
+          <div class="item-name">Tekken 5: Dark Resurrection (PSP)</div>
+          <div class="item-hint">UMD ISO image (USA / EUR / JPN)</div>
+        </div>
+        <div class="status-badge bad" id="badgeT5Dr">✗ Not detected</div>
+      </div>
     </div>
 
     <!-- Primary action button -->
@@ -610,24 +618,48 @@
       <div class="result-title">
         🎉 <span>Package Built Successfully!</span>
       </div>
-      <p>Your file <strong>tekken3-expanded.zip</strong> has been downloaded. Extract it and copy the <code>switch</code> folder directly to the root of your microSD card (<code>sdmc:/</code>).</p>
+      <p id="resultSummary">Your file <strong>tekken3-expanded.zip</strong> has been downloaded. Extract it and copy the <code>switch</code> folder directly to the root of your microSD card (<code>sdmc:/</code>).</p>
       <button type="button" class="btn-secondary" id="btnDownloadAgain" style="width: fit-content; margin: 4px 0 8px;">
         📥 <span>Download tekken3-expanded.zip Again</span>
       </button>
       <pre class="tree-box">sdmc:/
 └── switch/
     └── tekken3/
-        ├── tekken3_nx.nro       [From GitHub Releases]
-        ├── disc/                [Place your base Tekken 3 PS1 .bin/.cue here]
+        ├── tekken3_nx.nro               [Download latest .nro from GitHub Releases]
+        ├── config.txt                   [Auto-created on first boot]
+        ├── disc/                        [Place your base Tekken 3 PS1 .bin/.cue here]
+        ├── saves/                       [Auto-created for Memory Cards &amp; saves]
+        ├── addons/
+        │   └── tmst/
+        │       └── workspace/
+        │           ├── boss-intro/      [Boss Intro Assets]
+        │           ├── t2-music/        [Tekken 2 Jukebox BGM]
+        │           ├── t5dr-music/      [Tekken 5 DR Jukebox BGM]
+        │           ├── tournament/      [Tournament Portraits &amp; Assets]
+        │           └── ttt-music/       [Tekken Tag Jukebox BGM]
         └── mods/
-            ├── arcade-stages/   [13 Tekken 3 3D Arcade Stages]
-            ├── ttt-stages/      [15 Tekken Tag 3D Arcade Stages]
-            ├── ttt-ps2-music/   [14 Remastered PS2 Stage BGM tracks]
-            ├── ttt-music/       [Namco System 12 Arcade BGM]
-            ├── ttt-cinematics/  [TTT Endings & Cinematics]
-            ├── outfit-menu/     [Costume Selector & Gallery]
-            ├── ttt1/            [TTT1 Characters & Movesets]
-            └── ...              [All 16 Mod packs installed]</pre>
+            ├── arcade-stages/           [13 Tekken 3 3D Arcade Stages]
+            ├── ttt-stages/              [15 Tekken Tag 3D Arcade Stages]
+            ├── t2-stages/               [23 Tekken 2 Classic &amp; Remake Stages]
+            ├── tmst-data/               [Tournament Mode, Photo Mode, Jukebox]
+            ├── ttt-ps2-music/           [14 Remastered PS2 Stage BGM tracks]
+            ├── ttt-music/               [Namco System 12 Arcade BGM]
+            ├── ttt-ps2-laser/           [PS2 Devil Kazuya &amp; Stage Effects]
+            ├── ttt-cinematics/          [TTT Endings &amp; Cinematics]
+            ├── difficulty/              [Difficulty &amp; AI Scaling]
+            ├── outfit-menu/             [Costume Selector &amp; Gallery]
+            ├── ttt1/                    [TTT1 &amp; Tekken 5 DR Models &amp; Movesets]
+            ├── anna-jessica-rabbit/     [Bonus Costume Mod]
+            ├── eddy-monochrome/         [Bonus Costume Mod]
+            ├── heihachi-tiger-coat/     [Bonus Costume Mod]
+            ├── julia-blue/              [Bonus Costume Mod]
+            ├── kuma-polar-bear/         [Bonus Costume Mod]
+            ├── nina-white-satin/        [Bonus Costume Mod]
+            ├── xiaoyu-cherry-blossom/   [Bonus Costume Mod]
+            ├── preloaded/               [Preloaded Mod Manifests]
+            ├── local-packages/          [Local Mod Package Manifests]
+            ├── examples/                [Example Mod Manifest]
+            └── test-packages/           [Diagnostic Test Manifests]</pre>
     </div>
   </div>
 

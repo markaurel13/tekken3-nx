@@ -11,6 +11,8 @@ dist_sd/
 
 # Disc images / ROMs (too large & copyrighted)
 Tekken 3 (USA)/
+Tekken 2 (USA)/
+switch_copy/
 base_tekken3/disc/
 *.bin
 *.cue
