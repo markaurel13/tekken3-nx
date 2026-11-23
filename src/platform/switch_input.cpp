@@ -10,6 +10,7 @@ extern "C" {
     void sio_set_pad_connected(int slot, int connected);
     void sio_set_pad_state_slot(int slot, uint16_t buttons);
     void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
+    int tmst_vsplus_forced_second_port(void);
     void tekken3_outfits_connect(int player, int connected);
     uint16_t tekken3_outfits_input(int player, uint16_t buttons);
     void host_osd_fps_toggle(void);
@@ -220,6 +221,9 @@ void SwitchInput::Update() {
             // El puerto 1 de PS1 siempre está conectado al Jugador 1
             sio_set_pad_connected(0, 1);
         } else {
+            if (!connected && tmst_vsplus_forced_second_port()) {
+                continue;
+            }
             // El puerto 2 de PS1 se conecta/desconecta dinámicamente cuando se detecta un 2do mando completo
             if (connected != s_p2ConnectedLast) {
                 s_p2ConnectedLast = connected;

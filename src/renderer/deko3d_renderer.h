@@ -161,6 +161,9 @@ public:
     // Sincronización de seguridad con fences GPU antes de lecturas de VRAM
     void WaitPendingFences();
 
+    // Lectura de framebuffer hardware (para Photo Mode)
+    bool ReadDisplayForPhoto(uint32_t** out, int* w, int* h, int* scale, int* side);
+
     struct RenderTimings {
         uint64_t vram_prep_ns = 0;
         uint64_t submit_ns = 0;
@@ -201,9 +204,25 @@ private:
     ~Deko3DRenderer() = default;
 
     bool LoadShader(dk::Shader& shader, dk::MemBlock& block, uint32_t offset, const char* path);
-    void PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2);
+    void PushTriangleSlow(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2);
+    inline void PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2) {
+        if (v0.pos[0] < -2048.0f || v0.pos[0] > 2048.0f || v0.pos[1] < -2048.0f || v0.pos[1] > 2048.0f ||
+            v1.pos[0] < -2048.0f || v1.pos[0] > 2048.0f || v1.pos[1] < -2048.0f || v1.pos[1] > 2048.0f ||
+            v2.pos[0] < -2048.0f || v2.pos[0] > 2048.0f || v2.pos[1] < -2048.0f || v2.pos[1] > 2048.0f) {
+            return;
+        }
+        if (m_vtxAllocated + 3 > MaxVerticesPerFrame) {
+            PushTriangleSlow(v0, v1, v2);
+            return;
+        }
+        m_vtxRingCpu[m_vtxAllocated + 0] = v0;
+        m_vtxRingCpu[m_vtxAllocated + 1] = v1;
+        m_vtxRingCpu[m_vtxAllocated + 2] = v2;
+        m_vtxAllocated += 3;
+    }
     void FlushBatch();
     void SyncRawVram();
+    void SyncRenderTargetToRawVram(int srcImgId, int sx, int sy, int dx, int dy, int w, int h);
     void DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
                       int vx, int vy, int dw, int dh,
                       uint32_t outW, uint32_t outH,
@@ -239,6 +258,7 @@ private:
     dk::MemBlock m_memImages;
     dk::MemBlock m_memCode;
     dk::MemBlock m_memData;
+    dk::MemBlock m_memVtx;
     dk::MemBlock m_memStaging;
 
     dk::Image m_framebuffers[NumFramebuffers];
@@ -248,6 +268,7 @@ private:
     dk::Image m_osdImage;      // 1024x1024 RGBA8_Unorm Superposición OSD (carrusel de trajes/retratos y avisos)
     dk::Image m_skinImages[T3_SKIN_COUNT]; // Texturas de atlases HD de los 7 personajes
     bool m_skinLoaded[T3_SKIN_COUNT] = { false };
+    uint8_t m_skinRowMask[8] = { 0 };
     HdTextureMap* m_skinMap = nullptr;
 
     void LoadAllHdSkinPacks(uint64_t& curImgOffset);
@@ -255,6 +276,9 @@ private:
 
     dk::Shader m_vsh;
     dk::Shader m_fsh;
+    dk::Shader m_vramCopyCsh;
+    bool m_vramCopyCshLoaded = false;
+    bool m_offscreenRenderActive = false;
 
     int m_curSlot = 0;
 
@@ -280,6 +304,7 @@ private:
     DkGpuAddr m_viewportUboGpu = 0;
     DkGpuAddr m_wideViewportUboGpuPool[NumFrameResources] = {0, 0};
     DkGpuAddr m_wideViewportUboGpu = 0;
+    DkGpuAddr m_copyUboGpu = 0;
 
     uint32_t* m_vramStagingCpu = nullptr;
     DkGpuAddr m_vramStagingGpu = 0;

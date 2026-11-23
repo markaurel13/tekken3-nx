@@ -231,6 +231,7 @@ int g_call_unit_depth = 0;
 uint64_t g_dispatch_static_hits = 0;
 void (*g_overlay_flush_pending_cycles)(void) = NULL;
 CPUState* debug_cpu_ptr = NULL;
+uint32_t debug_guest_pc(void) { return debug_cpu_ptr ? debug_cpu_ptr->pc : 0; }
 uint32_t debug_guest_ra(void) { return debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0; }
 uint32_t debug_guest_sp(void) { return debug_cpu_ptr ? debug_cpu_ptr->gpr[29] : 0; }
 uint32_t psx_nd_wood_batch_ot(void) { return 0; }
@@ -662,6 +663,15 @@ extern uint64_t g_prof_iso_raw_read_ns;
 
 extern uint64_t g_prof_audio_spu_ns;
 extern uint64_t g_prof_audio_audren_ns;
+extern "C" {
+extern uint64_t g_t2_extras_draw_ns;
+extern uint64_t g_t2_own_tiles_ns;
+extern uint64_t g_t2_objects_ns;
+extern uint64_t g_t2_fx_ns;
+extern uint64_t g_t2_stage_wrap_ns;
+extern uint64_t g_t2_arcade_stages_ns;
+}
+extern uint64_t g_dk_draw_ticks;
 extern uint64_t g_prof_audio_underruns;
 
 extern uint64_t g_prof_exp_floor_ns;
@@ -720,46 +730,59 @@ static void prof_thread_fn(void*) {
     u64 last_frame_change_tick = armGetSystemTick();
     uint32_t stall_alert_count = 0;
 
+    uint32_t watchdog_div = 0;
     while (s_prof_run) {
         int ph = g_exec_phase;
         if (ph < 0 || ph >= PROF_PHASES) ph = 0;
         s_prof_phase_cnt[ph] = s_prof_phase_cnt[ph] + 1;
+        uint32_t pc = g_prof_pc;
+        if (pc) {
+            uint32_t idx = (pc >> 2) & (PROF_PC_SLOTS - 1);
+            for (int p = 0; p < 16; p++) {
+                uint32_t slot = (idx + p) & (PROF_PC_SLOTS - 1);
+                if (s_prof_pc_key[slot] == pc) { s_prof_pc_cnt[slot]++; break; }
+                if (s_prof_pc_key[slot] == 0) { s_prof_pc_key[slot] = pc; s_prof_pc_cnt[slot] = 1; break; }
+            }
+        }
 
         // Watchdog activo cada ~100 ms
-        u64 now_tick = armGetSystemTick();
-        uint64_t cur_frame = s_frame_count;
+        if (++watchdog_div >= 100) {
+            watchdog_div = 0;
+            u64 now_tick = armGetSystemTick();
+            uint64_t cur_frame = s_frame_count;
 
-        if (cur_frame != last_seen_frame) {
-            last_seen_frame = cur_frame;
-            last_frame_change_tick = now_tick;
-            stall_alert_count = 0;
-        } else if (cur_frame > 100) { // Evaluar unicamente tras el arranque
-            u64 stall_ms = armTicksToNs(now_tick - last_frame_change_tick) / 1000000ULL;
-            if (stall_ms >= 1500) { // Main thread bloqueado por mas de 1.5 segundos
-                stall_alert_count++;
-                if (stall_alert_count <= 10 || (stall_alert_count % 10) == 0) {
-                    printf("\n[WATCHDOG_ALERT #%u] Main thread STALL! stall=%llu ms at frame=%llu (phase=%d g_prof_pc=0x%08X)\n",
-                           stall_alert_count, (unsigned long long)stall_ms, (unsigned long long)cur_frame, ph, g_prof_pc);
-                    if (debug_cpu_ptr) {
-                        printf("  [CPU] pc=0x%08X ra=0x%08X sp=0x%08X v0=0x%08X a0=0x%08X\n",
-                               debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29],
-                               debug_cpu_ptr->gpr[2], debug_cpu_ptr->gpr[4]);
-                    }
-                    if (g_disp_tail_seq > 0) {
-                        printf("  [Tail Dispatches]:\n");
-                        uint64_t tcount = g_disp_tail_seq < 5 ? g_disp_tail_seq : 5;
-                        for (uint64_t i = g_disp_tail_seq - tcount; i < g_disp_tail_seq; i++) {
-                            const DispTailEntry* t = &g_disp_tail[i % DISP_TAIL_CAP];
-                            printf("    [%llu] target=0x%08X ra=0x%08X sp=0x%08X cyc=%llu\n",
-                                   (unsigned long long)i, t->target, t->ra, t->sp, (unsigned long long)t->cycle);
+            if (cur_frame != last_seen_frame) {
+                last_seen_frame = cur_frame;
+                last_frame_change_tick = now_tick;
+                stall_alert_count = 0;
+            } else if (cur_frame > 100) { // Evaluar unicamente tras el arranque
+                u64 stall_ms = armTicksToNs(now_tick - last_frame_change_tick) / 1000000ULL;
+                if (stall_ms >= 1500) { // Main thread bloqueado por mas de 1.5 segundos
+                    stall_alert_count++;
+                    if (stall_alert_count <= 10 || (stall_alert_count % 10) == 0) {
+                        printf("\n[WATCHDOG_ALERT #%u] Main thread STALL! stall=%llu ms at frame=%llu (phase=%d g_prof_pc=0x%08X)\n",
+                               stall_alert_count, (unsigned long long)stall_ms, (unsigned long long)cur_frame, ph, g_prof_pc);
+                        if (debug_cpu_ptr) {
+                            printf("  [CPU] pc=0x%08X ra=0x%08X sp=0x%08X v0=0x%08X a0=0x%08X\n",
+                                   debug_cpu_ptr->pc, debug_cpu_ptr->gpr[31], debug_cpu_ptr->gpr[29],
+                                   debug_cpu_ptr->gpr[2], debug_cpu_ptr->gpr[4]);
                         }
+                        if (g_disp_tail_seq > 0) {
+                            printf("  [Tail Dispatches]:\n");
+                            uint64_t tcount = g_disp_tail_seq < 5 ? g_disp_tail_seq : 5;
+                            for (uint64_t i = g_disp_tail_seq - tcount; i < g_disp_tail_seq; i++) {
+                                const DispTailEntry* t = &g_disp_tail[i % DISP_TAIL_CAP];
+                                printf("    [%llu] target=0x%08X ra=0x%08X sp=0x%08X cyc=%llu\n",
+                                       (unsigned long long)i, t->target, t->ra, t->sp, (unsigned long long)t->cycle);
+                            }
+                        }
+                        if (s_sd_log) fflush(s_sd_log);
                     }
-                    if (s_sd_log) fflush(s_sd_log);
                 }
             }
         }
 
-        svcSleepThread(100000000);   /* 100 ms */
+        svcSleepThread(1000000);   /* 1 ms (1000 Hz sampling) */
     }
 }
 
@@ -1771,7 +1794,8 @@ static void switch_vblank_callback(void) {
     double cur_guest_ms = (double)cur_guest_ns / 1e6;
     double cur_loop_ms = (double)cur_loop_ns / 1e6;
 
-    if (repeated_frames > 0 && s_frame_count > 10) {
+    static constexpr bool kEnableVerbosePerfTelemetry = false;
+    if (kEnableVerbosePerfTelemetry && repeated_frames > 0 && s_frame_count > 10) {
         printf("[HW_STUTTER] f=%llu real_ms=%.2fms (vsyncs=%u -> %u frame(s) repetido(s) en pantalla!) | guest=%.2fms loop=%.2fms (audio=%.2fms render=%.2fms input=%.2fms other=%.2fms)\n",
                (unsigned long long)s_frame_count, real_frame_ms, (unsigned)hw_vsyncs_passed, repeated_frames,
                cur_guest_ms, cur_loop_ms,
@@ -1894,6 +1918,38 @@ static void switch_vblank_callback(void) {
                (double)rt.vram_fence_wait_ns / rt_denom / 1e6,
                (double)rt.vram_upload_ns / rt_denom / 1e6,
                (unsigned)((double)rt.vram_upload_bytes / rt_denom / 1024.0));
+        {
+            static uint64_t s_gb_dev_tot = 0, s_gb_dma = 0, s_gb_cd = 0, s_gb_tmr = 0, s_gb_irq = 0, s_gb_sched = 0;
+            static uint64_t s_gb_spu = 0, s_gb_t2 = 0, s_gb_t2_tiles = 0, s_gb_t2_obj = 0, s_gb_t2_fx = 0;
+            static uint64_t s_gb_stg = 0, s_gb_arc = 0, s_gb_dk = 0, s_gb_walk = 0, s_gb_pre = 0;
+            double d_dev = (double)(g_prof_dev_total_ns - s_gb_dev_tot) / denom / 1e6;
+            double d_dma = (double)(g_prof_dev_dma_ns - s_gb_dma) / denom / 1e6;
+            double d_cd  = (double)(g_prof_dev_cdrom_ns - s_gb_cd) / denom / 1e6;
+            double d_tmr = (double)(g_prof_dev_timers_ns - s_gb_tmr) / denom / 1e6;
+            double d_irq = (double)(g_prof_dev_irq_ns - s_gb_irq) / denom / 1e6;
+            double d_sch = (double)(g_prof_dev_sched_ns - s_gb_sched) / denom / 1e6;
+            double d_spu = (double)(g_prof_audio_spu_ns - s_gb_spu) / denom / 1e6;
+            double d_t2  = (double)(g_t2_extras_draw_ns - s_gb_t2) / denom / 1e6;
+            double d_t2t = (double)(g_t2_own_tiles_ns - s_gb_t2_tiles) / denom / 1e6;
+            double d_t2o = (double)(g_t2_objects_ns - s_gb_t2_obj) / denom / 1e6;
+            double d_t2f = (double)(g_t2_fx_ns - s_gb_t2_fx) / denom / 1e6;
+            double d_stg = (double)(g_t2_stage_wrap_ns - s_gb_stg) / denom / 1e6;
+            double d_arc = (double)(g_t2_arcade_stages_ns - s_gb_arc) / denom / 1e6;
+            double d_dk  = (double)armTicksToNs(g_dk_draw_ticks - s_gb_dk) / denom / 1e6;
+            double d_wlk = (double)(g_prof_dma2_walk_ns - s_gb_walk) / denom / 1e6;
+            double d_pre = (double)(g_prof_dma2_prepass_ns - s_gb_pre) / denom / 1e6;
+            double d_guest = (double)s_win_guest_ns / denom / 1e6;
+            printf("[GuestBreak] win%llu: stg=%.3fms (arc=%.3fms t2_extras=%.3fms [tiles=%.3fms obj=%.3fms fx=%.3fms]) | dma2(pre=%.3fms walk=%.3fms dk=%.3fms) | spu=%.3fms | cpu_other=%.3fms\n",
+                   (unsigned long long)report_interval,
+                   d_stg, d_arc, d_t2, d_t2t, d_t2o, d_t2f,
+                   d_pre, d_wlk, d_dk, d_spu, d_guest - d_stg - d_pre - d_wlk);
+            s_gb_dev_tot = g_prof_dev_total_ns; s_gb_dma = g_prof_dev_dma_ns; s_gb_cd = g_prof_dev_cdrom_ns;
+            s_gb_tmr = g_prof_dev_timers_ns; s_gb_irq = g_prof_dev_irq_ns; s_gb_sched = g_prof_dev_sched_ns;
+            s_gb_spu = g_prof_audio_spu_ns; s_gb_t2 = g_t2_extras_draw_ns;
+            s_gb_t2_tiles = g_t2_own_tiles_ns; s_gb_t2_obj = g_t2_objects_ns; s_gb_t2_fx = g_t2_fx_ns;
+            s_gb_stg = g_t2_stage_wrap_ns; s_gb_arc = g_t2_arcade_stages_ns; s_gb_dk = g_dk_draw_ticks;
+            s_gb_walk = g_prof_dma2_walk_ns; s_gb_pre = g_prof_dma2_prepass_ns;
+        }
 
         double gpu_denom = rt.gpu_hw_samples ? (double)rt.gpu_hw_samples : 1.0;
         printf("[GpuHW] win%llu: gpu_total=%.3fms (draw=%.3fms pres=%.3fms) | frag_inv=%.1fk prims=%.1f | vtx=%.1f batches=%.1f | xfer=%.1f copy=%.1f fill=%.1f high_wr=%.1f\n",
@@ -1992,7 +2048,9 @@ static void switch_vblank_callback(void) {
         fps_wall_report(s_frame_count);
         clock_telem_report();
         switch_audio_telemetry_report();
-        prof_report(s_frame_count);
+        if (kEnableVerbosePerfTelemetry) {
+            prof_report(s_frame_count);
+        }
         // tek_block_prof_report_and_reset(s_frame_count);   // sigue desactivado (muy verboso)
     } else if (s_frame_count == 5) {
         switch_audio_telemetry_report();   // fija la linea base de la telemetria de audio
@@ -2193,6 +2251,12 @@ static void load_or_create_config(int argc, char* argv[]) {
 // ============================================================================
 // Detección Universal de Disco (.cue, .bin, .iso, .chd)
 // ============================================================================
+static std::string s_mounted_disc_path;
+
+extern "C" const char* switch_get_mounted_disc_path(void) {
+    return s_mounted_disc_path.empty() ? nullptr : s_mounted_disc_path.c_str();
+}
+
 static bool try_mount_disc_file(const std::string& path, std::string& out_mounted) {
     if (path.empty()) return false;
     FILE* f = fopen(path.c_str(), "rb");
@@ -2207,6 +2271,7 @@ static bool try_mount_disc_file(const std::string& path, std::string& out_mounte
 
     if (cdrom_has_disc()) {
         out_mounted = path;
+        s_mounted_disc_path = path;
         printf("[DiscDetect] [+] ¡Montaje exitoso!\n");
         return true;
     }

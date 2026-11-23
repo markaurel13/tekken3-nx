@@ -59,6 +59,21 @@ int switch_get_true_widescreen_enabled(void) {
     return s_switch_true_widescreen_enabled;
 }
 
+static int switch_tmst_files_present(void) {
+    static int s_present = -1;
+    if (s_present < 0) {
+        DIR *d1 = opendir("sdmc:/switch/tekken3/mods/tmst-data");
+        DIR *d2 = opendir("sdmc:/switch/tekken3/addons/tmst");
+        if (d1) closedir(d1);
+        if (d2) closedir(d2);
+        s_present = (d1 != NULL && d2 != NULL) ? 1 : 0;
+        if (!s_present) {
+            printf("[ModRuntime] TMST files not found on SD (mods/tmst-data or addons/tmst missing) -> TMST plugins disabled.\n");
+        }
+    }
+    return s_present;
+}
+
 /* Filter out debug/test or intrusive plugins that should stay off by default on Switch */
 static int is_plugin_enabled_on_switch(const char *id) {
     if (!id || !*id) return 0;
@@ -66,6 +81,7 @@ static int is_plugin_enabled_on_switch(const char *id) {
     if (strcmp(id, "tekken3.selector-timer") == 0) return 0;
     if (strcmp(id, "tekken3.true-widescreen") == 0) return s_switch_true_widescreen_enabled;
     if (strcmp(id, "tekken3.fight-camera") == 0) return s_switch_true_widescreen_enabled;
+    if (strncmp(id, "tmst.", 5) == 0) return switch_tmst_files_present();
     return 1;
 }
 

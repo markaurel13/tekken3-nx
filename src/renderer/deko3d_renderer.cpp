@@ -21,6 +21,8 @@ extern "C" {
 #include "cpu_state.h"
 void ensure_outfit_catalog_loaded(void);
 int ws_native_wide_active(void);
+uint32_t debug_guest_pc(void);
+uint32_t debug_guest_ra(void);
 #include "gpu_hd_texture_match.h"
 #include "tekken3_anna_skin_match.h"
 }
@@ -315,7 +317,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     // 1. Crear Device con depurador y Graphics Queue
     m_device = dk::DeviceMaker{}.setCbDebug(DekoDebugCallback).create();
     m_queue = dk::QueueMaker{m_device}
-        .setFlags(DkQueueFlags_Graphics)
+        .setFlags(DkQueueFlags_Graphics | DkQueueFlags_Compute)
         .setCommandMemorySize(1024 * 1024)
         .create();
 
@@ -330,9 +332,14 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
         .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code)
         .create();
 
-    // Bloque para Comandos, Buffers de Vértices, Descriptores y UBOs (32 MB)
+    // Bloque para Comandos, Descriptores y UBOs (32 MB)
     m_memData = dk::MemBlockMaker{m_device, 32 * 1024 * 1024}
         .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+        .create();
+
+    // Bloque dedicado de vértices con caché de CPU activa para evitar write-combine stalls
+    m_memVtx = dk::MemBlockMaker{m_device, NumFrameResources * VertexRingSliceSize}
+        .setFlags(DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached)
         .create();
 
     // Bloque de staging con caché de CPU activa (64 MB)
@@ -401,7 +408,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     // 6. Configurar Textura Raw VRAM (1024x1024 R16_Uint: y=0..511 estándar, y=512..1023 High VRAM)
     dk::ImageLayout rawLayout;
     dk::ImageLayoutMaker{m_device}
-        .setFlags(DkImageFlags_BlockLinear | DkImageFlags_Usage2DEngine)
+        .setFlags(DkImageFlags_BlockLinear | DkImageFlags_Usage2DEngine | DkImageFlags_UsageLoadStore)
         .setFormat(DkImageFormat_R16_Uint)
         .setDimensions(VramWidth, RawVramHeight)
         .initialize(rawLayout);
@@ -434,11 +441,16 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     // 8. Cargar Shaders compilados
     uint32_t vshOffset = 0;
     uint32_t fshOffset = 0x1000;
+    uint32_t cshOffset = 0x4000;
     if (!LoadShader(m_vsh, m_memCode, vshOffset, "romfs:/shaders/psx_vsh.dksh")) {
         printf("[Deko3D] Error crítico: fallo al cargar romfs:/shaders/psx_vsh.dksh\n");
     }
     if (!LoadShader(m_fsh, m_memCode, fshOffset, "romfs:/shaders/psx_fsh.dksh")) {
         printf("[Deko3D] Error crítico: fallo al cargar romfs:/shaders/psx_fsh.dksh\n");
+    }
+    m_vramCopyCshLoaded = LoadShader(m_vramCopyCsh, m_memCode, cshOffset, "romfs:/shaders/vram_to_raw.dksh");
+    if (!m_vramCopyCshLoaded) {
+        printf("[Deko3D] Aviso: no se pudo cargar romfs:/shaders/vram_to_raw.dksh\n");
     }
 
     // 9. Mapear buffers en m_memData (32 MB):
@@ -452,9 +464,12 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     uint8_t* dataCpu = (uint8_t*)m_memData.getCpuAddr();
     DkGpuAddr dataGpu = m_memData.getGpuAddr();
 
+    uint8_t* vtxCpu = (uint8_t*)m_memVtx.getCpuAddr();
+    DkGpuAddr vtxGpu = m_memVtx.getGpuAddr();
+
     for (unsigned i = 0; i < NumFrameResources; i++) {
-        m_vtxRingCpuPool[i] = (PS1Vertex*)(dataCpu + 0x01000000 + i * VertexRingSliceSize);
-        m_vtxRingGpuPool[i] = dataGpu + 0x01000000 + i * VertexRingSliceSize;
+        m_vtxRingCpuPool[i] = (PS1Vertex*)(vtxCpu + i * VertexRingSliceSize);
+        m_vtxRingGpuPool[i] = vtxGpu + i * VertexRingSliceSize;
     }
     m_frameResIdx = 0;
     m_cmdBuf = m_cmdBufPool[0];
@@ -478,6 +493,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     }
     m_viewportUboGpu = m_viewportUboGpuPool[0];
     m_wideViewportUboGpu = m_wideViewportUboGpuPool[0];
+    m_copyUboGpu = dataGpu + 0x01E01200;
 
     m_vramStagingCpu = (uint32_t*)m_memStaging.getCpuAddr();
     m_vramStagingGpu = m_memStaging.getGpuAddr();
@@ -487,7 +503,8 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     dk::ImageView osdView{ m_osdImage };
     dk::ImageView wideView0{ m_wideTextures[0] };
     dk::ImageView wideView1{ m_wideTextures[1] };
-    dk::ImageDescriptor imgDescs[11];
+    dk::ImageView vramTexView{ m_vramTexture };
+    dk::ImageDescriptor imgDescs[12];
     imgDescs[0].initialize(rawView);
     imgDescs[1].initialize(osdView);
     for (int i = 0; i < T3_SKIN_COUNT; i++) {
@@ -500,6 +517,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     }
     imgDescs[9].initialize(wideView0);
     imgDescs[10].initialize(wideView1);
+    imgDescs[11].initialize(vramTexView);
     memcpy(m_imgDescCpu, imgDescs, sizeof(imgDescs));
 
     dk::Sampler samplerNearest;
@@ -520,7 +538,7 @@ bool Deko3DRenderer::Init(uint16_t* vramPtr, uint32_t internalScale, bool widesc
     m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[0], CmdBufferSize);
     m_cmdBuf.pushData(m_imgDescGpu, imgDescs, sizeof(imgDescs));
     m_cmdBuf.pushData(m_smpDescGpu, smpDescs, sizeof(smpDescs));
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 11);
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 12);
     m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Descriptors);
 
@@ -602,6 +620,16 @@ void Deko3DRenderer::BeginFrame() {
     m_timings.gpu_fence_wait_ns += gpu_wait_ns;
     m_curFrameGpuFenceNs = gpu_wait_ns;
 
+    for (int r = 0; r < 8; r++) {
+        uint8_t mask = 0;
+        for (int i = 0; i < T3_SKIN_COUNT; ++i) {
+            if (m_skinLoaded[i] && tekken3_outfits_skin_enabled(i, 504 + r)) {
+                mask |= (uint8_t)(1u << i);
+            }
+        }
+        m_skinRowMask[r] = mask;
+    }
+
     // Leer contadores hardware de GPU del slot recién completado (sin bloquear pipeline)
     if (m_gpuQueryArmed[m_frameResIdx] && m_gpuQueryCpu[m_frameResIdx]) {
         const uint64_t* q = m_gpuQueryCpu[m_frameResIdx];
@@ -674,6 +702,7 @@ void Deko3DRenderer::Shutdown() {
         m_skinMap = nullptr;
     }
     m_memStaging.destroy();
+    m_memVtx.destroy();
     m_memData.destroy();
     m_memCode.destroy();
     m_memImages.destroy();
@@ -689,9 +718,55 @@ void Deko3DRenderer::SetDrawOffset(int x, int y) {
     }
 }
 
+void Deko3DRenderer::SyncRenderTargetToRawVram(int srcImgId, int sx, int sy, int dx, int dy, int w, int h) {
+    if (!m_initialized || !m_vramCopyCshLoaded || w <= 0 || h <= 0) return;
+    if (dx < 0) { w += dx; sx -= dx; dx = 0; }
+    if (dy < 0) { h += dy; sy -= dy; dy = 0; }
+    if (dx + w > (int)VramWidth) w = (int)VramWidth - dx;
+    if (dy + h > (int)VramHeight) h = (int)VramHeight - dy;
+    if (w <= 0 || h <= 0) return;
+
+    struct CopyParams {
+        int32_t rect[4]; // srcX, srcY, dstX, dstY
+        int32_t size[4]; // w, h, scale, 0
+    } params = {
+        { sx, sy, dx, dy },
+        { w, h, (int32_t)(m_internalScale ? m_internalScale : 1u), 0 }
+    };
+
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+    m_cmdBuf.pushConstants(m_copyUboGpu, DK_UNIFORM_BUF_ALIGNMENT, 0, sizeof(params), &params);
+    m_cmdBuf.bindShaders(DkStageFlag_Compute, { &m_vramCopyCsh });
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 12);
+    m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
+    m_cmdBuf.bindTextures(DkStage_Compute, 0, { dkMakeTextureHandle((uint32_t)srcImgId, 0) });
+    m_cmdBuf.bindImages(DkStage_Compute, 0, { dkMakeImageHandle(0) });
+    m_cmdBuf.bindUniformBuffer(DkStage_Compute, 0, m_copyUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
+    m_cmdBuf.dispatchCompute((uint32_t)((w + 15) / 16), (uint32_t)((h + 15) / 16), 1);
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+}
+
 void Deko3DRenderer::SetDrawArea(int x1, int y1, int x2, int y2) {
     if (m_clipX1 != x1 || m_clipY1 != y1 || m_clipX2 != x2 || m_clipY2 != y2) {
         FlushBatch();
+        bool prevOffscreen = (m_clipX1 >= 512);
+        bool nextOffscreen = (x1 >= 512);
+        if (!prevOffscreen && nextOffscreen) {
+            bool useWide = (m_wideCurIdx >= 0 && m_wideMirrorAuthoritative && m_wideW > 0);
+            int srcImgId = useWide ? (9 + m_wideCurIdx) : 11;
+            int srcX = useWide ? m_wideOff : 0;
+            SyncRenderTargetToRawVram(srcImgId, srcX, 0, 0, 0, 368, 480);
+            m_offscreenRenderActive = true;
+        } else if (prevOffscreen && !nextOffscreen) {
+            int rx0 = m_clipX1 < 0 ? 0 : m_clipX1;
+            int ry0 = m_clipY1 < 0 ? 0 : m_clipY1;
+            int rx1 = m_clipX2 >= (int)VramWidth ? (int)VramWidth - 1 : m_clipX2;
+            int ry1 = m_clipY2 >= (int)VramHeight ? (int)VramHeight - 1 : m_clipY2;
+            if (rx1 >= rx0 && ry1 >= ry0) {
+                SyncRenderTargetToRawVram(11, rx0, ry0, rx0, ry0, rx1 - rx0 + 1, ry1 - ry0 + 1);
+            }
+            m_offscreenRenderActive = false;
+        }
         m_clipX1 = x1;
         m_clipY1 = y1;
         m_clipX2 = x2;
@@ -741,7 +816,6 @@ void Deko3DRenderer::SetPerspectiveTriangle(int enabled, float q0, float q1, flo
         m_pq[1] = 0.0f;
         m_pq[2] = 0.0f;
     }
-    sw_set_perspective_triangle(enabled, q0, q1, q2);
 }
 
 void Deko3DRenderer::SetColorModulation(int r, int g, int b, int raw) {
@@ -921,6 +995,8 @@ void Deko3DRenderer::WideFadeWhite(int x, int y, int w, int h) {
     m_vtxRingCpu[m_vtxAllocated + 3] = v1;
     m_vtxRingCpu[m_vtxAllocated + 4] = v3;
     m_vtxRingCpu[m_vtxAllocated + 5] = v2;
+    m_memVtx.flushCpuCache((size_t)m_frameResIdx * VertexRingSliceSize + (size_t)m_vtxAllocated * sizeof(PS1Vertex),
+                           6 * sizeof(PS1Vertex));
     m_vtxAllocated += 6;
     m_vtxBatchStart = m_vtxAllocated;
 
@@ -947,6 +1023,16 @@ void Deko3DRenderer::WideFadeWhite(int x, int y, int w, int h) {
 }
 
 void Deko3DRenderer::WideClear(int base_x, int y, int h, uint16_t color) {
+    // En 1P PAUSE (screenState == 8 y PAUSED != 0), el juego solo redibuja el recuadro superior
+    // del menú de pausa y espera que el resto del escenario permanezca intacto en el framebuffer.
+    // Ignorar limpiezas completas (y=0, h>=480) durante la pausa para no borrar la mitad inferior.
+    if (y == 0 && h >= 480 && color == 0 && psx_mod_game_started()) {
+        int scr = (int)(int16_t)psx_mod_read_half(0x800AE204u);
+        uint32_t paused = psx_mod_read_word(0x80095494u);
+        if (scr == 8 && paused != 0) {
+            return;
+        }
+    }
     int idx = (base_x == 0) ? 0 : 1;
     FlushBatch();
 
@@ -1049,43 +1135,22 @@ int Deko3DRenderer::RenderWideDisplay(uint32_t* out, int pitch, int base_x, int 
 
 static void wrap_diag(const char *what);   /* [Deko3D_Wrap], defined below */
 
-void Deko3DRenderer::PushTriangle(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2) {
-    if (v0.pos[0] < -2048.0f || v0.pos[0] > 2048.0f || v0.pos[1] < -2048.0f || v0.pos[1] > 2048.0f ||
-        v1.pos[0] < -2048.0f || v1.pos[0] > 2048.0f || v1.pos[1] < -2048.0f || v1.pos[1] > 2048.0f ||
-        v2.pos[0] < -2048.0f || v2.pos[0] > 2048.0f || v2.pos[1] < -2048.0f || v2.pos[1] > 2048.0f) {
-        return;
-    }
+void Deko3DRenderer::PushTriangleSlow(const PS1Vertex& v0, const PS1Vertex& v1, const PS1Vertex& v2) {
+    FlushBatch();
+    wrap_diag("vertex-ring");
+    m_queue.submitCommands(m_cmdBuf.finishList());
+    WaitPendingFences();
+    m_queue.waitIdle();
+    m_cmdBuf.clear();
+    m_cmdPoolOffset[m_frameResIdx] = m_cmdPoolBase[m_frameResIdx] + CmdBufferSize;
+    m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[m_frameResIdx], CmdBufferSize);
+    m_vtxAllocated = 0;
+    m_vtxBatchStart = 0;
 
-    if (m_vtxAllocated + 3 > MaxVerticesPerFrame) {
-        FlushBatch();
-        wrap_diag("vertex-ring");
-        m_queue.submitCommands(m_cmdBuf.finishList());
-        WaitPendingFences();
-        m_queue.waitIdle();
-        m_cmdBuf.clear();
-        m_cmdPoolOffset[m_frameResIdx] = m_cmdPoolBase[m_frameResIdx] + CmdBufferSize;
-        m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[m_frameResIdx], CmdBufferSize);
-        m_vtxAllocated = 0;
-        m_vtxBatchStart = 0;
-    }
-
-    m_vtxRingCpu[m_vtxAllocated + 0] = v0;
-    m_vtxRingCpu[m_vtxAllocated + 1] = v1;
-    m_vtxRingCpu[m_vtxAllocated + 2] = v2;
-    m_vtxAllocated += 3;
-
-    float area = fabsf((v1.pos[0] - v0.pos[0]) * (v2.pos[1] - v0.pos[1]) -
-                       (v2.pos[0] - v0.pos[0]) * (v1.pos[1] - v0.pos[1])) * 0.5f;
-    double ak = (double)area * 0.001;
-    uint32_t fl = v0.flags;
-    if (fl & 0x8u) m_timings.area_semi_kpx += ak;
-    if (fl & 0x40u) {
-        if (fl & 0x80u) m_timings.area_high_tex_kpx += ak;
-        else m_timings.area_low_tex_kpx += ak;
-    } else {
-        m_timings.area_untex_kpx += ak;
-    }
-    if (area > 20000.0f) m_timings.big_tris_total++;
+    m_vtxRingCpu[0] = v0;
+    m_vtxRingCpu[1] = v1;
+    m_vtxRingCpu[2] = v2;
+    m_vtxAllocated = 3;
 }
 
 /* [Deko3D_Wrap]: the staging ring's reset, which submits the whole command
@@ -1246,6 +1311,9 @@ void Deko3DRenderer::FlushBatch() {
 
     s_frame_flush_batches++;
 
+    m_memVtx.flushCpuCache((size_t)m_frameResIdx * VertexRingSliceSize + (size_t)m_vtxBatchStart * sizeof(PS1Vertex),
+                           (size_t)count * sizeof(PS1Vertex));
+
     SyncRawVram();
 
     // 1. Configurar Uniforms de Viewport y Texture Window en stack local y pasar vía pushConstants
@@ -1271,10 +1339,11 @@ void Deko3DRenderer::FlushBatch() {
     ubo.wideCenter[2] = 0.0f;
     ubo.wideCenter[3] = 0.0f;
 
-    bool sidecar_only = (m_wideCurIdx >= 0 && m_wideMirrorAuthoritative && !m_widePrimSuppressed && m_wideW > 0);
+    bool offscreenTarget = (m_offscreenRenderActive || m_clipX1 >= 512);
+    bool sidecar_only = (!offscreenTarget && m_wideCurIdx >= 0 && m_wideMirrorAuthoritative && !m_widePrimSuppressed && m_wideW > 0);
     if (sidecar_only) {
         m_timings.batch_sidecar_only++;
-    } else if (m_wideCurIdx >= 0 && !m_widePrimSuppressed && m_wideW > 0) {
+    } else if (!offscreenTarget && m_wideCurIdx >= 0 && !m_widePrimSuppressed && m_wideW > 0) {
         m_timings.batch_dual_target++;
     } else {
         m_timings.batch_cano_only++;
@@ -1326,7 +1395,7 @@ void Deko3DRenderer::FlushBatch() {
     // Shaders, Descriptores y Formato de Vértices
     m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
 
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 11);
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 12);
     m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
     m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
         dkMakeTextureHandle(0, 0),
@@ -1463,7 +1532,7 @@ void Deko3DRenderer::FlushBatch() {
     m_cmdBuf.draw(DkPrimitive_Triangles, count, 1, m_vtxBatchStart, 0);
 
     // 9. NATIVE-WIDE MIRROR PASS (Deko3D Sidecar Pass)
-    if (m_wideCurIdx >= 0 && !m_widePrimSuppressed && m_wideW > 0) {
+    if (!offscreenTarget && m_wideCurIdx >= 0 && !m_widePrimSuppressed && m_wideW > 0) {
         // Render target a la textura wide correspondiente
         dk::ImageView wideTarget{ m_wideTextures[m_wideCurIdx] };
         m_cmdBuf.bindRenderTargets(&wideTarget);
@@ -1574,7 +1643,8 @@ void Deko3DRenderer::DrawTexturedTriangle(int x0, int y0, int u0, int v0,
     float hd_uv1[2] = { 0.0f, 0.0f };
     float hd_uv2[2] = { 0.0f, 0.0f };
 
-    if (clut_y >= 504 && clut_y <= 511 && !m_twMaskX && !m_twMaskY) {
+    if (clut_y >= 504 && clut_y <= 511 && m_skinRowMask[clut_y - 504] && !m_twMaskX && !m_twMaskY) {
+        uint8_t rowMask = m_skinRowMask[clut_y - 504];
         int base_x = (texpage & 0xF) * 64;
         int base_y = ((texpage >> 4) & 1) * 256;
         int us[3] = { u0, u1, u2 };
@@ -1583,7 +1653,7 @@ void Deko3DRenderer::DrawTexturedTriangle(int x0, int y0, int u0, int v0,
         int matchedSkin = -1;
 
         for (int i = 0; i < T3_SKIN_COUNT; ++i) {
-            if (m_skinLoaded[i] && tekken3_outfits_skin_enabled(i, clut_y)) {
+            if (rowMask & (1u << i)) {
                 hd = (i == T3_SKIN_ANNA ? tekken3_anna_skin_find : hd_map_find)(
                     &m_skinMap[i], m_vram, base_x, base_y, depth, clut_x, clut_y, us, vs);
                 if (hd) {
@@ -1650,7 +1720,8 @@ void Deko3DRenderer::DrawShadedTexturedTriangle(int x0, int y0, int u0, int v0, 
     float hd_uv1[2] = { 0.0f, 0.0f };
     float hd_uv2[2] = { 0.0f, 0.0f };
 
-    if (clut_y >= 504 && clut_y <= 511 && !m_twMaskX && !m_twMaskY) {
+    if (clut_y >= 504 && clut_y <= 511 && m_skinRowMask[clut_y - 504] && !m_twMaskX && !m_twMaskY) {
+        uint8_t rowMask = m_skinRowMask[clut_y - 504];
         int base_x = (texpage & 0xF) * 64;
         int base_y = ((texpage >> 4) & 1) * 256;
         int us[3] = { u0, u1, u2 };
@@ -1659,7 +1730,7 @@ void Deko3DRenderer::DrawShadedTexturedTriangle(int x0, int y0, int u0, int v0, 
         int matchedSkin = -1;
 
         for (int i = 0; i < T3_SKIN_COUNT; ++i) {
-            if (m_skinLoaded[i] && tekken3_outfits_skin_enabled(i, clut_y)) {
+            if (rowMask & (1u << i)) {
                 hd = (i == T3_SKIN_ANNA ? tekken3_anna_skin_find : hd_map_find)(
                     &m_skinMap[i], m_vram, base_x, base_y, depth, clut_x, clut_y, us, vs);
                 if (hd) {
@@ -1853,9 +1924,10 @@ void Deko3DRenderer::DrawTexturedRectScaled(int x, int y, int w, int h,
 }
 
 void Deko3DRenderer::FillRect(int x, int y, int w, int h, uint16_t color) {
-    if (x >= 384 || y >= 480) return;
-    if (x + w > 384) w = 384 - x;
-    if (y + h > 480) h = 480 - y;
+    if ((x >= 384 && x < 512) || x >= (int)VramWidth || y >= (int)VramHeight) return;
+    int max_x = (x < 384) ? 384 : (int)VramWidth;
+    if (x + w > max_x) w = max_x - x;
+    if (y + h > (int)VramHeight) h = (int)VramHeight - y;
     x &= (VramWidth - 1);
     if (x + w > (int)VramWidth) w = (int)VramWidth - x;
     if (w <= 0 || h <= 0) return;
@@ -2223,7 +2295,7 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
     m_cmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &m_vsh, &m_fsh });
     m_cmdBuf.bindUniformBuffer(DkStage_Vertex, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
     m_cmdBuf.bindUniformBuffer(DkStage_Fragment, 0, m_viewportUboGpu, DK_UNIFORM_BUF_ALIGNMENT);
-    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 11);
+    m_cmdBuf.bindImageDescriptorSet(m_imgDescGpu, 12);
     m_cmdBuf.bindSamplerDescriptorSet(m_smpDescGpu, 2);
     m_cmdBuf.bindTextures(DkStage_Fragment, 0, {
         dkMakeTextureHandle(0, 0),
@@ -2264,6 +2336,8 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
     m_vtxRingCpu[m_vtxAllocated + 3] = v1;
     m_vtxRingCpu[m_vtxAllocated + 4] = v3;
     m_vtxRingCpu[m_vtxAllocated + 5] = v2;
+    m_memVtx.flushCpuCache((size_t)m_frameResIdx * VertexRingSliceSize + (size_t)m_vtxAllocated * sizeof(PS1Vertex),
+                           6 * sizeof(PS1Vertex));
     m_vtxAllocated += 6;
     m_vtxBatchStart = m_vtxAllocated;
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -2272,6 +2346,8 @@ void Deko3DRenderer::DrawOsdImage(const uint32_t* argbPixels, int ow, int oh,
     m_cmdBuf.bindRenderTargets({});
     m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
 }
+
+extern "C" int tmst_tournament_covered(void) __attribute__((weak));
 
 int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int dw, int dh) {
     if (out != nullptr) {
@@ -2323,6 +2399,23 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
                w, h, screenState, phase, m_clipY1, m_clipY2, m_vtxAllocated);
         fflush(stdout);
         s_last_in_combat_state = inCombat;
+    }
+
+    static uint32_t s_zero_vtx_frames = 0;
+    if (psx_mod_game_started() && m_vtxAllocated == 0) {
+        s_zero_vtx_frames++;
+        if (s_zero_vtx_frames == 60 || (s_zero_vtx_frames > 60 && (s_zero_vtx_frames % 120) == 0)) {
+            printf("[ZeroVtxDiag] f=%llu screen=%d phase=%d timer=%u mode=%u dis=%d skip=%u pc=0x%08X ra=0x%08X\n",
+                   (unsigned long long)s_present_count, screenState, phase,
+                   (unsigned)psx_mod_read_word(0x800AE214u),
+                   (unsigned)psx_mod_read_word(0x800AFA88u),
+                   di.disabled,
+                   (unsigned)psx_mod_read_byte(0x800ADCA4u),
+                   debug_guest_pc(), debug_guest_ra());
+            fflush(stdout);
+        }
+    } else {
+        s_zero_vtx_frames = 0;
     }
 
     static int s_prev_depth24 = -1;
@@ -2602,7 +2695,8 @@ int Deko3DRenderer::RenderDisplay(uint32_t* out, int pitch, int dx, int dy, int 
             if (uiScale > 8) uiScale = 8;
             int osdMargin = 8 * uiScale;
 
-            for (int player = 0; player < 2; ++player) {
+            const bool hideOutfitOsd = (tmst_tournament_covered && tmst_tournament_covered() != 0);
+            for (int player = 0; !hideOutfitOsd && player < 2; ++player) {
                 if (host_osd_outfit_image(player, &osdPx, &osdW, &osdH) && osdPx) {
                     int rx = 0, ry = 0, rdw = 0, rdh = 0;
                     host_osd_outfit_rect(player, (int)dstW, (int)dstH, osdW, osdH, &rx, &ry, &rdw, &rdh);
@@ -2792,47 +2886,57 @@ void Deko3DRenderer::HighVramWritten(int x, int y, int w, int h) {
 // Interfaz de backend GpuRenderBackend para psxrecomp
 // =============================================================================
 
+uint64_t g_dk_draw_ticks = 0;
+struct DkTickScope {
+    u64 t0;
+    DkTickScope() : t0(armGetSystemTick()) {}
+    ~DkTickScope() { g_dk_draw_ticks += armGetSystemTick() - t0; }
+};
+
 static void dk_init(uint16_t* vram) {
     sw_renderer_init(vram);
     Deko3DRenderer::Instance().Init(vram);
 }
 
 static void dk_set_draw_offset(int x, int y) {
-    sw_set_draw_offset(x, y);
+    DkTickScope ts;
     Deko3DRenderer::Instance().SetDrawOffset(x, y);
 }
 
 static void dk_set_draw_area(int x1, int y1, int x2, int y2) {
-    sw_set_draw_area(x1, y1, x2, y2);
+    DkTickScope ts;
     Deko3DRenderer::Instance().SetDrawArea(x1, y1, x2, y2);
 }
 
 static void dk_set_texture_window(uint32_t raw) {
-    sw_set_texture_window(raw);
+    DkTickScope ts;
     Deko3DRenderer::Instance().SetTextureWindow(raw);
 }
 
 static void dk_set_semi_transparency(int enabled, int mode) {
-    sw_set_semi_transparency(enabled, mode);
+    DkTickScope ts;
     Deko3DRenderer::Instance().SetSemiTransparency(enabled, mode);
 }
 
 static void dk_set_color_modulation(int r, int g, int b, int raw) {
-    sw_set_color_modulation(r, g, b, raw);
+    DkTickScope ts;
     Deko3DRenderer::Instance().SetColorModulation(r, g, b, raw);
 }
 
 static void dk_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().SetPerspectiveTriangle(enabled, q0, q1, q2);
 }
 
 static void dk_draw_flat_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawFlatTriangle(x0, y0, x1, y1, x2, y2, color);
 }
 
 static void dk_draw_gouraud_triangle(int x0, int y0, uint16_t c0,
                                      int x1, int y1, uint16_t c1,
                                      int x2, int y2, uint16_t c2) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawGouraudTriangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
 }
 
@@ -2840,6 +2944,7 @@ static void dk_draw_textured_triangle(int x0, int y0, int u0, int v0,
                                       int x1, int y1, int u1, int v1,
                                       int x2, int y2, int u2, int v2,
                                       uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawTexturedTriangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, clut_x, clut_y, texpage);
 }
 
@@ -2847,43 +2952,52 @@ static void dk_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0, uin
                                             int x1, int y1, int u1, int v1, uint32_t c1,
                                             int x2, int y2, int u2, int v2, uint32_t c2,
                                             uint16_t clut_x, uint16_t clut_y, uint16_t texpage, int raw) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawShadedTexturedTriangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1, x2, y2, u2, v2, c2, clut_x, clut_y, texpage, raw);
 }
 
 static void dk_fill_rect(int x, int y, int w, int h, uint16_t color) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().FillRect(x, y, w, h, color);
 }
 
 static void dk_copy_rect(int sx, int sy, int dx, int dy, int w, int h) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().CopyRect(sx, sy, dx, dy, w, h);
 }
 
 static void dk_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawRect(x, y, w, h, color);
 }
 
 static void dk_draw_line(int x0, int y0, int x1, int y1, uint16_t color) {
+    DkTickScope ts;
     sw_draw_line(x0, y0, x1, y1, color);
     Deko3DRenderer::Instance().DrawLine(x0, y0, x1, y1, color);
 }
 
 static void dk_draw_shaded_line(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
+    DkTickScope ts;
     sw_draw_shaded_line(x0, y0, c0, x1, y1, c1);
     Deko3DRenderer::Instance().DrawShadedLine(x0, y0, c0, x1, y1, c1);
 }
 
 static void dk_draw_textured_rect(int x, int y, int w, int h, int u, int v,
                                  uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawTexturedRect(x, y, w, h, u, v, clut_x, clut_y, texpage);
 }
 
 static void dk_draw_textured_rect_scaled(int x, int y, int w, int h,
                                         int u0, int v0, int u1, int v1,
                                         uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().DrawTexturedRectScaled(x, y, w, h, u0, v0, u1, v1, clut_x, clut_y, texpage);
 }
 
 static void dk_vram_transfer_in(int x, int y, int w, int h, const uint16_t* data) {
+    DkTickScope ts;
     Deko3DRenderer::Instance().VramTransferIn(x, y, w, h, data);
 }
 
@@ -3029,4 +3143,128 @@ const GpuRenderBackend* deko3d_backend_get(void) {
 
 extern "C" uint32_t deko3d_get_last_frame_vtx(void) {
     return Deko3DRenderer::Instance().GetLastFrameVtx();
+}
+
+bool Deko3DRenderer::ReadDisplayForPhoto(uint32_t** out, int* w, int* h, int* scale, int* side) {
+    if (!m_initialized || !out || !w || !h || !scale || !side) return false;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || !di.width || !di.height) return false;
+
+    uint32_t s = m_internalScale ? m_internalScale : 1u;
+    uint32_t dw = di.width > 640 ? 640u : (uint32_t)di.width;
+    uint32_t dh = di.height > 512 ? 512u : (uint32_t)di.height;
+
+    bool useWide = m_widescreen && (m_wideW > 0) && (ws_native_wide_active() != 0) && (m_wideCurIdx >= 0 && m_wideCurIdx < 2);
+    uint32_t sx = useWide ? 0u : ((uint32_t)di.display_x * s);
+    uint32_t sy = useWide ? 0u : ((uint32_t)di.display_y * s);
+    uint32_t sw = useWide ? (m_wideW * s) : (dw * s);
+    uint32_t sh = dh * s;
+    if (sw == 0 || sh == 0) return false;
+
+    size_t pixelCount = (size_t)sw * (size_t)sh;
+    size_t copyBytes = pixelCount * sizeof(uint32_t);
+    static dk::MemBlock s_photoMem;
+    static dk::MemBlock s_photoCmdMem;
+    static dk::CmdBuf s_photoCmdBuf;
+    static size_t s_photoMemSize = 0;
+
+    if (!s_photoCmdMem) {
+        s_photoCmdMem = dk::MemBlockMaker{m_device, 64 * 1024}
+            .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+            .create();
+        s_photoCmdBuf = dk::CmdBufMaker{m_device}.create();
+        s_photoCmdBuf.addMemory(s_photoCmdMem, 0, 64 * 1024);
+    }
+    if (!s_photoMem || s_photoMemSize < copyBytes) {
+        if (s_photoMem) s_photoMem.destroy();
+        size_t allocSz = (copyBytes + 0xFFFFu) & ~size_t(0xFFFFu);
+        if (allocSz < 8 * 1024 * 1024) allocSz = 8 * 1024 * 1024;
+        s_photoMem = dk::MemBlockMaker{m_device, (uint32_t)allocSz}
+            .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+            .create();
+        s_photoMemSize = allocSz;
+    }
+
+    uint32_t* buf = (uint32_t*)malloc(copyBytes);
+    if (!buf) return false;
+
+    if (m_vtxAllocated > m_vtxBatchStart) {
+        FlushBatch();
+    }
+    m_cmdBuf.bindRenderTargets({});
+    m_cmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+    m_queue.submitCommands(m_cmdBuf.finishList());
+    WaitPendingFences();
+    m_queue.waitIdle();
+    m_cmdBuf.clear();
+    m_cmdPoolOffset[m_frameResIdx] = m_cmdPoolBase[m_frameResIdx] + CmdBufferSize;
+    m_cmdBuf.addMemory(m_memData, m_cmdPoolBase[m_frameResIdx], CmdBufferSize);
+    m_vtxAllocated = 0;
+    m_vtxBatchStart = 0;
+
+    s_photoCmdBuf.clear();
+    dk::ImageView srcView{ useWide ? m_wideTextures[m_wideCurIdx] : m_vramTexture };
+    s_photoCmdBuf.copyImageToBuffer(srcView, { sx, sy, 0, sw, sh, 1 }, { s_photoMem.getGpuAddr(), 0, 0 });
+    m_queue.submitCommands(s_photoCmdBuf.finishList());
+    m_queue.waitIdle();
+
+    const uint32_t* src = (const uint32_t*)s_photoMem.getCpuAddr();
+    for (size_t i = 0; i < pixelCount; i++) {
+        uint32_t p = src[i];
+        buf[i] = 0xFF000000u | (p & 0x0000FF00u) | ((p & 0x000000FFu) << 16) | ((p & 0x00FF0000u) >> 16);
+    }
+
+    *out = buf;
+    *w = (int)sw;
+    *h = (int)sh;
+    *scale = (int)s;
+    *side = (useWide && m_wideW > dw) ? (int)((m_wideW - dw) / 2u * s) : 0;
+    return true;
+}
+
+extern "C" int switch_deko3d_read_frame(uint32_t** out, int* w, int* h, int* scale, int* side) {
+    return Deko3DRenderer::Instance().ReadDisplayForPhoto(out, w, h, scale, side) ? 1 : 0;
+}
+
+extern "C" int switch_save_album_screenshot(const uint32_t* argb, int w, int h, int side) {
+    if (!argb || w <= 0 || h <= 0) return 0;
+    constexpr int kOutW = 1280;
+    constexpr int kOutH = 720;
+    std::vector<uint32_t> rgba((size_t)kOutW * kOutH, 0xFF000000u);
+
+    const bool isWide = (side > 0);
+    const int dstW = isWide ? kOutW : (kOutH * 4 / 3); // 1280 (16:9) o 960 (4:3)
+    const int dstX = (kOutW - dstW) / 2;
+
+    for (int y = 0; y < kOutH; y++) {
+        int sy = (int)((int64_t)y * h / kOutH);
+        if (sy >= h) sy = h - 1;
+        const uint32_t* srcRow = argb + (size_t)sy * (size_t)w;
+        uint32_t* dstRow = rgba.data() + (size_t)y * kOutW + dstX;
+        for (int x = 0; x < dstW; x++) {
+            int sx = (int)((int64_t)x * w / dstW);
+            if (sx >= w) sx = w - 1;
+            uint32_t p = srcRow[sx]; // 0xAARRGGBB
+            uint32_t r = (p >> 16) & 0xFFu;
+            uint32_t g = (p >> 8) & 0xFFu;
+            uint32_t b = p & 0xFFu;
+            dstRow[x] = 0xFF000000u | (b << 16) | (g << 8) | r;
+        }
+    }
+
+    if (R_SUCCEEDED(capssuInitialize())) {
+        Result rc = capssuSaveScreenShot(rgba.data(), rgba.size() * sizeof(uint32_t),
+                                         AlbumReportOption_Enable,
+                                         AlbumImageOrientation_Unknown0, nullptr);
+        capssuExit();
+        if (R_SUCCEEDED(rc)) {
+            printf("[PhotoMode] Captura guardada en el Album nativo de Switch (%dx%d -> 1280x720)\n", w, h);
+            fflush(stdout);
+            return 1;
+        }
+        printf("[PhotoMode] capssuSaveScreenShot fallo (rc=0x%X), usando PNG en SD.\n", rc);
+        fflush(stdout);
+    }
+    return 0;
 }

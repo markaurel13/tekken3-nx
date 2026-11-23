@@ -8,6 +8,7 @@
 // Forward declaration de la SPU de psxrecomp
 extern "C" {
     void spu_render(int16_t* out_stereo, int frames);
+    void tmst_audio_switch_mix(int16_t* samples, int frames, int rate);
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +512,7 @@ void SwitchAudio::AudioThreadEntry(void* arg) {
             s_last_audio_update_tick = t_spu0;
             alignas(64) int16_t tempPcm[BufferSamples];
             spu_render(tempPcm, FramesPerStep);
+            tmst_audio_switch_mix(tempPcm, FramesPerStep, (int)self->m_sampleRate);
             telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip, &g_at.pre_over24576);
             g_at.pre_peak = g_at.post_peak;
             g_at.pre_clip = g_at.post_clip;
@@ -743,6 +745,7 @@ void SwitchAudio::Update() {
     s_last_audio_update_tick = t_spu0;
     alignas(64) int16_t tempPcm[BufferSamples];
     spu_render(tempPcm, FramesPerStep);
+    tmst_audio_switch_mix(tempPcm, FramesPerStep, (int)m_sampleRate);
     telem_scan(tempPcm, BufferSamples, g_at.post_peak, g_at.post_clip, &g_at.pre_over24576);
     g_at.pre_peak = g_at.post_peak;
     g_at.pre_clip = g_at.post_clip;
